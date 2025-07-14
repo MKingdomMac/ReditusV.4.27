@@ -92,7 +92,7 @@ struct FDialogueNode
 	GENERATED_USTRUCT_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Dialogue Node")
-	int32 Negotiation = 0;
+	float Negotiation = 0;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
 	int32 id = -1;
