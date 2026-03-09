@@ -67,25 +67,38 @@ void FDialoguePluginEditorSettingsDetails::CustomizeDetails( IDetailLayoutBuilde
 				]				
 			];
 			
+		if (!DataProperty.IsValid()) return;
 		const TSharedPtr<IPropertyHandleArray> Array = DataProperty->AsArray();
-		const TSharedPtr<IPropertyHandle> Child = Array->GetElement(index);
-		const TSharedPtr<IPropertyHandle> IsPlayerField = Child->GetChildHandle("isPlayer");
-		const TSharedPtr<IPropertyHandle> NegotiationField = Child->GetChildHandle("Negotiation");
-		const TSharedPtr<IPropertyHandle> DrawCommentBubble = Child->GetChildHandle("bDrawBubbleComment");
-		const TSharedPtr<IPropertyHandle> Comment = Child->GetChildHandle("BubbleComment");
-		const TSharedPtr<IPropertyHandle> EventsField = Child->GetChildHandle("Events");
-		const TSharedPtr<IPropertyHandle> ConditionsField = Child->GetChildHandle("Conditions");
-		const TSharedPtr<IPropertyHandle> SoundField = Child->GetChildHandle("Sound");
-		const TSharedPtr<IPropertyHandle> DialogueWaveField = Child->GetChildHandle("DialogueWave");
-		
-		const TSharedPtr<IPropertyHandle> SecondTextField = Child->GetChildHandle("Text");
-		CurrentNodeCategory.AddProperty(SecondTextField);
+		if (!Array.IsValid()) return;
 
-		CurrentNodeCategory.AddProperty(IsPlayerField);
-		CurrentNodeCategory.AddProperty(NegotiationField);
-		CurrentNodeCategory.AddProperty(DrawCommentBubble);
-		CurrentNodeCategory.AddProperty(Comment);
-		CurrentNodeCategory.AddProperty(EventsField);		
+		const TSharedPtr<IPropertyHandle> Child = Array->GetElement(index);
+		if (!Child.IsValid()) return;
+
+		// IMPORTANT: property names are case-sensitive and must match the UPROPERTY names in FDialogueNode
+		const TSharedPtr<IPropertyHandle> IsPlayerField = Child->GetChildHandle(TEXT("isPlayer"));
+		const TSharedPtr<IPropertyHandle> HideSpeakerNameField = Child->GetChildHandle(TEXT("HideSpeakerName")); // matches UPROPERTY name
+		const TSharedPtr<IPropertyHandle> NegotiationField = Child->GetChildHandle(TEXT("Negotiation"));
+		const TSharedPtr<IPropertyHandle> DrawCommentBubble = Child->GetChildHandle(TEXT("bDrawBubbleComment"));
+		const TSharedPtr<IPropertyHandle> Comment = Child->GetChildHandle(TEXT("BubbleComment"));
+		const TSharedPtr<IPropertyHandle> EventsField = Child->GetChildHandle(TEXT("Events"));
+		const TSharedPtr<IPropertyHandle> ConditionsField = Child->GetChildHandle(TEXT("Conditions"));
+		const TSharedPtr<IPropertyHandle> SoundField = Child->GetChildHandle(TEXT("Sound"));
+		const TSharedPtr<IPropertyHandle> DialogueWaveField = Child->GetChildHandle(TEXT("DialogueWave"));
+
+		const TSharedPtr<IPropertyHandle> SecondTextField = Child->GetChildHandle(TEXT("Text"));
+		const TSharedPtr<IPropertyHandle> NodeTypeField = Child->GetChildHandle(TEXT("NodeType"));       // enum
+		const TSharedPtr<IPropertyHandle> SpeakerNameField = Child->GetChildHandle(TEXT("SpeakerName")); // string
+
+		// Add fields (check IsValid() before adding to avoid silent failures)
+		if (SecondTextField.IsValid()) CurrentNodeCategory.AddProperty(SecondTextField);
+		if (IsPlayerField.IsValid()) CurrentNodeCategory.AddProperty(IsPlayerField);
+		if (NodeTypeField.IsValid()) CurrentNodeCategory.AddProperty(NodeTypeField);
+		if (HideSpeakerNameField.IsValid()) CurrentNodeCategory.AddProperty(HideSpeakerNameField);
+		if (SpeakerNameField.IsValid()) CurrentNodeCategory.AddProperty(SpeakerNameField);
+		if (NegotiationField.IsValid()) CurrentNodeCategory.AddProperty(NegotiationField);
+		if (DrawCommentBubble.IsValid()) CurrentNodeCategory.AddProperty(DrawCommentBubble);
+		if (Comment.IsValid()) CurrentNodeCategory.AddProperty(Comment);
+		if (EventsField.IsValid()) CurrentNodeCategory.AddProperty(EventsField);
 		
 		/* 
 		* Customizing Conditions Row

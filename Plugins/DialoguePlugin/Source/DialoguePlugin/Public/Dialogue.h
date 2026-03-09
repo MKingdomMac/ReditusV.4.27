@@ -85,11 +85,32 @@ public:
 	}
 };
 
+// Node type / speaker enum exposed to Blueprints and Editor
+UENUM(BlueprintType)
+enum class EDialogueNodeType : uint8
+{
+	DNT_None UMETA(DisplayName = "None"),
+	DNT_Caeser  UMETA(DisplayName = "Caeser"),
+	DNT_Augustus UMETA(DisplayName = "Augustus"),
+	DNT_Airloft UMETA(DisplayName = "Airloft"),
+	DNT_Macy UMETA(DisplayName = "Macy"),
+	DNT_Theresa UMETA(DisplayName = "Theresa"),
+	DNT_HighPriest UMETA(DisplayName = "HighPriest"),
+	DNT_Odin UMETA(DisplayName = "Odin"),
+	DNT_Gamacia UMETA(DisplayName = "Gamacia"),
+	DNT_DeusSilentii UMETA(DisplayName = "DeusSilentii"),
+	DNT_CorydonDeus UMETA(DisplayName = "Corydon Deus")
+
+};
 
 USTRUCT(BlueprintType)
 struct FDialogueNode
 {
 	GENERATED_USTRUCT_BODY()
+	
+	// Exposed enum property for node type / speaker choice
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Dialogue Node")
+	EDialogueNodeType NodeType = EDialogueNodeType::DNT_None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Dialogue Node")
 	float Negotiation = 0;
@@ -100,10 +121,17 @@ struct FDialogueNode
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
 	bool isPlayer;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
+	bool HideSpeakerName;
+
 	//Todo: Make this more adjustable, allow variables in text. Allow text to be colored differently, etc.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
 	FText Text;
 
+	// Simple string field you requested (editable in editor and Blueprints)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
+	FString SpeakerName;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
 	TArray<int32> Links;
 
