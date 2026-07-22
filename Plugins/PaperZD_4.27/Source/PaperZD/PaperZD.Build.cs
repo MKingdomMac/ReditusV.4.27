@@ -41,7 +41,8 @@ public class PaperZD : ModuleRules
 			{
 				"Core",
                 "CoreUObject",
-                "Paper2D"
+                "Paper2D",
+                "Niagara",
 				// ... add other public dependencies that you statically link with here ...
 			}
 			);
