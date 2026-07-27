@@ -122,13 +122,13 @@ struct FDialogueNode
 	bool isPlayer;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
-	bool HideSpeakerName;
+	bool PlayLevelSequence = false;
 
 	//Todo: Make this more adjustable, allow variables in text. Allow text to be colored differently, etc.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
 	FText Text;
 
-	// Simple string field you requested (editable in editor and Blueprints)
+// Simple string field you requested (editable in editor and Blueprints)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
 	FString SpeakerName;
 	

@@ -76,9 +76,10 @@ void FDialoguePluginEditorSettingsDetails::CustomizeDetails( IDetailLayoutBuilde
 
 		// IMPORTANT: property names are case-sensitive and must match the UPROPERTY names in FDialogueNode
 		const TSharedPtr<IPropertyHandle> IsPlayerField = Child->GetChildHandle(TEXT("isPlayer"));
-		const TSharedPtr<IPropertyHandle> HideSpeakerNameField = Child->GetChildHandle(TEXT("HideSpeakerName")); // matches UPROPERTY name
 		const TSharedPtr<IPropertyHandle> NegotiationField = Child->GetChildHandle(TEXT("Negotiation"));
 		const TSharedPtr<IPropertyHandle> DrawCommentBubble = Child->GetChildHandle(TEXT("bDrawBubbleComment"));
+		const TSharedPtr<IPropertyHandle> PlayLevelSequenceField = Child->GetChildHandle(TEXT("PlayLevelSequence"));
+		
 		const TSharedPtr<IPropertyHandle> Comment = Child->GetChildHandle(TEXT("BubbleComment"));
 		const TSharedPtr<IPropertyHandle> EventsField = Child->GetChildHandle(TEXT("Events"));
 		const TSharedPtr<IPropertyHandle> ConditionsField = Child->GetChildHandle(TEXT("Conditions"));
@@ -93,10 +94,10 @@ void FDialoguePluginEditorSettingsDetails::CustomizeDetails( IDetailLayoutBuilde
 		if (SecondTextField.IsValid()) CurrentNodeCategory.AddProperty(SecondTextField);
 		if (IsPlayerField.IsValid()) CurrentNodeCategory.AddProperty(IsPlayerField);
 		if (NodeTypeField.IsValid()) CurrentNodeCategory.AddProperty(NodeTypeField);
-		if (HideSpeakerNameField.IsValid()) CurrentNodeCategory.AddProperty(HideSpeakerNameField);
 		if (SpeakerNameField.IsValid()) CurrentNodeCategory.AddProperty(SpeakerNameField);
 		if (NegotiationField.IsValid()) CurrentNodeCategory.AddProperty(NegotiationField);
 		if (DrawCommentBubble.IsValid()) CurrentNodeCategory.AddProperty(DrawCommentBubble);
+		if (PlayLevelSequenceField.IsValid()) CurrentNodeCategory.AddProperty(PlayLevelSequenceField);
 		if (Comment.IsValid()) CurrentNodeCategory.AddProperty(Comment);
 		if (EventsField.IsValid()) CurrentNodeCategory.AddProperty(EventsField);
 		
