@@ -79,7 +79,8 @@ void FDialoguePluginEditorSettingsDetails::CustomizeDetails( IDetailLayoutBuilde
 		const TSharedPtr<IPropertyHandle> NegotiationField = Child->GetChildHandle(TEXT("Negotiation"));
 		const TSharedPtr<IPropertyHandle> DrawCommentBubble = Child->GetChildHandle(TEXT("bDrawBubbleComment"));
 		const TSharedPtr<IPropertyHandle> PlayLevelSequenceField = Child->GetChildHandle(TEXT("PlayLevelSequence"));
-		
+		const TSharedPtr<IPropertyHandle> RecruitmentConditionField = Child->GetChildHandle(TEXT("RecruitmentCondition"));
+
 		const TSharedPtr<IPropertyHandle> Comment = Child->GetChildHandle(TEXT("BubbleComment"));
 		const TSharedPtr<IPropertyHandle> EventsField = Child->GetChildHandle(TEXT("Events"));
 		const TSharedPtr<IPropertyHandle> ConditionsField = Child->GetChildHandle(TEXT("Conditions"));
@@ -90,7 +91,7 @@ void FDialoguePluginEditorSettingsDetails::CustomizeDetails( IDetailLayoutBuilde
 		const TSharedPtr<IPropertyHandle> NodeTypeField = Child->GetChildHandle(TEXT("NodeType"));       // enum
 		const TSharedPtr<IPropertyHandle> SpeakerNameField = Child->GetChildHandle(TEXT("SpeakerName")); // string
 
-		// Add fields (check IsValid() before adding to avoid silent failures)
+		// Add fields (check IsValid() before adding to avoid silent   failures)
 		if (SecondTextField.IsValid()) CurrentNodeCategory.AddProperty(SecondTextField);
 		if (IsPlayerField.IsValid()) CurrentNodeCategory.AddProperty(IsPlayerField);
 		if (NodeTypeField.IsValid()) CurrentNodeCategory.AddProperty(NodeTypeField);
@@ -98,6 +99,7 @@ void FDialoguePluginEditorSettingsDetails::CustomizeDetails( IDetailLayoutBuilde
 		if (NegotiationField.IsValid()) CurrentNodeCategory.AddProperty(NegotiationField);
 		if (DrawCommentBubble.IsValid()) CurrentNodeCategory.AddProperty(DrawCommentBubble);
 		if (PlayLevelSequenceField.IsValid()) CurrentNodeCategory.AddProperty(PlayLevelSequenceField);
+		if (RecruitmentConditionField.IsValid()) CurrentNodeCategory.AddProperty(RecruitmentConditionField);
 		if (Comment.IsValid()) CurrentNodeCategory.AddProperty(Comment);
 		if (EventsField.IsValid()) CurrentNodeCategory.AddProperty(EventsField);
 		

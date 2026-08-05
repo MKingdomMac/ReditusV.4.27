@@ -124,6 +124,9 @@ struct FDialogueNode
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
 	bool PlayLevelSequence = false;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
+	bool RecruitmentCondition = false;
+
 	//Todo: Make this more adjustable, allow variables in text. Allow text to be colored differently, etc.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue Node")
 	FText Text;
