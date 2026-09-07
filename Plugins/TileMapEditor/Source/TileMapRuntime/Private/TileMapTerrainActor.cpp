@@ -4,6 +4,7 @@
 
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "DrawDebugHelpers.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
@@ -872,6 +873,7 @@ ATileMapTerrainActor::ATileMapTerrainActor()
 	bGenerateCollision = true;
 	DefaultTerrainMaterial = nullptr;
 	bUseContinuousTerrainPrototype = true;
+	bDebugContinuousSlantSupports = false;
 	ContinuousChamferWidth = 12.0f;
 	ContinuousChamferDepth = 5.0f;
 	ContinuousEdgeIrregularity = 10.0f;
@@ -883,6 +885,7 @@ ATileMapTerrainActor::ATileMapTerrainActor()
 	bGenerateTerrainDetailsOnBake = false;
 	TerrainDetailSeed = 1337;
 	TerrainDetailDensity = 0.08f;
+	TerrainDetailCoveragePercent = 8.0f;
 	TerrainDetailMaximumInstances = 128;
 	TerrainDetailMinimumSpacingCells = 2;
 	TerrainDetailEdgeInset = 15.0f;
@@ -898,6 +901,16 @@ ATileMapTerrainActor::ATileMapTerrainActor()
 	{
 		BlockMesh = DefaultCubeMesh.Object;
 	}
+}
+
+void ATileMapTerrainActor::BeginPlay()
+{
+	Super::BeginPlay();
+
+	// Chunk components are intentionally transient derived caches. PIE and a
+	// packaged level do not retain those editor-world component instances, so
+	// rebuild them from the serialized block arrays in the game world.
+	RebuildAllChunks();
 }
 
 void ATileMapTerrainActor::OnConstruction(
@@ -951,6 +964,10 @@ void ATileMapTerrainActor::PostEditChangeProperty(
 		IsChangedProperty(GET_MEMBER_NAME_CHECKED(
 			ATileMapTerrainActor,
 			TerrainDetailDensity
+		)) ||
+		IsChangedProperty(GET_MEMBER_NAME_CHECKED(
+			ATileMapTerrainActor,
+			TerrainDetailCoveragePercent
 		)) ||
 		IsChangedProperty(GET_MEMBER_NAME_CHECKED(
 			ATileMapTerrainActor,
@@ -1144,6 +1161,91 @@ bool ATileMapTerrainActor::SetPathsPainted(
 				ChangedPositions.Add(
 					GridPosition + FIntVector(XOffset, YOffset, 0)
 				);
+			}
+		}
+	}
+
+	if (ChangedPositions.Num() == 0)
+	{
+		return false;
+	}
+
+	RebuildChunksForPositions(ChangedPositions);
+	return true;
+}
+
+bool ATileMapTerrainActor::IsBlockExcludedFromContinuousTerrain(
+	const FIntVector& GridPosition
+) const
+{
+	return ModularTerrainBlockLookup.Contains(GridPosition);
+}
+
+bool ATileMapTerrainActor::SetBlockContinuousTerrain(
+	const FIntVector& GridPosition,
+	bool bUseContinuousTerrain
+)
+{
+	TArray<FIntVector> GridPositions;
+	GridPositions.Add(GridPosition);
+	return SetBlocksContinuousTerrain(
+		GridPositions,
+		bUseContinuousTerrain
+	);
+}
+
+bool ATileMapTerrainActor::SetBlocksContinuousTerrain(
+	const TArray<FIntVector>& GridPositions,
+	bool bUseContinuousTerrain
+)
+{
+	if (GridPositions.Num() == 0)
+	{
+		return false;
+	}
+
+	TSet<FIntVector> ChangedPositions;
+	const bool bShouldExclude = !bUseContinuousTerrain;
+
+	for (const FIntVector& GridPosition : GridPositions)
+	{
+		if (!HasBlock(GridPosition))
+		{
+			continue;
+		}
+
+		const bool bWasExcluded =
+			IsBlockExcludedFromContinuousTerrain(GridPosition);
+
+		if (bWasExcluded == bShouldExclude)
+		{
+			continue;
+		}
+
+		if (bShouldExclude)
+		{
+			ModularTerrainBlocks.Add(GridPosition);
+			ModularTerrainBlockLookup.Add(GridPosition);
+		}
+		else
+		{
+			ModularTerrainBlocks.RemoveSingle(GridPosition);
+			ModularTerrainBlockLookup.Remove(GridPosition);
+		}
+
+		// Continuous edge construction, path overlays, and HISM ownership can
+		// involve neighboring cells or a neighboring chunk.
+		for (int32 ZOffset = -1; ZOffset <= 1; ++ZOffset)
+		{
+			for (int32 XOffset = -1; XOffset <= 1; ++XOffset)
+			{
+				for (int32 YOffset = -1; YOffset <= 1; ++YOffset)
+				{
+					ChangedPositions.Add(
+						GridPosition +
+						FIntVector(XOffset, YOffset, ZOffset)
+					);
+				}
 			}
 		}
 	}
@@ -1936,6 +2038,301 @@ bool ATileMapTerrainActor::IsContinuousRampBlock(
 	return true;
 }
 
+bool ATileMapTerrainActor::GetContinuousRampBoundaryChamferZ(
+	const FIntVector& RampPosition,
+	const FVector2D& LocalPoint,
+	float FlatTopZ,
+	float MaximumChamferDepth,
+	float& OutChamferZ
+) const
+{
+	OutChamferZ = FlatTopZ;
+
+	// Callers establish full continuous-ramp validity once before registering
+	// the shared edge. Avoid repeating that run-wide validation for every top
+	// vertex and finite-difference sample along the same boundary.
+	if (!HasBlock(RampPosition))
+	{
+		return false;
+	}
+
+	int32 SegmentCount = 0;
+	int32 SegmentIndex = 0;
+
+	if (
+		!GetContinuousRampMetadata(
+			GetBlockTileType(RampPosition),
+			SegmentCount,
+			SegmentIndex
+		)
+		)
+	{
+		return false;
+	}
+
+	const float SafeGridSize = FMath::Max(GridSize, 1.0f);
+	const uint8 QuarterTurns = GetBlockRotation(RampPosition) % 4;
+	FIntVector RampStep(1, 0, 0);
+	FVector2D RiseAxis(1.0f, 0.0f);
+
+	switch (QuarterTurns)
+	{
+	case 1:
+		RampStep = FIntVector(0, 1, 0);
+		RiseAxis = FVector2D(0.0f, 1.0f);
+		break;
+
+	case 2:
+		RampStep = FIntVector(-1, 0, 0);
+		RiseAxis = FVector2D(-1.0f, 0.0f);
+		break;
+
+	case 3:
+		RampStep = FIntVector(0, -1, 0);
+		RiseAxis = FVector2D(0.0f, -1.0f);
+		break;
+
+	default:
+		break;
+	}
+
+	auto IsCompatibleRampNeighbor =
+		[&](
+			const FIntVector& NeighborPosition,
+			int32 ExpectedSegmentIndex
+		)
+		{
+			int32 NeighborCount = 0;
+			int32 NeighborIndex = 0;
+
+			return
+				HasBlock(NeighborPosition) &&
+				GetBlockRotation(NeighborPosition) % 4 ==
+					QuarterTurns &&
+				GetContinuousRampMetadata(
+					GetBlockTileType(NeighborPosition),
+					NeighborCount,
+					NeighborIndex
+				) &&
+				NeighborCount == SegmentCount &&
+				NeighborIndex == ExpectedSegmentIndex;
+		};
+
+	const FIntVector RampRunStart =
+		RampPosition - (RampStep * SegmentIndex);
+	const FIntVector RampRunEnd =
+		RampPosition +
+			(
+				RampStep *
+					(SegmentCount - 1 - SegmentIndex)
+			);
+	const bool bContinuesFromLowerRamp =
+		IsCompatibleRampNeighbor(
+			RampRunStart -
+				RampStep +
+				FIntVector(0, 0, -1),
+			SegmentCount - 1
+		);
+	const bool bContinuesIntoHigherRamp =
+		IsCompatibleRampNeighbor(
+			RampRunEnd +
+				RampStep +
+				FIntVector(0, 0, 1),
+			0
+		);
+	const float RunLength = SegmentCount * SafeGridSize;
+	const float RampEndTransitionWidth = FMath::Clamp(
+		ContinuousChamferWidth * 2.0f,
+		4.0f,
+		SafeGridSize * 0.3f
+	);
+	const float BlendAlpha = FMath::Clamp(
+		RampEndTransitionWidth / FMath::Max(RunLength, 1.0f),
+		0.001f,
+		0.3f
+	);
+
+	auto SmoothRampEndUnit =
+		[](float Value)
+		{
+			const float SafeValue = FMath::Clamp(
+				Value,
+				0.0f,
+				1.0f
+			);
+			const float SafeValueSquared =
+				SafeValue * SafeValue;
+			const float SafeValueCubed =
+				SafeValueSquared * SafeValue;
+
+			return
+				SafeValueCubed *
+				(
+					6.0f -
+					(8.0f * SafeValue) +
+					(3.0f * SafeValueSquared)
+				);
+		};
+
+	auto EvaluateHeightAtLocalU =
+		[&](float LocalU)
+		{
+			const float GlobalAlpha = FMath::Clamp(
+				(
+					SegmentIndex +
+					FMath::Clamp(LocalU, 0.0f, 1.0f)
+				) / static_cast<float>(SegmentCount),
+				0.0f,
+				1.0f
+			);
+			float HeightFraction = GlobalAlpha;
+
+			if (
+				!bContinuesFromLowerRamp &&
+				GlobalAlpha < BlendAlpha
+				)
+			{
+				HeightFraction =
+					BlendAlpha *
+					SmoothRampEndUnit(GlobalAlpha / BlendAlpha);
+			}
+			else if (
+				!bContinuesIntoHigherRamp &&
+				GlobalAlpha > 1.0f - BlendAlpha
+				)
+			{
+				const float Alpha =
+					(GlobalAlpha - (1.0f - BlendAlpha)) /
+					BlendAlpha;
+				HeightFraction =
+					1.0f -
+					(
+						BlendAlpha *
+						SmoothRampEndUnit(1.0f - Alpha)
+					);
+			}
+
+			return
+				(RampPosition.Z * SafeGridSize) +
+				(HeightFraction * SafeGridSize);
+		};
+	auto EvaluateChamferAtLocalU =
+		[&](float LocalU)
+		{
+			return FMath::Max(
+				EvaluateHeightAtLocalU(LocalU),
+				FlatTopZ - FMath::Max(MaximumChamferDepth, 0.0f)
+			);
+		};
+
+	// The ramp mesh uses these exact longitudinal samples. Interpolate between
+	// the same samples here so a neighboring flat top cannot trace a different
+	// curve and reopen a sub-triangle seam along the shared boundary.
+	constexpr int32 RampLongitudinalSubdivisions = 6;
+	TArray<float, TInlineAllocator<24>> RampAlphas;
+	auto AddRampAlpha =
+		[&RampAlphas](float Alpha)
+		{
+			const float SafeAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
+
+			for (const float ExistingAlpha : RampAlphas)
+			{
+				if (FMath::IsNearlyEqual(ExistingAlpha, SafeAlpha))
+				{
+					return;
+				}
+			}
+
+			RampAlphas.Add(SafeAlpha);
+		};
+
+	for (int32 Step = 0;
+		Step <= RampLongitudinalSubdivisions;
+		++Step)
+	{
+		AddRampAlpha(
+			static_cast<float>(Step) /
+			static_cast<float>(RampLongitudinalSubdivisions)
+		);
+	}
+
+	const float RampEndTransitionAlpha =
+		RampEndTransitionWidth / SafeGridSize;
+	const float RampDetailFractions[] =
+	{
+		0.025f,
+		0.05f,
+		0.1f,
+		0.2f,
+		0.4f,
+		0.7f,
+		1.0f
+	};
+
+	for (const float DetailFraction : RampDetailFractions)
+	{
+		const float EndDetailAlpha =
+			RampEndTransitionAlpha * DetailFraction;
+
+		if (SegmentIndex == 0 && !bContinuesFromLowerRamp)
+		{
+			AddRampAlpha(EndDetailAlpha);
+		}
+
+		if (
+			SegmentIndex == SegmentCount - 1 &&
+			!bContinuesIntoHigherRamp
+			)
+		{
+			AddRampAlpha(1.0f - EndDetailAlpha);
+		}
+	}
+
+	RampAlphas.Sort();
+	const FVector2D BlockCenter(
+		(RampPosition.X + 0.5f) * SafeGridSize,
+		(RampPosition.Y + 0.5f) * SafeGridSize
+	);
+	const float LocalU = FMath::Clamp(
+		FVector2D::DotProduct(
+			LocalPoint - BlockCenter,
+			RiseAxis
+		) / SafeGridSize + 0.5f,
+		0.0f,
+		1.0f
+	);
+
+	for (int32 AlphaIndex = 0;
+		AlphaIndex < RampAlphas.Num() - 1;
+		++AlphaIndex)
+	{
+		const float AlphaA = RampAlphas[AlphaIndex];
+		const float AlphaB = RampAlphas[AlphaIndex + 1];
+
+		if (LocalU > AlphaB + KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+
+		const float IntervalAlpha = FMath::IsNearlyEqual(AlphaA, AlphaB)
+			? 0.0f
+			: FMath::Clamp(
+				(LocalU - AlphaA) / (AlphaB - AlphaA),
+				0.0f,
+				1.0f
+			);
+		OutChamferZ = FMath::Lerp(
+			EvaluateChamferAtLocalU(AlphaA),
+			EvaluateChamferAtLocalU(AlphaB),
+			IntervalAlpha
+		);
+		return true;
+	}
+
+	OutChamferZ = EvaluateChamferAtLocalU(1.0f);
+	return true;
+}
+
 bool ATileMapTerrainActor::GetContinuousStairMetadata(
 	int32 TileType,
 	int32& OutSegmentCount,
@@ -2206,6 +2603,16 @@ bool ATileMapTerrainActor::IsContinuousSurfaceBlock(
 	return !HasBlock(GridPosition + FIntVector(0, 0, 1));
 }
 
+bool ATileMapTerrainActor::ShouldUseContinuousTerrainForBlock(
+	const FIntVector& GridPosition
+) const
+{
+	return
+		bUseContinuousTerrainPrototype &&
+		IsContinuousSurfaceBlock(GridPosition) &&
+		!IsBlockExcludedFromContinuousTerrain(GridPosition);
+}
+
 bool ATileMapTerrainActor::IsTerrainDetailSurfaceBlock(
 	const FIntVector& GridPosition
 ) const
@@ -2383,14 +2790,31 @@ float ATileMapTerrainActor::GetContinuousTopSurfaceZ(
 	const int32 CenterGridY =
 		FMath::FloorToInt(LocalY / SafeGridSize);
 
-	float ClosestDistanceSquared = TNumericLimits<float>::Max();
-	FVector2D ClosestInwardDirection = FVector2D::ZeroVector;
+	float GreatestSurfaceDrop = 0.0f;
+	FVector2D WinningSurfaceGradient = FVector2D::ZeroVector;
 
 	struct FDropEdge
 	{
+		FDropEdge(
+			const FVector2D& InStart,
+			const FVector2D& InEnd,
+			const FVector2D& InInwardNormal,
+			bool bInRampAdjacent = false,
+			const FIntVector& InRampPosition = FIntVector::ZeroValue
+		)
+			: Start(InStart)
+			, End(InEnd)
+			, InwardNormal(InInwardNormal)
+			, bRampAdjacent(bInRampAdjacent)
+			, RampPosition(InRampPosition)
+		{
+		}
+
 		FVector2D Start;
 		FVector2D End;
 		FVector2D InwardNormal;
+		bool bRampAdjacent;
+		FIntVector RampPosition;
 	};
 
 	for (int32 XOffset = -2; XOffset <= 2; ++XOffset)
@@ -2403,10 +2827,7 @@ float ATileMapTerrainActor::GetContinuousTopSurfaceZ(
 				BlockLayer
 			);
 
-			if (
-				!IsContinuousSurfaceBlock(SurfaceBlock) ||
-				HasBlock(SurfaceBlock + FIntVector(0, 0, 1))
-				)
+			if (!IsContinuousSurfaceBlock(SurfaceBlock))
 			{
 				continue;
 			}
@@ -2417,6 +2838,66 @@ float ATileMapTerrainActor::GetContinuousTopSurfaceZ(
 				SurfaceBlock.Y * SafeGridSize;
 			const float MaximumX = MinimumX + SafeGridSize;
 			const float MaximumY = MinimumY + SafeGridSize;
+			const FIntVector AboveSurfaceBlock =
+				SurfaceBlock + FIntVector(0, 0, 1);
+
+			if (HasBlock(AboveSurfaceBlock))
+			{
+				bool bSampleCoveredFromAbove = true;
+
+				// A continuous horizontal cut owns only half of its cell. The
+				// complementary half of the support block below remains a real top
+				// surface and must still participate in the cliff-lip height query.
+				// Treating the upper cell as a full square is what suppressed the
+				// chamfer on lower ledges beneath stacked diagonal cuts.
+				if (
+					IsContinuousSurfaceBlock(AboveSurfaceBlock) &&
+					IsContinuousDiagonalTileType(
+						GetBlockTileType(AboveSurfaceBlock)
+					)
+					)
+				{
+					const float UnitX = FMath::Clamp(
+						(LocalX - MinimumX) / SafeGridSize,
+						0.0f,
+						1.0f
+					);
+					const float UnitY = FMath::Clamp(
+						(LocalY - MinimumY) / SafeGridSize,
+						0.0f,
+						1.0f
+					);
+					const float CoverageTolerance = 0.0001f;
+
+					switch (GetBlockRotation(AboveSurfaceBlock) % 4)
+					{
+					case 0:
+						bSampleCoveredFromAbove =
+							UnitY <= UnitX + CoverageTolerance;
+						break;
+
+					case 1:
+						bSampleCoveredFromAbove =
+							UnitX + UnitY >= 1.0f - CoverageTolerance;
+						break;
+
+					case 2:
+						bSampleCoveredFromAbove =
+							UnitY >= UnitX - CoverageTolerance;
+						break;
+
+					default:
+						bSampleCoveredFromAbove =
+							UnitX + UnitY <= 1.0f + CoverageTolerance;
+						break;
+					}
+				}
+
+				if (bSampleCoveredFromAbove)
+				{
+					continue;
+				}
+			}
 
 			TArray<FDropEdge, TInlineAllocator<8>> DropEdges;
 
@@ -2428,8 +2909,66 @@ float ATileMapTerrainActor::GetContinuousTopSurfaceZ(
 					const FVector2D& InwardNormal
 				)
 				{
+					float AboveCoverageStart = 0.0f;
+					float AboveCoverageEnd = 0.0f;
+
+					if (
+						IsContinuousSurfaceBlock(AboveSurfaceBlock) &&
+						IsContinuousDiagonalTileType(
+							GetBlockTileType(AboveSurfaceBlock)
+						) &&
+						GetContinuousCellEdgeCoverage(
+							AboveSurfaceBlock,
+							Direction,
+							AboveCoverageStart,
+							AboveCoverageEnd
+						) &&
+						AboveCoverageStart <= KINDA_SMALL_NUMBER &&
+						AboveCoverageEnd >= 1.0f - KINDA_SMALL_NUMBER
+						)
+					{
+						return;
+					}
+
 					float CoverageStart = 0.0f;
 					float CoverageEnd = 0.0f;
+					const FIntVector NeighborPosition =
+						SurfaceBlock + Direction;
+
+					if (IsContinuousRampBlock(NeighborPosition))
+					{
+						float RampStartZ = FlatTopZ;
+						float RampEndZ = FlatTopZ;
+
+						if (
+							GetContinuousRampBoundaryChamferZ(
+								NeighborPosition,
+								Start,
+								FlatTopZ,
+								ChamferDepth,
+								RampStartZ
+							) &&
+							GetContinuousRampBoundaryChamferZ(
+								NeighborPosition,
+								End,
+								FlatTopZ,
+								ChamferDepth,
+								RampEndZ
+							) &&
+							FMath::Min(RampStartZ, RampEndZ) <
+								FlatTopZ - KINDA_SMALL_NUMBER
+							)
+						{
+							DropEdges.Emplace(
+								Start,
+								End,
+								InwardNormal,
+								true,
+								NeighborPosition
+							);
+							return;
+						}
+					}
 
 					if (
 						!GetContinuousTerrainCoverageAcrossEdge(
@@ -2440,7 +2979,7 @@ float ATileMapTerrainActor::GetContinuousTopSurfaceZ(
 						)
 						)
 					{
-						DropEdges.Add({ Start, End, InwardNormal });
+						DropEdges.Emplace(Start, End, InwardNormal);
 						return;
 					}
 
@@ -2482,29 +3021,25 @@ float ATileMapTerrainActor::GetContinuousTopSurfaceZ(
 							KINDA_SMALL_NUMBER
 						)
 					{
-						DropEdges.Add({ Start, End, InwardNormal });
+						DropEdges.Emplace(Start, End, InwardNormal);
 						return;
 					}
 
 					if (CoveredStart > KINDA_SMALL_NUMBER)
 					{
-						DropEdges.Add(
-							{
-								Start,
-								FMath::Lerp(Start, End, CoveredStart),
-								InwardNormal
-							}
+						DropEdges.Emplace(
+							Start,
+							FMath::Lerp(Start, End, CoveredStart),
+							InwardNormal
 						);
 					}
 
 					if (CoveredEnd < 1.0f - KINDA_SMALL_NUMBER)
 					{
-						DropEdges.Add(
-							{
-								FMath::Lerp(Start, End, CoveredEnd),
-								End,
-								InwardNormal
-							}
+						DropEdges.Emplace(
+							FMath::Lerp(Start, End, CoveredEnd),
+							End,
+							InwardNormal
 						);
 					}
 				};
@@ -2590,12 +3125,10 @@ float ATileMapTerrainActor::GetContinuousTopSurfaceZ(
 					}
 					else
 					{
-						DropEdges.Add(
-							{
-								Start,
-								End,
-								-OutwardNormal
-							}
+						DropEdges.Emplace(
+							Start,
+							End,
+							-OutwardNormal
 						);
 					}
 				}
@@ -2670,52 +3203,135 @@ float ATileMapTerrainActor::GetContinuousTopSurfaceZ(
 					SamplePoint - ClosestPoint;
 				const float DistanceSquared =
 					FromEdge.SizeSquared();
+				const float Distance = FMath::Sqrt(DistanceSquared);
 
-				if (DistanceSquared >= ClosestDistanceSquared)
+				if (Distance >= ChamferWidth)
 				{
 					continue;
 				}
 
-				ClosestDistanceSquared = DistanceSquared;
-				ClosestInwardDirection =
+				float EffectiveChamferDepth = ChamferDepth;
+				float DepthDerivativeAlongEdge = 0.0f;
+
+				if (DropEdge.bRampAdjacent)
+				{
+					float RampSurfaceZ = FlatTopZ;
+
+					if (
+						!GetContinuousRampBoundaryChamferZ(
+							DropEdge.RampPosition,
+							ClosestPoint,
+							FlatTopZ,
+							ChamferDepth,
+							RampSurfaceZ
+						)
+						)
+					{
+						continue;
+					}
+
+					EffectiveChamferDepth = FMath::Clamp(
+						FlatTopZ - RampSurfaceZ,
+						0.0f,
+						ChamferDepth
+					);
+
+					const float EdgeLength = FMath::Sqrt(EdgeLengthSquared);
+					const float DerivativeAlpha = EdgeLength > SMALL_NUMBER
+						? FMath::Min(1.0f / EdgeLength, 0.01f)
+						: 0.0f;
+					const float AlphaBefore = FMath::Max(
+						0.0f,
+						EdgeAlpha - DerivativeAlpha
+					);
+					const float AlphaAfter = FMath::Min(
+						1.0f,
+						EdgeAlpha + DerivativeAlpha
+					);
+					const float DerivativeDistance =
+						(AlphaAfter - AlphaBefore) * EdgeLength;
+
+					if (DerivativeDistance > SMALL_NUMBER)
+					{
+						float RampBeforeZ = RampSurfaceZ;
+						float RampAfterZ = RampSurfaceZ;
+						GetContinuousRampBoundaryChamferZ(
+							DropEdge.RampPosition,
+							DropEdge.Start +
+								(EdgeVector * AlphaBefore),
+							FlatTopZ,
+							ChamferDepth,
+							RampBeforeZ
+						);
+						GetContinuousRampBoundaryChamferZ(
+							DropEdge.RampPosition,
+							DropEdge.Start +
+								(EdgeVector * AlphaAfter),
+							FlatTopZ,
+							ChamferDepth,
+							RampAfterZ
+						);
+						const float DepthBefore = FMath::Clamp(
+							FlatTopZ - RampBeforeZ,
+							0.0f,
+							ChamferDepth
+						);
+						const float DepthAfter = FMath::Clamp(
+							FlatTopZ - RampAfterZ,
+							0.0f,
+							ChamferDepth
+						);
+						DepthDerivativeAlongEdge =
+							(DepthAfter - DepthBefore) /
+							DerivativeDistance;
+					}
+				}
+
+				const float SurfaceAlpha = FMath::Clamp(
+					Distance / ChamferWidth,
+					0.0f,
+					1.0f
+				);
+				const float SurfaceDrop =
+					EffectiveChamferDepth * (1.0f - SurfaceAlpha);
+
+				if (SurfaceDrop <= GreatestSurfaceDrop + SMALL_NUMBER)
+				{
+					continue;
+				}
+
+				const FVector2D InwardDirection =
 					DistanceSquared > KINDA_SMALL_NUMBER
-					? FromEdge.GetSafeNormal()
-					: DropEdge.InwardNormal;
+						? FromEdge.GetSafeNormal()
+						: DropEdge.InwardNormal;
+				const FVector2D EdgeTangent =
+					EdgeVector.GetSafeNormal();
+
+				GreatestSurfaceDrop = SurfaceDrop;
+				WinningSurfaceGradient =
+					(InwardDirection *
+						(EffectiveChamferDepth / ChamferWidth)) -
+					(EdgeTangent *
+						DepthDerivativeAlongEdge *
+						(1.0f - SurfaceAlpha));
 			}
 		}
 	}
 
 	OutNormal = FVector::UpVector;
 
-	if (ClosestDistanceSquared == TNumericLimits<float>::Max())
+	if (GreatestSurfaceDrop <= SMALL_NUMBER)
 	{
 		return FlatTopZ;
 	}
-
-	const float ClosestDistance =
-		FMath::Sqrt(ClosestDistanceSquared);
-
-	if (ClosestDistance >= ChamferWidth)
-	{
-		return FlatTopZ;
-	}
-
-	const float SurfaceAlpha =
-		FMath::Clamp(
-			ClosestDistance / ChamferWidth,
-			0.0f,
-			1.0f
-		);
-	const float Slope = ChamferDepth / ChamferWidth;
 
 	OutNormal = FVector(
-		-ClosestInwardDirection.X * Slope,
-		-ClosestInwardDirection.Y * Slope,
+		-WinningSurfaceGradient.X,
+		-WinningSurfaceGradient.Y,
 		1.0f
 	).GetSafeNormal();
 
-	return FlatTopZ -
-		(ChamferDepth * (1.0f - SurfaceAlpha));
+	return FlatTopZ - GreatestSurfaceDrop;
 }
 
 bool ATileMapTerrainActor::IsVisiblePaintedPathBlock(
@@ -3095,6 +3711,8 @@ bool ATileMapTerrainActor::RemoveBlock(
 
 	PaintedPathBlocks.RemoveSingle(GridPosition);
 	PaintedPathLookup.Remove(GridPosition);
+	ModularTerrainBlocks.RemoveSingle(GridPosition);
+	ModularTerrainBlockLookup.Remove(GridPosition);
 
 	OccupancyLookup.Remove(GridPosition);
 	BlockIndexLookup.Remove(GridPosition);
@@ -3257,6 +3875,14 @@ bool ATileMapTerrainActor::MoveBlock(
 		PaintedPathBlocks.Add(ToGridPosition);
 		PaintedPathLookup.Remove(FromGridPosition);
 		PaintedPathLookup.Add(ToGridPosition);
+	}
+
+	if (IsBlockExcludedFromContinuousTerrain(FromGridPosition))
+	{
+		ModularTerrainBlocks.RemoveSingle(FromGridPosition);
+		ModularTerrainBlocks.Add(ToGridPosition);
+		ModularTerrainBlockLookup.Remove(FromGridPosition);
+		ModularTerrainBlockLookup.Add(ToGridPosition);
 	}
 
 	OccupancyLookup.Remove(FromGridPosition);
@@ -3441,8 +4067,10 @@ void ATileMapTerrainActor::ClearBlocks()
 	BlockTileTypes.Reset();
 	BlockRotations.Reset();
 	PaintedPathBlocks.Reset();
+	ModularTerrainBlocks.Reset();
 	OccupancyLookup.Reset();
 	PaintedPathLookup.Reset();
+	ModularTerrainBlockLookup.Reset();
 	BlockIndexLookup.Reset();
 	ChunkBlocksLookup.Reset();
 	DestroyAllChunkComponents();
@@ -3457,6 +4085,7 @@ void ATileMapTerrainActor::CreateTestGrid(
 	BlockTileTypes.Reset();
 	BlockRotations.Reset();
 	PaintedPathBlocks.Reset();
+	ModularTerrainBlocks.Reset();
 
 	GridWidth = FMath::Max(GridWidth, 1);
 	GridHeight = FMath::Max(GridHeight, 1);
@@ -3699,6 +4328,29 @@ void ATileMapTerrainActor::NormalizeBlockMetadata()
 
 		UniquePathBlocks.Add(GridPosition);
 	}
+
+	TSet<FIntVector> UniqueModularTerrainBlocks;
+
+	for (
+		int32 Index = ModularTerrainBlocks.Num() - 1;
+		Index >= 0;
+		--Index
+		)
+	{
+		const FIntVector& GridPosition =
+			ModularTerrainBlocks[Index];
+
+		if (
+			!OccupiedSourceBlocks.Contains(GridPosition) ||
+			UniqueModularTerrainBlocks.Contains(GridPosition)
+			)
+		{
+			ModularTerrainBlocks.RemoveAt(Index);
+			continue;
+		}
+
+		UniqueModularTerrainBlocks.Add(GridPosition);
+	}
 }
 
 void ATileMapTerrainActor::RebuildDerivedLookups()
@@ -3707,6 +4359,7 @@ void ATileMapTerrainActor::RebuildDerivedLookups()
 
 	OccupancyLookup.Reset();
 	PaintedPathLookup.Reset();
+	ModularTerrainBlockLookup.Reset();
 	BlockIndexLookup.Reset();
 	ChunkBlocksLookup.Reset();
 
@@ -3736,6 +4389,11 @@ void ATileMapTerrainActor::RebuildDerivedLookups()
 	{
 		PaintedPathLookup.Add(GridPosition);
 	}
+
+	for (const FIntVector& GridPosition : ModularTerrainBlocks)
+	{
+		ModularTerrainBlockLookup.Add(GridPosition);
+	}
 }
 
 UProceduralMeshComponent*
@@ -3744,8 +4402,12 @@ ATileMapTerrainActor::FindOrCreateContinuousChunkComponent(
 	bool bPathOverlayOnly
 )
 {
+	TMap<FIntVector, UProceduralMeshComponent*>& ComponentLookup =
+		bPathOverlayOnly
+		? PathOverlayChunkComponentLookup
+		: ContinuousChunkComponentLookup;
 	UProceduralMeshComponent** ExistingComponent =
-		ContinuousChunkComponentLookup.Find(ChunkCoordinate);
+		ComponentLookup.Find(ChunkCoordinate);
 
 	if (ExistingComponent && IsValid(*ExistingComponent))
 	{
@@ -3819,7 +4481,7 @@ ATileMapTerrainActor::FindOrCreateContinuousChunkComponent(
 	NewComponent->RegisterComponent();
 
 	ContinuousChunkComponents.Add(NewComponent);
-	ContinuousChunkComponentLookup.Add(
+	ComponentLookup.Add(
 		ChunkCoordinate,
 		NewComponent
 	);
@@ -4144,8 +4806,8 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 	struct FDiagonalTangentJunction
 	{
 		FVector2D CornerPoint;
-		FVector2D DiagonalRay;
-		FVector2D StraightRay;
+		FVector2D FirstRay;
+		FVector2D SecondRay;
 		FVector2D CircleCenter;
 		float Radius;
 		float TangentDistance;
@@ -4490,15 +5152,27 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 				}
 			}
 
-			if (DiagonalRays.Num() != 1 || StraightRays.Num() != 1)
+			const bool bDiagonalToStraight =
+				DiagonalRays.Num() == 1 &&
+				StraightRays.Num() == 1;
+			const bool bDiagonalToDiagonal =
+				DiagonalRays.Num() == 2 &&
+				StraightRays.Num() == 0;
+
+			if (!bDiagonalToStraight && !bDiagonalToDiagonal)
 			{
 				return false;
 			}
 
-			const FVector2D DiagonalRay = DiagonalRays[0].Direction;
-			const FVector2D StraightRay = StraightRays[0].Direction;
+			const FBoundaryRay& FirstBoundaryRay = DiagonalRays[0];
+			const FBoundaryRay& SecondBoundaryRay =
+				bDiagonalToDiagonal
+					? DiagonalRays[1]
+					: StraightRays[0];
+			const FVector2D FirstRay = FirstBoundaryRay.Direction;
+			const FVector2D SecondRay = SecondBoundaryRay.Direction;
 			const float RayDot = FMath::Clamp(
-				FVector2D::DotProduct(DiagonalRay, StraightRay),
+				FVector2D::DotProduct(FirstRay, SecondRay),
 				-1.0f,
 				1.0f
 			);
@@ -4519,15 +5193,38 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 				FMath::Abs(
 					InteriorAngle - FMath::DegreesToRadians(135.0f)
 				) <= JunctionAngleTolerance;
+			const bool bRightAngleTwoSlantJunction =
+				bDiagonalToDiagonal &&
+				FMath::Abs(
+					InteriorAngle - FMath::DegreesToRadians(90.0f)
+				) <= JunctionAngleTolerance;
 
-			if (!bAcuteDiagonalJunction && !bObtuseDiagonalJunction)
+			// Two horizontal 45-degree cuts may meet at a right-angle V. Give
+			// only that shared diagonal-to-diagonal point the same physical
+			// tangent fillet used by established diagonal-to-straight corners.
+			// Collinear seams and any junction that also owns a straight edge
+			// deliberately remain outside this path.
+
+			if (
+				bDiagonalToStraight &&
+				!bAcuteDiagonalJunction &&
+				!bObtuseDiagonalJunction
+				)
+			{
+				return false;
+			}
+
+			if (
+				bDiagonalToDiagonal &&
+				!bRightAngleTwoSlantJunction
+				)
 			{
 				return false;
 			}
 
 			const float HalfAngle = InteriorAngle * 0.5f;
-		// Scale the diagonal transition from the established cliff-corner
-		// setting so shallow and 45-degree cuts have comparable visible relief.
+			// Scale the diagonal transition from the established cliff-corner
+			// setting so shallow and 45-degree cuts have comparable visible relief.
 			const float DesiredRadius = FMath::Clamp(
 				CornerRadius * 2.0f,
 				2.0f,
@@ -4538,8 +5235,8 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 				KINDA_SMALL_NUMBER
 			);
 			const float AvailableRayLength = FMath::Min(
-				DiagonalRays[0].Length,
-				StraightRays[0].Length
+				FirstBoundaryRay.Length,
+				SecondBoundaryRay.Length
 			);
 			const float TangentDistance = FMath::Min(
 				FMath::Min(
@@ -4556,7 +5253,7 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 
 			const float Radius = TangentDistance * TangentScale;
 			const FVector2D Bisector =
-				(DiagonalRay + StraightRay).GetSafeNormal();
+				(FirstRay + SecondRay).GetSafeNormal();
 
 			if (Bisector.SizeSquared() <= SMALL_NUMBER)
 			{
@@ -4574,35 +5271,35 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 				);
 			const FVector2D CenterFromCorner =
 				CircleCenter - CornerPoint;
-			const FVector2D DiagonalRadialNormal =
+			const FVector2D FirstRadialNormal =
 				(
-					(DiagonalRay * TangentDistance) -
+					(FirstRay * TangentDistance) -
 					CenterFromCorner
 				).GetSafeNormal();
-			const FVector2D StraightRadialNormal =
+			const FVector2D SecondRadialNormal =
 				(
-					(StraightRay * TangentDistance) -
+					(SecondRay * TangentDistance) -
 					CenterFromCorner
 				).GetSafeNormal();
-			const float DiagonalOutwardAlignment =
+			const float FirstOutwardAlignment =
 				FVector2D::DotProduct(
-					DiagonalRadialNormal,
-					DiagonalRays[0].OutwardNormal
+					FirstRadialNormal,
+					FirstBoundaryRay.OutwardNormal
 				);
-			const float StraightOutwardAlignment =
+			const float SecondOutwardAlignment =
 				FVector2D::DotProduct(
-					StraightRadialNormal,
-					StraightRays[0].OutwardNormal
+					SecondRadialNormal,
+					SecondBoundaryRay.OutwardNormal
 				);
 
 			// Both tangent radii must agree on a single normal sign. This is
 			// the ownership test that the older corner code omitted.
 			if (
-				FMath::Abs(DiagonalOutwardAlignment) < 0.9f ||
-				FMath::Abs(StraightOutwardAlignment) < 0.9f ||
+				FMath::Abs(FirstOutwardAlignment) < 0.9f ||
+				FMath::Abs(SecondOutwardAlignment) < 0.9f ||
 				(
-					DiagonalOutwardAlignment *
-					StraightOutwardAlignment
+					FirstOutwardAlignment *
+					SecondOutwardAlignment
 				) <= 0.0f
 				)
 			{
@@ -4610,13 +5307,13 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 			}
 
 			OutJunction.CornerPoint = CornerPoint;
-			OutJunction.DiagonalRay = DiagonalRay;
-			OutJunction.StraightRay = StraightRay;
+			OutJunction.FirstRay = FirstRay;
+			OutJunction.SecondRay = SecondRay;
 			OutJunction.CircleCenter = CircleCenter;
 			OutJunction.Radius = Radius;
 			OutJunction.TangentDistance = TangentDistance;
 			OutJunction.RadialNormalSign =
-				DiagonalOutwardAlignment >= 0.0f ? 1.0f : -1.0f;
+				FirstOutwardAlignment >= 0.0f ? 1.0f : -1.0f;
 			return true;
 		};
 
@@ -4696,12 +5393,12 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 					OriginalPoint - Junction.CornerPoint;
 					const float BasisCross =
 						(
-							Junction.DiagonalRay.X *
-							Junction.StraightRay.Y
+							Junction.FirstRay.X *
+							Junction.SecondRay.Y
 						) -
 						(
-							Junction.DiagonalRay.Y *
-							Junction.StraightRay.X
+							Junction.FirstRay.Y *
+							Junction.SecondRay.X
 						);
 
 					if (FMath::Abs(BasisCross) <= SMALL_NUMBER)
@@ -4709,48 +5406,48 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 						continue;
 					}
 
-					const float DiagonalAmount =
+					const float FirstAmount =
 						(
-							FromCorner.X * Junction.StraightRay.Y -
-							FromCorner.Y * Junction.StraightRay.X
+							FromCorner.X * Junction.SecondRay.Y -
+							FromCorner.Y * Junction.SecondRay.X
 						) / BasisCross;
-					const float StraightAmount =
+					const float SecondAmount =
 						(
-							Junction.DiagonalRay.X * FromCorner.Y -
-							Junction.DiagonalRay.Y * FromCorner.X
+							Junction.FirstRay.X * FromCorner.Y -
+							Junction.FirstRay.Y * FromCorner.X
 						) / BasisCross;
 					const FVector2D CenterFromCorner =
 						Junction.CircleCenter - Junction.CornerPoint;
-					const float CenterDiagonalAmount =
+					const float CenterFirstAmount =
 						(
-							CenterFromCorner.X * Junction.StraightRay.Y -
-							CenterFromCorner.Y * Junction.StraightRay.X
+							CenterFromCorner.X * Junction.SecondRay.Y -
+							CenterFromCorner.Y * Junction.SecondRay.X
 						) / BasisCross;
-					const float CenterStraightAmount =
+					const float CenterSecondAmount =
 						(
-							Junction.DiagonalRay.X * CenterFromCorner.Y -
-							Junction.DiagonalRay.Y * CenterFromCorner.X
+							Junction.FirstRay.X * CenterFromCorner.Y -
+							Junction.FirstRay.Y * CenterFromCorner.X
 						) / BasisCross;
-					const float DeltaDiagonal =
-						DiagonalAmount - CenterDiagonalAmount;
-					const float DeltaStraight =
-						StraightAmount - CenterStraightAmount;
+					const float DeltaFirst =
+						FirstAmount - CenterFirstAmount;
+					const float DeltaSecond =
+						SecondAmount - CenterSecondAmount;
 					float BoundaryScale =
 						TNumericLimits<float>::Max();
 
-					if (DeltaDiagonal < -KINDA_SMALL_NUMBER)
+					if (DeltaFirst < -KINDA_SMALL_NUMBER)
 					{
 						BoundaryScale = FMath::Min(
 							BoundaryScale,
-							-CenterDiagonalAmount / DeltaDiagonal
+							-CenterFirstAmount / DeltaFirst
 						);
 					}
 
-					if (DeltaStraight < -KINDA_SMALL_NUMBER)
+					if (DeltaSecond < -KINDA_SMALL_NUMBER)
 					{
 						BoundaryScale = FMath::Min(
 							BoundaryScale,
-							-CenterStraightAmount / DeltaStraight
+							-CenterSecondAmount / DeltaSecond
 						);
 					}
 
@@ -4762,19 +5459,19 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 						continue;
 					}
 
-					const float BoundaryDiagonalAmount =
-						CenterDiagonalAmount +
-						(DeltaDiagonal * BoundaryScale);
-					const float BoundaryStraightAmount =
-						CenterStraightAmount +
-						(DeltaStraight * BoundaryScale);
+					const float BoundaryFirstAmount =
+						CenterFirstAmount +
+						(DeltaFirst * BoundaryScale);
+					const float BoundarySecondAmount =
+						CenterSecondAmount +
+						(DeltaSecond * BoundaryScale);
 
 					if (
-						BoundaryDiagonalAmount < -KINDA_SMALL_NUMBER ||
-						BoundaryStraightAmount < -KINDA_SMALL_NUMBER ||
-						BoundaryDiagonalAmount >
+						BoundaryFirstAmount < -KINDA_SMALL_NUMBER ||
+						BoundarySecondAmount < -KINDA_SMALL_NUMBER ||
+						BoundaryFirstAmount >
 							Junction.TangentDistance + KINDA_SMALL_NUMBER ||
-						BoundaryStraightAmount >
+						BoundarySecondAmount >
 							Junction.TangentDistance + KINDA_SMALL_NUMBER
 						)
 					{
@@ -4810,9 +5507,9 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 					if (
 						OutWallNormal &&
 						(
-							FMath::Abs(DiagonalAmount) <=
+							FMath::Abs(FirstAmount) <=
 								KINDA_SMALL_NUMBER ||
-							FMath::Abs(StraightAmount) <=
+							FMath::Abs(SecondAmount) <=
 								KINDA_SMALL_NUMBER
 						)
 						)
@@ -5045,7 +5742,14 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 
 	for (const FIntVector& GridPosition : ChunkBlocks)
 	{
-		if (!IsContinuousSurfaceBlock(GridPosition))
+		const bool bShouldBuildBlock = bPathOverlayOnly
+			? (
+				IsContinuousSurfaceBlock(GridPosition) &&
+				!ShouldUseContinuousTerrainForBlock(GridPosition)
+			)
+			: ShouldUseContinuousTerrainForBlock(GridPosition);
+
+		if (!bShouldBuildBlock)
 		{
 			continue;
 		}
@@ -5949,12 +6653,7 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 						SurfacePosition,
 						SurfaceNormal
 					);
-					const float PathMask = GetContinuousPathMask(
-						OriginalPoint.X,
-						OriginalPoint.Y,
-						GridPosition.Z,
-						PathBlendWidth
-					);
+					const float PathMask = 0.0f;
 					const bool bGroundOwned =
 						SurfacePosition.Z >=
 						(
@@ -6547,6 +7246,33 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 						NeighborIndex == ExpectedSegmentIndex;
 				};
 
+			// Separately painted ramp runs can continue one full grid layer
+			// above or below each other. Treat those joins as part of one
+			// uninterrupted slope: the endpoint Hermite easing and exposed-edge
+			// chamfer belong only at the true transition to flat terrain.
+			const FIntVector RampRunStart =
+				GridPosition - (RampStep * RampSegmentIndex);
+			const FIntVector RampRunEnd =
+				GridPosition +
+					(
+						RampStep *
+							(RampSegmentCount - 1 - RampSegmentIndex)
+					);
+			const bool bContinuesFromLowerRamp =
+				IsCompatibleRampNeighbor(
+					RampRunStart -
+						RampStep +
+						FIntVector(0, 0, -1),
+					RampSegmentCount - 1
+				);
+			const bool bContinuesIntoHigherRamp =
+				IsCompatibleRampNeighbor(
+					RampRunEnd +
+						RampStep +
+						FIntVector(0, 0, 1),
+					0
+				);
+
 			auto ResolveBoundaryMode =
 				[&](
 					const FIntVector& Direction,
@@ -6625,18 +7351,20 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 			);
 			const ERampBoundaryMode BoundaryModes[4] =
 			{
-				bHasLowerFootSurface
+				bContinuesFromLowerRamp || bHasLowerFootSurface
 					? ERampBoundaryMode::Seam
 					: ResolveBoundaryMode(
 						LowDirection,
 						RampSegmentIndex - 1,
 						false
 					),
-				ResolveBoundaryMode(
-					RampStep,
-					RampSegmentIndex + 1,
-					RampSegmentIndex == RampSegmentCount - 1
-				),
+				bContinuesIntoHigherRamp
+					? ERampBoundaryMode::Seam
+					: ResolveBoundaryMode(
+						RampStep,
+						RampSegmentIndex + 1,
+						RampSegmentIndex == RampSegmentCount - 1
+					),
 				ResolveBoundaryMode(
 					NegativeSideDirection,
 					RampSegmentIndex,
@@ -6672,13 +7400,19 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 					);
 					float HeightFraction = SafeAlpha;
 
-					if (SafeAlpha < BlendAlpha)
+					if (
+						!bContinuesFromLowerRamp &&
+						SafeAlpha < BlendAlpha
+						)
 					{
 						const float Alpha = SafeAlpha / BlendAlpha;
 						HeightFraction =
 							BlendAlpha * SmoothRampEndUnit(Alpha);
 					}
-					else if (SafeAlpha > 1.0f - BlendAlpha)
+					else if (
+						!bContinuesIntoHigherRamp &&
+						SafeAlpha > 1.0f - BlendAlpha
+						)
 					{
 						const float Alpha =
 							(SafeAlpha - (1.0f - BlendAlpha)) /
@@ -7118,12 +7852,18 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 				AddRampAlpha(RampVAlphas, SideDetailAlpha);
 				AddRampAlpha(RampVAlphas, 1.0f - SideDetailAlpha);
 
-				if (RampSegmentIndex == 0)
+				if (
+					RampSegmentIndex == 0 &&
+					!bContinuesFromLowerRamp
+					)
 				{
 					AddRampAlpha(RampUAlphas, EndDetailAlpha);
 				}
 
-				if (RampSegmentIndex == RampSegmentCount - 1)
+				if (
+					RampSegmentIndex == RampSegmentCount - 1 &&
+					!bContinuesIntoHigherRamp
+					)
 				{
 					AddRampAlpha(RampUAlphas, 1.0f - EndDetailAlpha);
 				}
@@ -7346,8 +8086,6 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 						-BoundaryNormals[BoundaryIndex].Y,
 						0.0f
 					);
-					const float NeighborTopZ =
-						BlockMinimum.Z + SafeGridSize;
 					TArray<FVector> RampEdgePoints;
 					TArray<FVector> NeighborTopPoints;
 
@@ -7364,6 +8102,14 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 
 						const FVector2D OriginalPoint =
 							GetRampOriginalPlan(U, V);
+						FVector IgnoredNeighborTopNormal;
+						const float NeighborTopZ =
+							GetContinuousTopSurfaceZ(
+								OriginalPoint.X,
+								OriginalPoint.Y,
+								GridPosition.Z + 1,
+								IgnoredNeighborTopNormal
+							);
 						RampEdgePoints.Add(
 							EvaluateRampPosition(U, V)
 						);
@@ -7441,6 +8187,10 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 							continue;
 						}
 
+						// This closure remains ordinary cliff wall. The neighboring
+						// flat top owns the physical upper chamfer; keeping the closure
+						// un-split prevents lower ramp layers from receiving a false
+						// cliff-edge band.
 						AddContinuousWallQuad(
 							Section,
 							RampEdgePoints[PointIndex],
@@ -7890,6 +8640,32 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 
 				for (const FContinuousWall& Wall : Walls)
 				{
+					const FIntVector AboveEdgePosition =
+						GridPosition + FIntVector(0, 0, 1);
+					float AboveCoverageStart = 0.0f;
+					float AboveCoverageEnd = 0.0f;
+
+					// A stacked horizontal cut covers two lower cliff edges and
+					// leaves the other two exposed. Do not apply the lower lip wave
+					// beneath an edge actually owned by the upper cut.
+					if (
+						IsContinuousSurfaceBlock(AboveEdgePosition) &&
+						IsContinuousDiagonalTileType(
+							GetBlockTileType(AboveEdgePosition)
+						) &&
+						GetContinuousCellEdgeCoverage(
+							AboveEdgePosition,
+							Wall.NeighborOffset,
+							AboveCoverageStart,
+							AboveCoverageEnd
+						) &&
+						AboveCoverageStart <= KINDA_SMALL_NUMBER &&
+						AboveCoverageEnd >= 1.0f - KINDA_SMALL_NUMBER
+						)
+					{
+						continue;
+					}
+
 					float CoverageStart = 0.0f;
 					float CoverageEnd = 0.0f;
 					const bool bHasCoverage =
@@ -8226,7 +9002,7 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 			const TArray<float>& SupportOuterEdgeAlphas =
 				bHasEdgeBlendCorner
 					? RoundedSurfaceAlphas
-					: FlatSurfaceAlphas;
+					: StraightEdgeSurfaceAlphas;
 
 			auto AddRoundedSupportOuterEdge =
 				[&](const FVector2D& Start, const FVector2D& End)
@@ -8246,13 +9022,20 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 							End,
 							Alpha
 						);
-						AddSupportPoint(
-							RoundConvexPoint(OriginalPoint, nullptr)
-						);
+						FVector2D SupportPoint =
+							RoundConvexPoint(OriginalPoint, nullptr);
+						SupportPoint += GetCliffEdgeOffset(OriginalPoint);
+						AddSupportPoint(SupportPoint);
 					}
 				};
 
-			switch (GetBlockRotation(AbovePosition) % 4)
+			const int32 SupportRotation =
+				GetBlockRotation(AbovePosition) % 4;
+			FVector2D SupportDiagonalStart = C00;
+			FVector2D SupportDiagonalEnd = C11;
+			FVector2D SupportOuterCorner = C01;
+
+			switch (SupportRotation)
 			{
 			case 0:
 			{
@@ -8260,6 +9043,9 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 					BlockMinimum.X + SafeGridSize,
 					BlockMinimum.Y + (DiagonalFraction * SafeGridSize)
 				);
+				SupportDiagonalStart = C00;
+				SupportDiagonalEnd = DiagonalEnd;
+				SupportOuterCorner = C01;
 				AddRoundedSupportDiagonal(C00, DiagonalEnd);
 				AddRoundedSupportOuterEdge(DiagonalEnd, C11);
 				AddRoundedSupportOuterEdge(C11, C01);
@@ -8274,6 +9060,9 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 						((1.0f - DiagonalFraction) * SafeGridSize),
 					BlockMinimum.Y + SafeGridSize
 				);
+				SupportDiagonalStart = C10;
+				SupportDiagonalEnd = DiagonalEnd;
+				SupportOuterCorner = C00;
 				AddRoundedSupportOuterEdge(C00, C10);
 				AddRoundedSupportDiagonal(C10, DiagonalEnd);
 				AddRoundedSupportOuterEdge(DiagonalEnd, C01);
@@ -8288,6 +9077,9 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 					BlockMinimum.Y +
 						((1.0f - DiagonalFraction) * SafeGridSize)
 				);
+				SupportDiagonalStart = C11;
+				SupportDiagonalEnd = DiagonalEnd;
+				SupportOuterCorner = C10;
 				AddRoundedSupportOuterEdge(C00, C10);
 				AddRoundedSupportOuterEdge(C10, C11);
 				AddRoundedSupportDiagonal(C11, DiagonalEnd);
@@ -8302,6 +9094,9 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 						(DiagonalFraction * SafeGridSize),
 					BlockMinimum.Y
 				);
+				SupportDiagonalStart = C01;
+				SupportDiagonalEnd = DiagonalEnd;
+				SupportOuterCorner = C11;
 				AddRoundedSupportOuterEdge(C10, C11);
 				AddRoundedSupportOuterEdge(C11, C01);
 				AddRoundedSupportDiagonal(C01, DiagonalEnd);
@@ -8321,14 +9116,638 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 				SupportBoundary.Pop();
 			}
 
-			AddContinuousHorizontalPolygonEarClipped(
-				Section,
-				SupportBoundary,
-				FVector::UpVector,
-				SafeGridSize,
-				false,
-				MakeGroundSurfaceVertexColor(0.0f, 0.0f)
+			const int32 DiagnosticFirstVertex = Section.Vertices.Num();
+			const int32 DiagnosticFirstTriangleIndex = Section.Triangles.Num();
+			const int32 SupportPointCount =
+				SupportOuterEdgeAlphas.Num();
+			const int32 SupportArraySize =
+				SupportPointCount * SupportPointCount;
+			TArray<int32> SupportVertexIndices;
+			SupportVertexIndices.Init(INDEX_NONE, SupportArraySize);
+			TArray<int32> SupportCliffVertexIndices;
+			SupportCliffVertexIndices.Init(INDEX_NONE, SupportArraySize);
+			TArray<uint8> SupportGroundOwnership;
+			SupportGroundOwnership.Init(0, SupportArraySize);
+			TArray<FVector> SupportPositions;
+			SupportPositions.SetNum(SupportArraySize);
+			TArray<FVector> SupportNormals;
+			SupportNormals.SetNum(SupportArraySize);
+			TArray<FVector2D> SupportCliffUVs;
+			SupportCliffUVs.SetNum(SupportArraySize);
+			TArray<FVector> SupportCliffTangents;
+			SupportCliffTangents.SetNum(SupportArraySize);
+			TArray<FColor> SupportColors;
+			SupportColors.SetNum(SupportArraySize);
+			TArray<FContinuousBoundarySegment> SupportExposedEdges;
+			BuildExposedBoundarySegments(
+				GridPosition,
+				SupportExposedEdges
 			);
+
+			const FVector2D SupportOuterEdgeA =
+				SupportOuterCorner - SupportDiagonalEnd;
+			const FVector2D SupportOuterEdgeB =
+				SupportDiagonalStart - SupportOuterCorner;
+			const FVector2D SupportOuterNormalA(
+				SupportOuterEdgeA.Y,
+				-SupportOuterEdgeA.X
+			);
+			const FVector2D SupportOuterNormalB(
+				SupportOuterEdgeB.Y,
+				-SupportOuterEdgeB.X
+			);
+			const FVector2D SafeSupportOuterNormalA =
+				SupportOuterNormalA.GetSafeNormal();
+			const FVector2D SafeSupportOuterNormalB =
+				SupportOuterNormalB.GetSafeNormal();
+
+			// The lower complement touches only two cell edges. Discard the
+			// other two lower-wall boundaries because those lie beneath the
+			// occupied half of the upper diagonal and must remain buried.
+			for (
+				int32 EdgeIndex = SupportExposedEdges.Num() - 1;
+				EdgeIndex >= 0;
+				--EdgeIndex
+				)
+			{
+				const FContinuousBoundarySegment& Edge =
+					SupportExposedEdges[EdgeIndex];
+				const bool bOwnsSupportOuterEdge =
+					!Edge.bDiagonal &&
+					(
+						FVector2D::DotProduct(
+							Edge.OutwardNormal,
+							SafeSupportOuterNormalA
+						) > 0.99f ||
+						FVector2D::DotProduct(
+							Edge.OutwardNormal,
+							SafeSupportOuterNormalB
+						) > 0.99f
+					);
+
+				if (!bOwnsSupportOuterEdge)
+				{
+					SupportExposedEdges.RemoveAt(EdgeIndex);
+				}
+			}
+
+			auto IsInsideSupportComplement =
+				[SupportRotation](float UnitX, float UnitY)
+				{
+					const float Tolerance = 0.0001f;
+
+					switch (SupportRotation)
+					{
+					case 0:
+						return UnitY >= UnitX - Tolerance;
+					case 1:
+						return UnitX + UnitY <= 1.0f + Tolerance;
+					case 2:
+						return UnitY <= UnitX + Tolerance;
+					default:
+						return UnitX + UnitY >= 1.0f - Tolerance;
+					}
+				};
+
+			const FVector2D SupportDiagonalVector =
+				SupportDiagonalEnd - SupportDiagonalStart;
+			const float SupportDiagonalLengthSquared =
+				SupportDiagonalVector.SizeSquared();
+
+			auto EvaluateSupportDiagonalPoint =
+				[&](const FVector2D& OriginalPoint)
+				{
+					const float DiagonalAlpha =
+						SupportDiagonalLengthSquared > SMALL_NUMBER
+							? FMath::Clamp(
+								FVector2D::DotProduct(
+									OriginalPoint - SupportDiagonalStart,
+									SupportDiagonalVector
+								) / SupportDiagonalLengthSquared,
+								0.0f,
+								1.0f
+							)
+							: 0.0f;
+					const float ScaledAlpha =
+						DiagonalAlpha * SupportDiagonalSubdivisions;
+					const int32 SegmentIndex = FMath::Clamp(
+						FMath::FloorToInt(ScaledAlpha),
+						0,
+						SupportDiagonalSubdivisions - 1
+					);
+					const float SegmentAlpha = FMath::Clamp(
+						ScaledAlpha - SegmentIndex,
+						0.0f,
+						1.0f
+					);
+					const float AlphaA =
+						static_cast<float>(SegmentIndex) /
+						static_cast<float>(SupportDiagonalSubdivisions);
+					const float AlphaB =
+						static_cast<float>(SegmentIndex + 1) /
+						static_cast<float>(SupportDiagonalSubdivisions);
+					const FVector2D RoundedA =
+						RoundDiagonalTangentPoint(
+							FMath::Lerp(
+								SupportDiagonalStart,
+								SupportDiagonalEnd,
+								AlphaA
+							),
+							AbovePosition.Z,
+							nullptr
+						);
+					const FVector2D RoundedB =
+						RoundDiagonalTangentPoint(
+							FMath::Lerp(
+								SupportDiagonalStart,
+								SupportDiagonalEnd,
+								AlphaB
+							),
+							AbovePosition.Z,
+							nullptr
+						);
+
+					// Extra grid samples lie on the exact piecewise-linear boundary
+					// already used by the upper wall, so adding lip density cannot
+					// reintroduce a diagonal T-junction.
+					return FMath::Lerp(RoundedA, RoundedB, SegmentAlpha);
+				};
+
+			for (int32 SupportY = 0;
+				SupportY < SupportPointCount;
+				++SupportY)
+			{
+				for (int32 SupportX = 0;
+					SupportX < SupportPointCount;
+					++SupportX)
+				{
+					const float UnitX = SupportOuterEdgeAlphas[SupportX];
+					const float UnitY = SupportOuterEdgeAlphas[SupportY];
+
+					if (!IsInsideSupportComplement(UnitX, UnitY))
+					{
+						continue;
+					}
+
+					const FVector2D OriginalPoint(
+						BlockMinimum.X + (UnitX * SafeGridSize),
+						BlockMinimum.Y + (UnitY * SafeGridSize)
+					);
+					const float DiagonalAlpha =
+						SupportDiagonalLengthSquared > SMALL_NUMBER
+							? FMath::Clamp(
+								FVector2D::DotProduct(
+									OriginalPoint - SupportDiagonalStart,
+									SupportDiagonalVector
+								) / SupportDiagonalLengthSquared,
+								0.0f,
+								1.0f
+							)
+							: 0.0f;
+					const FVector2D ClosestDiagonalPoint =
+						SupportDiagonalStart +
+						(SupportDiagonalVector * DiagonalAlpha);
+					const bool bOnDiagonalBoundary =
+						(OriginalPoint - ClosestDiagonalPoint).SizeSquared() <=
+							0.0001f;
+					FVector2D SurfacePoint = bOnDiagonalBoundary
+						? EvaluateSupportDiagonalPoint(OriginalPoint)
+						: RoundConvexPoint(OriginalPoint, nullptr);
+
+					if (!bOnDiagonalBoundary)
+					{
+						SurfacePoint += GetCliffEdgeOffset(OriginalPoint);
+					}
+
+					FVector SurfaceNormal;
+					const float LocalZ = GetContinuousTopSurfaceZ(
+						OriginalPoint.X,
+						OriginalPoint.Y,
+						GridPosition.Z + 1,
+						SurfaceNormal
+					);
+					const bool bGroundOwned =
+						LocalZ >= SupportTopZ - KINDA_SMALL_NUMBER;
+					const FVector SurfacePosition(
+						SurfacePoint.X,
+						SurfacePoint.Y,
+						LocalZ
+					);
+					FVector CliffTopTangent(
+						-SurfaceNormal.Y,
+						SurfaceNormal.X,
+						0.0f
+					);
+					float CliffTopU = FVector::DotProduct(
+						SurfacePosition,
+						MakeCliffTopTangent(
+							CliffTopTangent,
+							SurfaceNormal
+						)
+					) / SafeGridSize;
+					float ClosestBoundaryDistanceSquared =
+						TNumericLimits<float>::Max();
+
+					for (const FContinuousBoundarySegment& Edge :
+						SupportExposedEdges)
+					{
+						const FVector2D EdgeVector = Edge.End - Edge.Start;
+						const float EdgeLengthSquared =
+							EdgeVector.SizeSquared();
+						const float EdgeAlpha =
+							EdgeLengthSquared > SMALL_NUMBER
+								? FMath::Clamp(
+									FVector2D::DotProduct(
+										OriginalPoint - Edge.Start,
+										EdgeVector
+									) / EdgeLengthSquared,
+									0.0f,
+									1.0f
+								)
+								: 0.0f;
+						const FVector2D ClosestPoint =
+							Edge.Start + (EdgeVector * EdgeAlpha);
+						const float DistanceSquared =
+							(OriginalPoint - ClosestPoint).SizeSquared();
+
+						if (DistanceSquared < ClosestBoundaryDistanceSquared)
+						{
+							const FVector2D Tangent2D =
+								EdgeVector.GetSafeNormal();
+							ClosestBoundaryDistanceSquared = DistanceSquared;
+							CliffTopTangent = FVector(
+								Tangent2D.X,
+								Tangent2D.Y,
+								0.0f
+							);
+							CliffTopU = FVector2D::DotProduct(
+								OriginalPoint,
+								Tangent2D
+							) / SafeGridSize;
+						}
+					}
+
+					const float CliffTopV = FMath::Clamp(
+						(SupportTopZ - LocalZ) /
+							FMath::Max(ChamferDepth * 2.0f, 1.0f),
+						0.0f,
+						0.5f
+					);
+					const float PathMask = GetContinuousPathMask(
+						OriginalPoint.X,
+						OriginalPoint.Y,
+						GridPosition.Z,
+						PathBlendWidth
+					);
+					const FColor SurfaceColor = bGroundOwned
+						? MakeGroundSurfaceVertexColor(0.0f, PathMask)
+						: ContinuousCliffEdgeSurfaceColor;
+					const FVector2D SurfaceCliffUV =
+						MakeCliffTopUVFromCoordinate(
+							CliffTopU,
+							CliffTopV
+						);
+					const int32 ArrayIndex =
+						(SupportY * SupportPointCount) + SupportX;
+
+					SupportGroundOwnership[ArrayIndex] =
+						bGroundOwned ? 1 : 0;
+					SupportPositions[ArrayIndex] = SurfacePosition;
+					SupportNormals[ArrayIndex] = SurfaceNormal;
+					SupportCliffUVs[ArrayIndex] = SurfaceCliffUV;
+					SupportCliffTangents[ArrayIndex] = CliffTopTangent;
+					SupportColors[ArrayIndex] = SurfaceColor;
+					SupportVertexIndices[ArrayIndex] = bGroundOwned
+						? AddContinuousVertex(
+							Section,
+							SurfacePosition,
+							SurfaceNormal,
+							SafeGridSize,
+							SurfaceColor
+						)
+						: AddContinuousVertexWithUV(
+							Section,
+							SurfacePosition,
+							SurfaceNormal,
+							SafeGridSize,
+							SurfaceCliffUV,
+							CliffTopTangent,
+							SurfaceColor
+						);
+					SupportCliffVertexIndices[ArrayIndex] = bGroundOwned
+						? INDEX_NONE
+						: SupportVertexIndices[ArrayIndex];
+				}
+			}
+
+			auto ResolveSupportVertex =
+				[&](int32 ArrayIndex, bool bUseCliffUV)
+				{
+					if (
+						!bUseCliffUV ||
+						SupportGroundOwnership[ArrayIndex] == 0
+						)
+					{
+						return SupportVertexIndices[ArrayIndex];
+					}
+
+					int32& CliffVertexIndex =
+						SupportCliffVertexIndices[ArrayIndex];
+
+					if (CliffVertexIndex == INDEX_NONE)
+					{
+						CliffVertexIndex = AddContinuousVertexWithUV(
+							Section,
+							SupportPositions[ArrayIndex],
+							SupportNormals[ArrayIndex],
+							SafeGridSize,
+							SupportCliffUVs[ArrayIndex],
+							SupportCliffTangents[ArrayIndex],
+							SupportColors[ArrayIndex]
+						);
+					}
+
+					return CliffVertexIndex;
+				};
+
+			const int32 ExpectedSupportTriangleCount =
+				(SupportPointCount - 1) * (SupportPointCount - 1);
+			auto AddSupportTriangle =
+				[&](int32 A, int32 B, int32 C)
+				{
+					if (
+						A == INDEX_NONE ||
+						B == INDEX_NONE ||
+						C == INDEX_NONE
+						)
+					{
+						return;
+					}
+
+					const bool bUseCliffUV =
+						SupportGroundOwnership[A] == 0 ||
+						SupportGroundOwnership[B] == 0 ||
+						SupportGroundOwnership[C] == 0;
+					Section.Triangles.Add(
+						ResolveSupportVertex(A, bUseCliffUV)
+					);
+					Section.Triangles.Add(
+						ResolveSupportVertex(B, bUseCliffUV)
+					);
+					Section.Triangles.Add(
+						ResolveSupportVertex(C, bUseCliffUV)
+					);
+				};
+
+			for (int32 SupportY = 0;
+				SupportY < SupportPointCount - 1;
+				++SupportY)
+			{
+				for (int32 SupportX = 0;
+					SupportX < SupportPointCount - 1;
+					++SupportX)
+				{
+					const int32 BottomLeft =
+						(SupportY * SupportPointCount) + SupportX;
+					const int32 BottomRight = BottomLeft + 1;
+					const int32 TopLeft =
+						((SupportY + 1) * SupportPointCount) + SupportX;
+					const int32 TopRight = TopLeft + 1;
+
+					if ((SupportRotation % 2) == 0)
+					{
+						AddSupportTriangle(
+							SupportVertexIndices[BottomLeft] == INDEX_NONE
+								? INDEX_NONE : BottomLeft,
+							SupportVertexIndices[TopRight] == INDEX_NONE
+								? INDEX_NONE : TopRight,
+							SupportVertexIndices[BottomRight] == INDEX_NONE
+								? INDEX_NONE : BottomRight
+						);
+						AddSupportTriangle(
+							SupportVertexIndices[BottomLeft] == INDEX_NONE
+								? INDEX_NONE : BottomLeft,
+							SupportVertexIndices[TopLeft] == INDEX_NONE
+								? INDEX_NONE : TopLeft,
+							SupportVertexIndices[TopRight] == INDEX_NONE
+								? INDEX_NONE : TopRight
+						);
+					}
+					else
+					{
+						AddSupportTriangle(
+							SupportVertexIndices[BottomLeft] == INDEX_NONE
+								? INDEX_NONE : BottomLeft,
+							SupportVertexIndices[TopLeft] == INDEX_NONE
+								? INDEX_NONE : TopLeft,
+							SupportVertexIndices[BottomRight] == INDEX_NONE
+								? INDEX_NONE : BottomRight
+						);
+						AddSupportTriangle(
+							SupportVertexIndices[BottomRight] == INDEX_NONE
+								? INDEX_NONE : BottomRight,
+							SupportVertexIndices[TopLeft] == INDEX_NONE
+								? INDEX_NONE : TopLeft,
+							SupportVertexIndices[TopRight] == INDEX_NONE
+								? INDEX_NONE : TopRight
+						);
+					}
+				}
+			}
+
+			if (bDebugContinuousSlantSupports)
+			{
+				const int32 Rotation = GetBlockRotation(AbovePosition) % 4;
+				const int32 AddedVertexCount =
+					Section.Vertices.Num() - DiagnosticFirstVertex;
+				const int32 AddedTriangleCount =
+					(Section.Triangles.Num() - DiagnosticFirstTriangleIndex) / 3;
+				const int32 ExpectedTriangleCount =
+					ExpectedSupportTriangleCount;
+
+				auto Cross2D =
+					[](const FVector& A, const FVector& B, const FVector& C)
+					{
+						return
+							((B.X - A.X) * (C.Y - A.Y)) -
+							((B.Y - A.Y) * (C.X - A.X));
+					};
+
+				auto PointInsideBoundary =
+					[&](const FVector& Point)
+					{
+						bool bInside = false;
+						for (int32 I = 0, J = SupportBoundary.Num() - 1;
+							I < SupportBoundary.Num(); J = I++)
+						{
+							const FVector& A = SupportBoundary[I];
+							const FVector& B = SupportBoundary[J];
+							const bool bCrosses =
+								((A.Y > Point.Y) != (B.Y > Point.Y)) &&
+								(Point.X <
+									((B.X - A.X) * (Point.Y - A.Y) /
+										(B.Y - A.Y)) + A.X);
+							if (bCrosses)
+							{
+								bInside = !bInside;
+							}
+						}
+						return bInside;
+					};
+
+				auto SegmentsIntersect =
+					[&](
+						const FVector& A,
+						const FVector& B,
+						const FVector& C,
+						const FVector& D)
+					{
+						const float AB_C = Cross2D(A, B, C);
+						const float AB_D = Cross2D(A, B, D);
+						const float CD_A = Cross2D(C, D, A);
+						const float CD_B = Cross2D(C, D, B);
+						return
+							((AB_C > KINDA_SMALL_NUMBER && AB_D < -KINDA_SMALL_NUMBER) ||
+							 (AB_C < -KINDA_SMALL_NUMBER && AB_D > KINDA_SMALL_NUMBER)) &&
+							((CD_A > KINDA_SMALL_NUMBER && CD_B < -KINDA_SMALL_NUMBER) ||
+							 (CD_A < -KINDA_SMALL_NUMBER && CD_B > KINDA_SMALL_NUMBER));
+					};
+
+				float BoundaryDoubleArea = 0.0f;
+				int32 DuplicatePointCount = 0;
+				int32 SelfIntersectionCount = 0;
+				for (int32 I = 0; I < SupportBoundary.Num(); ++I)
+				{
+					const int32 NextI = (I + 1) % SupportBoundary.Num();
+					BoundaryDoubleArea +=
+						(SupportBoundary[I].X * SupportBoundary[NextI].Y) -
+						(SupportBoundary[NextI].X * SupportBoundary[I].Y);
+
+					for (int32 J = I + 1; J < SupportBoundary.Num(); ++J)
+					{
+						if (SupportBoundary[I].Equals(
+							SupportBoundary[J], KINDA_SMALL_NUMBER))
+						{
+							++DuplicatePointCount;
+						}
+					}
+
+					for (int32 J = I + 1; J < SupportBoundary.Num(); ++J)
+					{
+						const int32 NextJ = (J + 1) % SupportBoundary.Num();
+						if (J == I || NextI == J || NextJ == I)
+						{
+							continue;
+						}
+						if (SegmentsIntersect(
+							SupportBoundary[I], SupportBoundary[NextI],
+							SupportBoundary[J], SupportBoundary[NextJ]))
+						{
+							++SelfIntersectionCount;
+						}
+					}
+				}
+
+				int32 DegenerateTriangleCount = 0;
+				int32 OutsideTriangleCount = 0;
+				float EmittedDoubleArea = 0.0f;
+				for (int32 TriangleIndex = DiagnosticFirstTriangleIndex;
+					TriangleIndex + 2 < Section.Triangles.Num();
+					TriangleIndex += 3)
+				{
+					const int32 IA = Section.Triangles[TriangleIndex];
+					const int32 IB = Section.Triangles[TriangleIndex + 1];
+					const int32 IC = Section.Triangles[TriangleIndex + 2];
+					if (!Section.Vertices.IsValidIndex(IA) ||
+						!Section.Vertices.IsValidIndex(IB) ||
+						!Section.Vertices.IsValidIndex(IC))
+					{
+						++DegenerateTriangleCount;
+						continue;
+					}
+
+					const FVector& A = Section.Vertices[IA];
+					const FVector& B = Section.Vertices[IB];
+					const FVector& C = Section.Vertices[IC];
+					const float TriangleDoubleArea = FMath::Abs(Cross2D(A, B, C));
+					EmittedDoubleArea += TriangleDoubleArea;
+					const bool bDegenerate = TriangleDoubleArea <= KINDA_SMALL_NUMBER;
+					const bool bOutside = !PointInsideBoundary((A + B + C) / 3.0f);
+					DegenerateTriangleCount += bDegenerate ? 1 : 0;
+					OutsideTriangleCount += bOutside ? 1 : 0;
+
+					const FColor TriangleColor =
+						(bDegenerate || bOutside) ? FColor::Red : FColor::Green;
+					DrawDebugLine(GetWorld(), GetActorTransform().TransformPosition(A),
+						GetActorTransform().TransformPosition(B), TriangleColor, false, 60.0f, 0, 0.8f);
+					DrawDebugLine(GetWorld(), GetActorTransform().TransformPosition(B),
+						GetActorTransform().TransformPosition(C), TriangleColor, false, 60.0f, 0, 0.8f);
+					DrawDebugLine(GetWorld(), GetActorTransform().TransformPosition(C),
+						GetActorTransform().TransformPosition(A), TriangleColor, false, 60.0f, 0, 0.8f);
+				}
+
+				const float AreaError = FMath::Abs(
+					FMath::Abs(BoundaryDoubleArea) - EmittedDoubleArea);
+				const bool bFailed =
+					AddedTriangleCount != ExpectedTriangleCount ||
+					DuplicatePointCount > 0 ||
+					SelfIntersectionCount > 0 ||
+					DegenerateTriangleCount > 0 ||
+					OutsideTriangleCount > 0 ||
+					AreaError > 0.1f;
+
+				UE_LOG(LogTemp, Warning, TEXT(
+					"TileMap slant diagnostic: lower=(%d,%d,%d) upper=(%d,%d,%d) "
+					"chunk=(%d,%d,%d) rotation=%d fraction=%.4f boundary=%d "
+					"vertices=%d triangles=%d expected=%d duplicate=%d "
+					"intersections=%d degenerate=%d outside=%d area_error=%.6f result=%s"),
+					GridPosition.X, GridPosition.Y, GridPosition.Z,
+					AbovePosition.X, AbovePosition.Y, AbovePosition.Z,
+					ChunkCoordinate.X, ChunkCoordinate.Y, ChunkCoordinate.Z,
+					Rotation, DiagonalFraction, SupportBoundary.Num(),
+					AddedVertexCount, AddedTriangleCount, ExpectedTriangleCount,
+					DuplicatePointCount, SelfIntersectionCount,
+					DegenerateTriangleCount, OutsideTriangleCount,
+					AreaError, bFailed ? TEXT("FAIL") : TEXT("PASS"));
+
+				for (int32 I = 0; I < SupportBoundary.Num(); ++I)
+				{
+					const FVector& A = SupportBoundary[I];
+					const FVector& B = SupportBoundary[(I + 1) % SupportBoundary.Num()];
+					UE_LOG(LogTemp, Warning, TEXT(
+						"TileMap slant diagnostic point: lower=(%d,%d,%d) i=%d p=(%.6f,%.6f,%.6f)"),
+						GridPosition.X, GridPosition.Y, GridPosition.Z,
+						I, A.X, A.Y, A.Z);
+					DrawDebugLine(GetWorld(), GetActorTransform().TransformPosition(A),
+						GetActorTransform().TransformPosition(B), FColor::Yellow, false, 60.0f, 0, 2.0f);
+					DrawDebugPoint(GetWorld(), GetActorTransform().TransformPosition(A),
+						7.0f, bFailed ? FColor::Red : FColor::Cyan, false, 60.0f, 0);
+				}
+
+				for (int32 XOffset = -1; XOffset <= 1; ++XOffset)
+				{
+					for (int32 YOffset = -1; YOffset <= 1; ++YOffset)
+					{
+						for (int32 ZOffset = 0; ZOffset <= 1; ++ZOffset)
+						{
+							const FIntVector Nearby = GridPosition +
+								FIntVector(XOffset, YOffset, ZOffset);
+							if (!HasBlock(Nearby))
+							{
+								continue;
+							}
+							UE_LOG(LogTemp, Warning, TEXT(
+								"TileMap slant diagnostic neighbor: origin=(%d,%d,%d) "
+								"cell=(%d,%d,%d) tile=%d rotation=%d diagonal=%d"),
+								GridPosition.X, GridPosition.Y, GridPosition.Z,
+								Nearby.X, Nearby.Y, Nearby.Z,
+								static_cast<int32>(GetBlockTileType(Nearby)),
+								GetBlockRotation(Nearby) % 4,
+								IsContinuousDiagonalTileType(GetBlockTileType(Nearby)) ? 1 : 0);
+						}
+					}
+				}
+			}
 		}
 
 		bool bNeedsPathDetail = false;
@@ -8664,6 +10083,60 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 				GridPosition,
 				CliffTopBoundarySegments
 			);
+
+			// A valid ramp occupies the neighboring XY cell, so the generic
+			// exposure query correctly suppresses a full-height wall. Its surface
+			// can still sit below this flat top, however. Register only that shared
+			// upper ledge for cliff-top UV/tangent ownership; the ramp branch keeps
+			// the vertical remainder as ordinary wall.
+			for (const FContinuousWall& Wall : Walls)
+			{
+				const FIntVector RampPosition =
+					GridPosition + Wall.NeighborOffset;
+
+				if (!IsContinuousRampBlock(RampPosition))
+				{
+					continue;
+				}
+
+				const FVector2D Start =
+					BlockMinimum2D +
+					(Wall.BottomAOffset * SafeGridSize);
+				const FVector2D End =
+					BlockMinimum2D +
+					(Wall.BottomBOffset * SafeGridSize);
+				float RampStartZ = FlatTopZ;
+				float RampEndZ = FlatTopZ;
+
+				if (
+					GetContinuousRampBoundaryChamferZ(
+						RampPosition,
+						Start,
+						FlatTopZ,
+						ChamferDepth,
+						RampStartZ
+					) &&
+					GetContinuousRampBoundaryChamferZ(
+						RampPosition,
+						End,
+						FlatTopZ,
+						ChamferDepth,
+						RampEndZ
+					) &&
+					FMath::Min(RampStartZ, RampEndZ) <
+						FlatTopZ - KINDA_SMALL_NUMBER
+					)
+				{
+					CliffTopBoundarySegments.Add(
+						{
+							Start,
+							End,
+							FVector2D(Wall.Normal.X, Wall.Normal.Y),
+							false
+						}
+					);
+				}
+			}
 
 			for (
 				int32 SurfaceY = 0;
@@ -9276,8 +10749,30 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 			{
 				continue;
 			}
-			const bool bCoveredAbove =
-				HasBlock(GridPosition + FIntVector(0, 0, 1));
+			const FIntVector WallAbovePosition =
+				GridPosition + FIntVector(0, 0, 1);
+			bool bCoveredAbove = HasBlock(WallAbovePosition);
+
+			if (
+				bCoveredAbove &&
+				IsContinuousSurfaceBlock(WallAbovePosition) &&
+				IsContinuousDiagonalTileType(
+					GetBlockTileType(WallAbovePosition)
+				)
+				)
+			{
+				float AboveCoverageStart = 0.0f;
+				float AboveCoverageEnd = 0.0f;
+				bCoveredAbove =
+					GetContinuousCellEdgeCoverage(
+						WallAbovePosition,
+						Wall.NeighborOffset,
+						AboveCoverageStart,
+						AboveCoverageEnd
+					) &&
+					AboveCoverageStart <= KINDA_SMALL_NUMBER &&
+					AboveCoverageEnd >= 1.0f - KINDA_SMALL_NUMBER;
+			}
 			const bool bUseWavyLip =
 				!bCoveredAbove &&
 				EdgeIrregularity > KINDA_SMALL_NUMBER;
@@ -9877,6 +11372,302 @@ void ATileMapTerrainActor::BuildContinuousChunk(
 		return;
 	}
 
+	// Diagnose the completed procedural mesh rather than any one source
+	// polygon. Continuous helpers intentionally duplicate vertices, so edge
+	// incidence must be determined from quantized world-space endpoints rather
+	// than raw vertex indices. A horizontal edge used by only one completed
+	// triangle is a real open boundary (or one side of a T-junction). Restrict
+	// the visualization to the support planes beneath stacked horizontal cuts
+	// so ordinary exposed terrain silhouettes do not obscure the fault.
+	if (bDebugContinuousSlantSupports && !bPathOverlayOnly)
+	{
+		struct FCompletedDiagnosticEdge
+		{
+			FVector A;
+			FVector B;
+			int32 IncidenceCount = 0;
+			int32 FirstTileType = INDEX_NONE;
+		};
+
+		TArray<FIntVector> DiagnosticSupportCells;
+
+		for (const FIntVector& GridPosition : ChunkBlocks)
+		{
+			const FIntVector AbovePosition =
+				GridPosition + FIntVector(0, 0, 1);
+
+			if (
+				IsContinuousSurfaceBlock(GridPosition) &&
+				IsContinuousSurfaceBlock(AbovePosition) &&
+				IsContinuousDiagonalTileType(
+					GetBlockTileType(AbovePosition)
+				)
+				)
+			{
+				DiagnosticSupportCells.Add(GridPosition);
+			}
+		}
+
+		if (DiagnosticSupportCells.Num() > 0)
+		{
+			TMap<FString, FCompletedDiagnosticEdge> CompletedEdges;
+			constexpr float DiagnosticPositionScale = 100.0f;
+
+			auto MakeDiagnosticPointKey =
+				[&](const FVector& Point)
+				{
+					return FString::Printf(
+						TEXT("%d,%d,%d"),
+						FMath::RoundToInt(
+							Point.X * DiagnosticPositionScale
+						),
+						FMath::RoundToInt(
+							Point.Y * DiagnosticPositionScale
+						),
+						FMath::RoundToInt(
+							Point.Z * DiagnosticPositionScale
+						)
+					);
+				};
+
+			auto AddCompletedDiagnosticEdge =
+				[&](
+					const FVector& A,
+					const FVector& B,
+					int32 TileType
+				)
+				{
+					if (A.Equals(B, KINDA_SMALL_NUMBER))
+					{
+						return;
+					}
+
+					const FString AKey = MakeDiagnosticPointKey(A);
+					const FString BKey = MakeDiagnosticPointKey(B);
+					const bool bKeepOrder =
+						AKey.Compare(
+							*BKey,
+							ESearchCase::CaseSensitive
+						) <= 0;
+					const FString EdgeKey = bKeepOrder
+						? AKey + TEXT("|") + BKey
+						: BKey + TEXT("|") + AKey;
+					FCompletedDiagnosticEdge& Edge =
+						CompletedEdges.FindOrAdd(EdgeKey);
+
+					if (Edge.IncidenceCount == 0)
+					{
+						Edge.A = bKeepOrder ? A : B;
+						Edge.B = bKeepOrder ? B : A;
+						Edge.FirstTileType = TileType;
+					}
+
+					++Edge.IncidenceCount;
+				};
+
+			for (
+				const TPair<int32, FTileMapContinuousSection>& SectionPair :
+				SectionsByTileType
+				)
+			{
+				const FTileMapContinuousSection& Section =
+					SectionPair.Value;
+
+				for (
+					int32 TriangleIndex = 0;
+					TriangleIndex + 2 < Section.Triangles.Num();
+					TriangleIndex += 3
+					)
+				{
+					const int32 IndexA =
+						Section.Triangles[TriangleIndex];
+					const int32 IndexB =
+						Section.Triangles[TriangleIndex + 1];
+					const int32 IndexC =
+						Section.Triangles[TriangleIndex + 2];
+
+					if (
+						!Section.Vertices.IsValidIndex(IndexA) ||
+						!Section.Vertices.IsValidIndex(IndexB) ||
+						!Section.Vertices.IsValidIndex(IndexC)
+						)
+					{
+						continue;
+					}
+
+					const FVector& A = Section.Vertices[IndexA];
+					const FVector& B = Section.Vertices[IndexB];
+					const FVector& C = Section.Vertices[IndexC];
+
+					AddCompletedDiagnosticEdge(
+						A,
+						B,
+						SectionPair.Key
+					);
+					AddCompletedDiagnosticEdge(
+						B,
+						C,
+						SectionPair.Key
+					);
+					AddCompletedDiagnosticEdge(
+						C,
+						A,
+						SectionPair.Key
+					);
+				}
+			}
+
+			int32 SupportHorizontalEdgeCount = 0;
+			int32 UnmatchedHorizontalEdgeCount = 0;
+			int32 NonManifoldHorizontalEdgeCount = 0;
+			int32 LoggedEdgeCount = 0;
+
+			for (
+				const TPair<FString, FCompletedDiagnosticEdge>& EdgePair :
+				CompletedEdges
+				)
+			{
+				const FCompletedDiagnosticEdge& Edge = EdgePair.Value;
+
+				if (FMath::Abs(Edge.A.Z - Edge.B.Z) > 0.02f)
+				{
+					continue;
+				}
+
+				const FVector Midpoint = (Edge.A + Edge.B) * 0.5f;
+				bool bNearStackedSupportPlane = false;
+
+				for (
+					const FIntVector& SupportCell :
+					DiagnosticSupportCells
+					)
+				{
+					const float SupportZ =
+						(SupportCell.Z + 1) * SafeGridSize;
+					const float MinimumX =
+						(SupportCell.X - 0.35f) * SafeGridSize;
+					const float MaximumX =
+						(SupportCell.X + 1.35f) * SafeGridSize;
+					const float MinimumY =
+						(SupportCell.Y - 0.35f) * SafeGridSize;
+					const float MaximumY =
+						(SupportCell.Y + 1.35f) * SafeGridSize;
+
+					if (
+						FMath::Abs(Midpoint.Z - SupportZ) <= 0.02f &&
+						Midpoint.X >= MinimumX &&
+						Midpoint.X <= MaximumX &&
+						Midpoint.Y >= MinimumY &&
+						Midpoint.Y <= MaximumY
+						)
+					{
+						bNearStackedSupportPlane = true;
+						break;
+					}
+				}
+
+				if (!bNearStackedSupportPlane)
+				{
+					continue;
+				}
+
+				++SupportHorizontalEdgeCount;
+
+				FColor EdgeColor = FColor::Transparent;
+
+				if (Edge.IncidenceCount == 1)
+				{
+					++UnmatchedHorizontalEdgeCount;
+					EdgeColor = FColor::Red;
+				}
+				else if (Edge.IncidenceCount > 2)
+				{
+					++NonManifoldHorizontalEdgeCount;
+					EdgeColor = FColor(255, 128, 0);
+				}
+
+				if (EdgeColor == FColor::Transparent)
+				{
+					continue;
+				}
+
+				const FVector WorldA =
+					GetActorTransform().TransformPosition(Edge.A);
+				const FVector WorldB =
+					GetActorTransform().TransformPosition(Edge.B);
+
+				DrawDebugLine(
+					GetWorld(),
+					WorldA,
+					WorldB,
+					EdgeColor,
+					false,
+					60.0f,
+					0,
+					4.0f
+				);
+				DrawDebugPoint(
+					GetWorld(),
+					WorldA,
+					8.0f,
+					EdgeColor,
+					false,
+					60.0f,
+					0
+				);
+
+				if (LoggedEdgeCount < 256)
+				{
+					UE_LOG(
+						LogTemp,
+						Warning,
+						TEXT(
+							"TileMap completed edge diagnostic: "
+							"chunk=(%d,%d,%d) incidence=%d tile=%d "
+							"a=(%.4f,%.4f,%.4f) b=(%.4f,%.4f,%.4f) "
+							"mid=(%.4f,%.4f,%.4f) length=%.4f"
+						),
+						ChunkCoordinate.X,
+						ChunkCoordinate.Y,
+						ChunkCoordinate.Z,
+						Edge.IncidenceCount,
+						Edge.FirstTileType,
+						Edge.A.X,
+						Edge.A.Y,
+						Edge.A.Z,
+						Edge.B.X,
+						Edge.B.Y,
+						Edge.B.Z,
+						Midpoint.X,
+						Midpoint.Y,
+						Midpoint.Z,
+						FVector::Distance(Edge.A, Edge.B)
+					);
+					++LoggedEdgeCount;
+				}
+			}
+
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT(
+					"TileMap completed edge diagnostic summary: "
+					"chunk=(%d,%d,%d) support_cells=%d "
+					"geometric_edges=%d support_horizontal=%d "
+					"unmatched=%d nonmanifold=%d"
+				),
+				ChunkCoordinate.X,
+				ChunkCoordinate.Y,
+				ChunkCoordinate.Z,
+				DiagnosticSupportCells.Num(),
+				CompletedEdges.Num(),
+				SupportHorizontalEdgeCount,
+				UnmatchedHorizontalEdgeCount,
+				NonManifoldHorizontalEdgeCount
+			);
+		}
+	}
+
 	UProceduralMeshComponent* ContinuousComponent =
 		FindOrCreateContinuousChunkComponent(
 			ChunkCoordinate,
@@ -10105,26 +11896,36 @@ void ATileMapTerrainActor::DestroyChunkComponents(
 		}
 	}
 
-	UProceduralMeshComponent** ExistingContinuousComponent =
-		ContinuousChunkComponentLookup.Find(ChunkCoordinate);
+	auto DestroyProceduralChunkComponent =
+		[&](
+			TMap<FIntVector, UProceduralMeshComponent*>& ComponentLookup
+		)
+		{
+			UProceduralMeshComponent** ExistingComponent =
+				ComponentLookup.Find(ChunkCoordinate);
+			UProceduralMeshComponent* ComponentToRemove =
+				ExistingComponent ? *ExistingComponent : nullptr;
 
-	UProceduralMeshComponent* ContinuousComponentToRemove =
-		ExistingContinuousComponent
-		? *ExistingContinuousComponent
-		: nullptr;
+			ComponentLookup.Remove(ChunkCoordinate);
+			ContinuousChunkComponents.RemoveSingleSwap(
+				ComponentToRemove
+			);
 
-	ContinuousChunkComponentLookup.Remove(ChunkCoordinate);
-	ContinuousChunkComponents.RemoveSingleSwap(
-		ContinuousComponentToRemove
+			if (IsValid(ComponentToRemove))
+			{
+				ComponentToRemove->ClearAllMeshSections();
+				RemoveInstanceComponent(ComponentToRemove);
+				RemoveOwnedComponent(ComponentToRemove);
+				ComponentToRemove->DestroyComponent();
+			}
+		};
+
+	DestroyProceduralChunkComponent(
+		ContinuousChunkComponentLookup
 	);
-
-	if (IsValid(ContinuousComponentToRemove))
-	{
-		ContinuousComponentToRemove->ClearAllMeshSections();
-		RemoveInstanceComponent(ContinuousComponentToRemove);
-		RemoveOwnedComponent(ContinuousComponentToRemove);
-		ContinuousComponentToRemove->DestroyComponent();
-	}
+	DestroyProceduralChunkComponent(
+		PathOverlayChunkComponentLookup
+	);
 }
 
 void ATileMapTerrainActor::RebuildChunk(
@@ -10148,7 +11949,8 @@ void ATileMapTerrainActor::RebuildChunk(
 			*ChunkBlocks
 		);
 	}
-	else if (PaintedPathLookup.Num() > 0)
+
+	if (PaintedPathLookup.Num() > 0)
 	{
 		BuildContinuousChunk(
 			ChunkCoordinate,
@@ -10164,8 +11966,7 @@ void ATileMapTerrainActor::RebuildChunk(
 		const int32 TileType = GetBlockTileType(GridPosition);
 
 		if (
-			bUseContinuousTerrainPrototype &&
-			IsContinuousSurfaceBlock(GridPosition)
+			ShouldUseContinuousTerrainForBlock(GridPosition)
 			)
 		{
 			continue;
@@ -10280,6 +12081,7 @@ void ATileMapTerrainActor::DestroyAllChunkComponents()
 
 	ContinuousChunkComponents.Reset();
 	ContinuousChunkComponentLookup.Reset();
+	PathOverlayChunkComponentLookup.Reset();
 }
 
 void ATileMapTerrainActor::RebuildAllChunks()

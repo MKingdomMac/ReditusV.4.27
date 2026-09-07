@@ -115,7 +115,7 @@ struct TILEMAPRUNTIME_API FTileMapTileDefinition
 	FVector PivotOffset;
 };
 
-/** Surface region where a bake-time structural terrain detail may appear. */
+/** Legacy placement categories retained only for older serialized actors. */
 UENUM(BlueprintType)
 enum class ETileMapTerrainDetailPlacement : uint8
 {
@@ -148,22 +148,32 @@ struct TILEMAPRUNTIME_API FTileMapTerrainDetailDefinition
 	{
 	}
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain Detail")
+	/** Legacy serialized value. v1.2.70 scatters every entry on top surfaces. */
+	UPROPERTY()
 	ETileMapTerrainDetailPlacement Placement;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain Detail")
 	UStaticMesh* Mesh;
 
 	/** Optional material for slot 0. Leave empty to keep the mesh material. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain Detail")
-	UMaterialInterface* MaterialOverride;
-
-	/** Relative selection weight among valid entries in the same region. */
 	UPROPERTY(
 		EditAnywhere,
 		BlueprintReadOnly,
 		Category = "Terrain Detail",
-		meta = (ClampMin = "0.0")
+		meta = (DisplayName = "Material Override (Optional)")
+	)
+	UMaterialInterface* MaterialOverride;
+
+	/** Relative selection weight among valid meshes in this palette. */
+	UPROPERTY(
+		EditAnywhere,
+		BlueprintReadOnly,
+		Category = "Terrain Detail",
+		AdvancedDisplay,
+		meta = (
+			ClampMin = "0.0",
+			DisplayName = "Selection Weight"
+		)
 	)
 	float Weight;
 
@@ -176,28 +186,39 @@ struct TILEMAPRUNTIME_API FTileMapTerrainDetailDefinition
 		EditAnywhere,
 		BlueprintReadOnly,
 		Category = "Terrain Detail",
-		meta = (DisplayName = "Uniform Scale Range")
+		meta = (DisplayName = "Scale Variation (Min / Max)")
 	)
 	FVector2D UniformScaleRange;
 
-	/** Distance sunk into the supporting surface at the 100-unit authoring size. */
+	/** Extra distance sunk after the mesh base is aligned to the surface. */
 	UPROPERTY(
 		EditAnywhere,
 		BlueprintReadOnly,
 		Category = "Terrain Detail",
-		meta = (ClampMin = "0.0", ClampMax = "100.0")
+		meta = (
+			ClampMin = "0.0",
+			ClampMax = "100.0",
+			DisplayName = "Sink Into Surface"
+		)
 	)
 	float SinkDepth;
 
-	/**
-	 * Randomizes yaw. When disabled, +X faces out from a cliff top or toward
-	 * the wall at a cliff base. Ground entries use zero yaw.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain Detail")
+	/** Randomizes rotation around the vertical axis. */
+	UPROPERTY(
+		EditAnywhere,
+		BlueprintReadOnly,
+		Category = "Terrain Detail",
+		meta = (DisplayName = "Random Rotation")
+	)
 	bool bRandomYaw;
 
 	/** Disabled by default so visual terrain details do not alter navigation. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain Detail")
+	UPROPERTY(
+		EditAnywhere,
+		BlueprintReadOnly,
+		Category = "Terrain Detail",
+		AdvancedDisplay
+	)
 	bool bEnableCollision;
 };
 
@@ -302,6 +323,21 @@ public:
 		meta = (DisplayName = "Use Continuous Terrain Prototype")
 	)
 	bool bUseContinuousTerrainPrototype;
+
+	/**
+	 * Draws and logs diagnostic information for the support polygon beneath a
+	 * stacked horizontal diagonal cut. This never changes generated geometry.
+	 */
+	UPROPERTY(
+		EditAnywhere,
+		BlueprintReadOnly,
+		Category = "Tile Map|Continuous Terrain",
+		meta = (
+			DisplayName = "Debug Slant Supports",
+			EditCondition = "bUseContinuousTerrainPrototype"
+		)
+	)
+	bool bDebugContinuousSlantSupports;
 
 	/** Horizontal width of the chamfer measured inward from a cliff edge. */
 	UPROPERTY(
@@ -419,9 +455,9 @@ public:
 	float ContinuousPathBlendWidth;
 
 	/**
-	 * Opt-in bake-time structural detail pass. It creates a separate actor with
-	 * HISM components and never inserts detail triangles into the optimized
-	 * terrain static mesh.
+	 * Opt-in foliage-style surface scatter used during baking. It creates a
+	 * separate actor with HISM components and never inserts detail triangles
+	 * into the optimized terrain static mesh.
 	 */
 	UPROPERTY(
 		EditAnywhere,
@@ -435,27 +471,36 @@ public:
 		EditAnywhere,
 		BlueprintReadOnly,
 		Category = "Tile Map|Terrain Detail Pass",
+		AdvancedDisplay,
 		meta = (EditCondition = "bGenerateTerrainDetailsOnBake")
 	)
 	int32 TerrainDetailSeed;
 
-	/** Probability that one eligible exposed surface cell receives a detail. */
+	/** Legacy v1.2.46-v1.2.69 density value retained for serialization only. */
+	UPROPERTY()
+	float TerrainDetailDensity;
+
+	/** Percentage of eligible exposed surface blocks that receive a detail. */
 	UPROPERTY(
 		EditAnywhere,
 		BlueprintReadOnly,
 		Category = "Tile Map|Terrain Detail Pass",
 		meta = (
 			ClampMin = "0.0",
-			ClampMax = "1.0",
+			ClampMax = "100.0",
+			UIMin = "0.0",
+			UIMax = "100.0",
+			DisplayName = "Surface Coverage (%)",
 			EditCondition = "bGenerateTerrainDetailsOnBake"
 		)
 	)
-	float TerrainDetailDensity;
+	float TerrainDetailCoveragePercent;
 
 	UPROPERTY(
 		EditAnywhere,
 		BlueprintReadOnly,
 		Category = "Tile Map|Terrain Detail Pass",
+		AdvancedDisplay,
 		meta = (
 			ClampMin = "0",
 			ClampMax = "4096",
@@ -478,24 +523,15 @@ public:
 	)
 	int32 TerrainDetailMinimumSpacingCells;
 
-	/** Distance kept inside a cliff boundary at the 100-unit authoring size. */
-	UPROPERTY(
-		EditAnywhere,
-		BlueprintReadOnly,
-		Category = "Tile Map|Terrain Detail Pass",
-		meta = (
-			ClampMin = "0.0",
-			ClampMax = "50.0",
-			DisplayName = "Cliff Detail Edge Inset",
-			EditCondition = "bGenerateTerrainDetailsOnBake"
-		)
-	)
+	/** Legacy manual edge inset retained for older serialized actors. */
+	UPROPERTY()
 	float TerrainDetailEdgeInset;
 
 	UPROPERTY(
 		EditAnywhere,
 		BlueprintReadOnly,
 		Category = "Tile Map|Terrain Detail Pass",
+		AdvancedDisplay,
 		meta = (
 			ClampMin = "0",
 			DisplayName = "Detail Start Cull Distance",
@@ -508,6 +544,7 @@ public:
 		EditAnywhere,
 		BlueprintReadOnly,
 		Category = "Tile Map|Terrain Detail Pass",
+		AdvancedDisplay,
 		meta = (
 			ClampMin = "0",
 			DisplayName = "Detail End Cull Distance",
@@ -516,12 +553,15 @@ public:
 	)
 	int32 TerrainDetailEndCullDistance;
 
-	/** User-supplied low-poly structural meshes grouped by placement region. */
+	/** User-supplied meshes scattered across supported terrain top surfaces. */
 	UPROPERTY(
 		EditAnywhere,
 		BlueprintReadOnly,
 		Category = "Tile Map|Terrain Detail Pass",
-		meta = (EditCondition = "bGenerateTerrainDetailsOnBake")
+		meta = (
+			DisplayName = "Surface Detail Meshes",
+			EditCondition = "bGenerateTerrainDetailsOnBake"
+		)
 	)
 	TArray<FTileMapTerrainDetailDefinition> TerrainDetailPalette;
 
@@ -556,6 +596,18 @@ public:
 		Category = "Tile Map|Path Painting"
 	)
 	TArray<FIntVector> PaintedPathBlocks;
+
+	/**
+	 * Occupied cells explicitly rendered through their modular/HISM mesh even
+	 * while the actor-wide continuous-terrain option is enabled.
+	 */
+	UPROPERTY(
+		VisibleAnywhere,
+		BlueprintReadOnly,
+		Category = "Tile Map|Continuous Terrain",
+		meta = (DisplayName = "Modular Terrain Blocks")
+	)
+	TArray<FIntVector> ModularTerrainBlocks;
 
 	UPROPERTY(
 		VisibleAnywhere,
@@ -621,6 +673,23 @@ public:
 		bool bPainted
 	);
 
+	/** True when this occupied cell has an explicit modular/HISM override. */
+	bool IsBlockExcludedFromContinuousTerrain(
+		const FIntVector& GridPosition
+	) const;
+
+	/** Changes one occupied cell between continuous and modular rendering. */
+	bool SetBlockContinuousTerrain(
+		const FIntVector& GridPosition,
+		bool bUseContinuousTerrain
+	);
+
+	/** Efficient batch used by copied-terrain merging. */
+	bool SetBlocksContinuousTerrain(
+		const TArray<FIntVector>& GridPositions,
+		bool bUseContinuousTerrain
+	);
+
 	bool RotateBlock(
 		const FIntVector& GridPosition,
 		int32 QuarterTurnDelta = 1
@@ -661,6 +730,11 @@ public:
 
 	/** True for blocks compatible with generated continuous/path surfaces. */
 	bool IsContinuousSurfaceBlock(
+		const FIntVector& GridPosition
+	) const;
+
+	/** True when this compatible cell belongs to the generated mesh renderer. */
+	bool ShouldUseContinuousTerrainForBlock(
 		const FIntVector& GridPosition
 	) const;
 
@@ -710,6 +784,8 @@ public:
 	) const;
 
 protected:
+	virtual void BeginPlay() override;
+
 	virtual void OnConstruction(
 		const FTransform& Transform
 	) override;
@@ -745,9 +821,14 @@ private:
 	TMap<FIntVector, UProceduralMeshComponent*>
 		ContinuousChunkComponentLookup;
 
+	TMap<FIntVector, UProceduralMeshComponent*>
+		PathOverlayChunkComponentLookup;
+
 	TSet<FIntVector> OccupancyLookup;
 
 	TSet<FIntVector> PaintedPathLookup;
+
+	TSet<FIntVector> ModularTerrainBlockLookup;
 
 	TMap<FIntVector, int32> BlockIndexLookup;
 
@@ -832,6 +913,14 @@ private:
 
 	bool IsContinuousRampBlock(
 		const FIntVector& GridPosition
+	) const;
+
+	bool GetContinuousRampBoundaryChamferZ(
+		const FIntVector& RampPosition,
+		const FVector2D& LocalPoint,
+		float FlatTopZ,
+		float MaximumChamferDepth,
+		float& OutChamferZ
 	) const;
 
 	bool GetContinuousStairMetadata(

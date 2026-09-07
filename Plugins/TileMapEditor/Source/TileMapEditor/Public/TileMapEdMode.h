@@ -23,6 +23,8 @@ enum class ETileMapCursorTool : uint8
 	PaintTile,
 	PaintPath,
 	ErasePath,
+	PaintModularTerrain,
+	PaintContinuousTerrain,
 	RotateTile,
 	SetSlant,
 	RaiseBlock,
@@ -241,6 +243,12 @@ private:
 
 	void DrawCursorPreview(
 		FPrimitiveDrawInterface* PDI
+	) const;
+
+	void DrawSlantCursorPreview(
+		FPrimitiveDrawInterface* PDI,
+		ATileMapTerrainActor* TerrainActor,
+		const FLinearColor& PreviewColor
 	) const;
 
 	ETileMapSlantMode SlantMode =

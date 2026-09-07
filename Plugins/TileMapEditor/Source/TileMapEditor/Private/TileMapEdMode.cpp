@@ -123,6 +123,18 @@ FText FTileMapEdMode::GetPaintTransactionDescription() const
 			"ErasePathTransaction",
 			"Erase Tile Map Path"
 		);
+
+	case ETileMapCursorTool::PaintModularTerrain:
+		return LOCTEXT(
+			"PaintModularTerrainTransaction",
+			"Paint Modular Terrain Blocks"
+		);
+
+	case ETileMapCursorTool::PaintContinuousTerrain:
+		return LOCTEXT(
+			"PaintContinuousTerrainTransaction",
+			"Restore Continuous Terrain Blocks"
+		);
 	
 	case ETileMapCursorTool::SetSlant:
 		return LOCTEXT(
@@ -379,6 +391,8 @@ bool FTileMapEdMode::UpdateCursorPreview(
 		ActiveTool == ETileMapCursorTool::PaintTile ||
 		ActiveTool == ETileMapCursorTool::PaintPath ||
 		ActiveTool == ETileMapCursorTool::ErasePath ||
+		ActiveTool == ETileMapCursorTool::PaintModularTerrain ||
+		ActiveTool == ETileMapCursorTool::PaintContinuousTerrain ||
 		ActiveTool == ETileMapCursorTool::RotateTile ||
 		ActiveTool == ETileMapCursorTool::SetSlant
 		)
@@ -412,12 +426,36 @@ bool FTileMapEdMode::UpdateCursorPreview(
 				.GetSafeNormal();
 
 			bCursorPreviewValid =
-				TerrainActor->bUseContinuousTerrainPrototype &&
 				TerrainActor->IsContinuousSurfaceBlock(PreviewPosition) &&
 				!TerrainActor->HasBlock(
 					PreviewPosition + FIntVector(0, 0, 1)
 				) &&
 				LocalHitNormal.Z > 0.25f;
+		}
+
+		if (
+			bCursorPreviewValid &&
+			(
+				ActiveTool ==
+					ETileMapCursorTool::PaintModularTerrain ||
+				ActiveTool ==
+					ETileMapCursorTool::PaintContinuousTerrain
+			)
+			)
+		{
+			const bool bCurrentlyExcluded =
+				TerrainActor->IsBlockExcludedFromContinuousTerrain(
+					PreviewPosition
+				);
+			const bool bWantExcluded =
+				ActiveTool ==
+				ETileMapCursorTool::PaintModularTerrain;
+
+			bCursorPreviewValid =
+				TerrainActor->IsContinuousSurfaceBlock(
+					PreviewPosition
+				) &&
+				bCurrentlyExcluded != bWantExcluded;
 		}
 
 		if (
@@ -717,6 +755,46 @@ bool FTileMapEdMode::ApplyActiveToolAtRay(
 			CurrentPosition,
 			bShouldPaint
 		);
+
+		bStrokeChanged |= bChanged;
+		return bChanged;
+	}
+
+	if (
+		ActiveTool == ETileMapCursorTool::PaintModularTerrain ||
+		ActiveTool == ETileMapCursorTool::PaintContinuousTerrain
+		)
+	{
+		if (PaintedCellsThisStroke.Contains(CurrentPosition))
+		{
+			return false;
+		}
+
+		PaintedCellsThisStroke.Add(CurrentPosition);
+
+		const bool bUseContinuousTerrain =
+			ActiveTool ==
+			ETileMapCursorTool::PaintContinuousTerrain;
+		const bool bCurrentlyExcluded =
+			TerrainActor->IsBlockExcludedFromContinuousTerrain(
+				CurrentPosition
+			);
+
+		if (
+			!TerrainActor->IsContinuousSurfaceBlock(CurrentPosition) ||
+			bCurrentlyExcluded == !bUseContinuousTerrain
+			)
+		{
+			return false;
+		}
+
+		ModifyTerrainForCurrentStroke(TerrainActor);
+
+		const bool bChanged =
+			TerrainActor->SetBlockContinuousTerrain(
+				CurrentPosition,
+				bUseContinuousTerrain
+			);
 
 		bStrokeChanged |= bChanged;
 		return bChanged;
@@ -1034,6 +1112,350 @@ bool FTileMapEdMode::MouseLeave(
 	);
 }
 
+void FTileMapEdMode::DrawSlantCursorPreview(
+	FPrimitiveDrawInterface* PDI,
+	ATileMapTerrainActor* TerrainActor,
+	const FLinearColor& PreviewColor
+) const
+{
+	if (!PDI || !TerrainActor)
+	{
+		return;
+	}
+
+	const float Size = FMath::Max(TerrainActor->GridSize, 1.0f);
+	const float HalfSize = Size * 0.5f;
+	const float BottomZ = CursorPreviewGridPosition.Z * Size;
+	const float TopZ = BottomZ + Size;
+	const FVector2D CellCenter(
+		(CursorPreviewGridPosition.X + 0.5f) * Size,
+		(CursorPreviewGridPosition.Y + 0.5f) * Size
+	);
+	FVector2D RiseAxis(1.0f, 0.0f);
+
+	switch (SlantDirection)
+	{
+	case ETileMapSlantDirection::PositiveY:
+		RiseAxis = FVector2D(0.0f, 1.0f);
+		break;
+
+	case ETileMapSlantDirection::NegativeX:
+		RiseAxis = FVector2D(-1.0f, 0.0f);
+		break;
+
+	case ETileMapSlantDirection::NegativeY:
+		RiseAxis = FVector2D(0.0f, -1.0f);
+		break;
+
+	case ETileMapSlantDirection::PositiveX:
+	default:
+		break;
+	}
+
+	const FVector2D SideAxis(-RiseAxis.Y, RiseAxis.X);
+	const FTransform TerrainTransform =
+		TerrainActor->GetActorTransform();
+	const FLinearColor ArrowColor =
+		bCursorPreviewValid
+		? FLinearColor(0.0f, 1.0f, 1.0f, 1.0f)
+		: PreviewColor;
+
+	auto ToWorld =
+		[&](const FVector& LocalPosition)
+		{
+			return TerrainTransform.TransformPosition(LocalPosition);
+		};
+
+	auto DrawLocalLine =
+		[&](
+			const FVector& Start,
+			const FVector& End,
+			const FLinearColor& Color,
+			float Thickness
+		)
+		{
+			PDI->DrawLine(
+				ToWorld(Start),
+				ToWorld(End),
+				Color,
+				SDPG_Foreground,
+				Thickness
+			);
+		};
+
+	auto DrawDirectionArrow =
+		[&](const FVector& Start, const FVector& End)
+		{
+			const FVector Direction = (End - Start).GetSafeNormal();
+
+			if (Direction.IsNearlyZero())
+			{
+				return;
+			}
+
+			const FVector ArrowSide(
+				SideAxis.X,
+				SideAxis.Y,
+				0.0f
+			);
+			const float HeadLength = FMath::Min(
+				Size * 0.28f,
+				(End - Start).Size() * 0.35f
+			);
+			const float HeadWidth = Size * 0.16f;
+			const FVector HeadBase = End - (Direction * HeadLength);
+
+			DrawLocalLine(Start, End, ArrowColor, 6.0f);
+			DrawLocalLine(
+				End,
+				HeadBase + (ArrowSide * HeadWidth),
+				ArrowColor,
+				6.0f
+			);
+			DrawLocalLine(
+				End,
+				HeadBase - (ArrowSide * HeadWidth),
+				ArrowColor,
+				6.0f
+			);
+		};
+
+	auto MakePoint =
+		[](const FVector2D& Plan, float Height)
+		{
+			return FVector(Plan.X, Plan.Y, Height);
+		};
+
+	if (SlantMode == ETileMapSlantMode::DiagonalEdge)
+	{
+		// The generated diagonal tile retains the triangular half pointing
+		// in the selected cut direction. Preview that exact prism footprint.
+		const FVector2D PlanPoints[3] =
+		{
+			CellCenter - (RiseAxis * HalfSize) - (SideAxis * HalfSize),
+			CellCenter + (RiseAxis * HalfSize) - (SideAxis * HalfSize),
+			CellCenter + (RiseAxis * HalfSize) + (SideAxis * HalfSize)
+		};
+
+		for (int32 EdgeIndex = 0; EdgeIndex < 3; ++EdgeIndex)
+		{
+			const int32 NextIndex = (EdgeIndex + 1) % 3;
+
+			DrawLocalLine(
+				MakePoint(PlanPoints[EdgeIndex], BottomZ),
+				MakePoint(PlanPoints[NextIndex], BottomZ),
+				PreviewColor,
+				4.0f
+			);
+			DrawLocalLine(
+				MakePoint(PlanPoints[EdgeIndex], TopZ),
+				MakePoint(PlanPoints[NextIndex], TopZ),
+				PreviewColor,
+				4.0f
+			);
+			DrawLocalLine(
+				MakePoint(PlanPoints[EdgeIndex], BottomZ),
+				MakePoint(PlanPoints[EdgeIndex], TopZ),
+				PreviewColor,
+				4.0f
+			);
+		}
+
+		const float ArrowHeight = TopZ + (Size * 0.12f);
+		DrawDirectionArrow(
+			MakePoint(
+				CellCenter - (RiseAxis * Size * 0.28f),
+				ArrowHeight
+			),
+			MakePoint(
+				CellCenter + (RiseAxis * Size * 0.36f),
+				ArrowHeight
+			)
+		);
+		return;
+	}
+
+	const int32 SegmentCount = GetSlantSegmentCount();
+	const float RunLength = SegmentCount * Size;
+	const FVector2D LowCenter =
+		CellCenter - (RiseAxis * HalfSize);
+	const FVector2D HighCenter =
+		LowCenter + (RiseAxis * RunLength);
+	const FVector2D LowNegative =
+		LowCenter - (SideAxis * HalfSize);
+	const FVector2D LowPositive =
+		LowCenter + (SideAxis * HalfSize);
+	const FVector2D HighNegative =
+		HighCenter - (SideAxis * HalfSize);
+	const FVector2D HighPositive =
+		HighCenter + (SideAxis * HalfSize);
+
+	// Draw the complete affected footprint, rather than only the cell under
+	// the cursor, so the user can see every block the slant will convert.
+	DrawLocalLine(
+		MakePoint(LowNegative, BottomZ),
+		MakePoint(LowPositive, BottomZ),
+		PreviewColor,
+		4.0f
+	);
+	DrawLocalLine(
+		MakePoint(LowNegative, BottomZ),
+		MakePoint(HighNegative, BottomZ),
+		PreviewColor,
+		4.0f
+	);
+	DrawLocalLine(
+		MakePoint(LowPositive, BottomZ),
+		MakePoint(HighPositive, BottomZ),
+		PreviewColor,
+		4.0f
+	);
+	DrawLocalLine(
+		MakePoint(HighNegative, BottomZ),
+		MakePoint(HighPositive, BottomZ),
+		PreviewColor,
+		4.0f
+	);
+
+	if (SlantMode == ETileMapSlantMode::Stairs)
+	{
+		const int32 StepCount = 12;
+		const float LowLandingLength = Size * 0.25f;
+		const float StepDepth = (Size * 1.5f) / StepCount;
+		const float StepRise = Size / StepCount;
+
+		for (int32 StepIndex = 0;
+			StepIndex <= StepCount;
+			++StepIndex)
+		{
+			const float StartDistance =
+				StepIndex == 0
+				? 0.0f
+				: LowLandingLength + ((StepIndex - 1) * StepDepth);
+			const float EndDistance =
+				StepIndex == StepCount
+				? RunLength
+				: LowLandingLength + (StepIndex * StepDepth);
+			const float Height = BottomZ + (StepIndex * StepRise);
+			const FVector2D StartCenter =
+				LowCenter + (RiseAxis * StartDistance);
+			const FVector2D EndCenter =
+				LowCenter + (RiseAxis * EndDistance);
+			const FVector2D StartNegative =
+				StartCenter - (SideAxis * HalfSize);
+			const FVector2D StartPositive =
+				StartCenter + (SideAxis * HalfSize);
+			const FVector2D EndNegative =
+				EndCenter - (SideAxis * HalfSize);
+			const FVector2D EndPositive =
+				EndCenter + (SideAxis * HalfSize);
+
+			DrawLocalLine(
+				MakePoint(StartNegative, Height),
+				MakePoint(EndNegative, Height),
+				PreviewColor,
+				3.0f
+			);
+			DrawLocalLine(
+				MakePoint(StartPositive, Height),
+				MakePoint(EndPositive, Height),
+				PreviewColor,
+				3.0f
+			);
+			DrawLocalLine(
+				MakePoint(StartNegative, Height),
+				MakePoint(StartPositive, Height),
+				PreviewColor,
+				3.0f
+			);
+
+			if (StepIndex < StepCount)
+			{
+				const float NextHeight = Height + StepRise;
+
+				DrawLocalLine(
+					MakePoint(EndNegative, Height),
+					MakePoint(EndNegative, NextHeight),
+					PreviewColor,
+					3.0f
+				);
+				DrawLocalLine(
+					MakePoint(EndPositive, Height),
+					MakePoint(EndPositive, NextHeight),
+					PreviewColor,
+					3.0f
+				);
+				DrawLocalLine(
+					MakePoint(EndNegative, NextHeight),
+					MakePoint(EndPositive, NextHeight),
+					PreviewColor,
+					3.0f
+				);
+			}
+		}
+	}
+	else
+	{
+		DrawLocalLine(
+			MakePoint(LowNegative, BottomZ),
+			MakePoint(HighNegative, TopZ),
+			PreviewColor,
+			4.0f
+		);
+		DrawLocalLine(
+			MakePoint(LowPositive, BottomZ),
+			MakePoint(HighPositive, TopZ),
+			PreviewColor,
+			4.0f
+		);
+
+		for (int32 SegmentIndex = 0;
+			SegmentIndex <= SegmentCount;
+			++SegmentIndex)
+		{
+			const float Alpha =
+				static_cast<float>(SegmentIndex) /
+				static_cast<float>(SegmentCount);
+			const FVector2D SectionCenter =
+				FMath::Lerp(LowCenter, HighCenter, Alpha);
+			const float SectionHeight =
+				FMath::Lerp(BottomZ, TopZ, Alpha);
+
+			DrawLocalLine(
+				MakePoint(
+					SectionCenter - (SideAxis * HalfSize),
+					SectionHeight
+				),
+				MakePoint(
+					SectionCenter + (SideAxis * HalfSize),
+					SectionHeight
+				),
+				PreviewColor,
+				3.0f
+			);
+		}
+	}
+
+	DrawLocalLine(
+		MakePoint(HighNegative, BottomZ),
+		MakePoint(HighNegative, TopZ),
+		PreviewColor,
+		4.0f
+	);
+	DrawLocalLine(
+		MakePoint(HighPositive, BottomZ),
+		MakePoint(HighPositive, TopZ),
+		PreviewColor,
+		4.0f
+	);
+
+	const float ArrowLift = Size * 0.12f;
+	DrawDirectionArrow(
+		MakePoint(LowCenter, BottomZ + ArrowLift),
+		MakePoint(HighCenter, TopZ + ArrowLift)
+	);
+}
+
 void FTileMapEdMode::DrawCursorPreview(
 	FPrimitiveDrawInterface* PDI
 ) const
@@ -1140,6 +1562,16 @@ void FTileMapEdMode::DrawCursorPreview(
 			: FLinearColor(1.0f, 0.1f, 0.5f, 1.0f);
 	}
 	else if (
+		ActiveTool == ETileMapCursorTool::PaintModularTerrain ||
+		ActiveTool == ETileMapCursorTool::PaintContinuousTerrain
+		)
+	{
+		PreviewColor =
+			ActiveTool == ETileMapCursorTool::PaintModularTerrain
+			? FLinearColor(0.1f, 0.55f, 1.0f, 1.0f)
+			: FLinearColor(0.1f, 1.0f, 0.4f, 1.0f);
+	}
+	else if (
 		ActiveTool ==
 		ETileMapCursorTool::RotateTile
 		)
@@ -1166,6 +1598,16 @@ void FTileMapEdMode::DrawCursorPreview(
 	else
 	{
 		PreviewColor = FLinearColor::Yellow;
+	}
+
+	if (ActiveTool == ETileMapCursorTool::SetSlant)
+	{
+		DrawSlantCursorPreview(
+			PDI,
+			TerrainActor,
+			PreviewColor
+		);
+		return;
 	}
 
 	const int32 Edges[12][2] =

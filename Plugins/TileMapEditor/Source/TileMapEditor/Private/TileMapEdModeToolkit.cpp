@@ -31,6 +31,7 @@
 #include "ProceduralMeshComponent.h"
 #include "RawMesh.h"
 #include "ScopedTransaction.h"
+#include "StaticMeshResources.h"
 #include "UObject/Package.h"
 
 #include "Widgets/Input/SButton.h"
@@ -306,6 +307,7 @@ namespace TileMapEdModeToolkitLocal
 		TArray<int32>& OutTileTypes,
 		TArray<uint8>& OutRotations,
 		TArray<FIntVector>& OutPaintedPathPositions,
+		TArray<FIntVector>& OutModularTerrainPositions,
 		int32& OutTargetOverlapCount,
 		int32& OutSourceOverlapCount,
 		float& OutMaximumSnapDistance,
@@ -316,6 +318,7 @@ namespace TileMapEdModeToolkitLocal
 		OutTileTypes.Reset();
 		OutRotations.Reset();
 		OutPaintedPathPositions.Reset();
+		OutModularTerrainPositions.Reset();
 		OutTargetOverlapCount = 0;
 		OutSourceOverlapCount = 0;
 		OutMaximumSnapDistance = 0.0f;
@@ -390,6 +393,15 @@ namespace TileMapEdModeToolkitLocal
 				if (Source->HasPaintedPath(SourcePosition))
 				{
 					OutPaintedPathPositions.Add(TargetPosition);
+				}
+
+				if (
+					Source->IsBlockExcludedFromContinuousTerrain(
+						SourcePosition
+					)
+					)
+				{
+					OutModularTerrainPositions.Add(TargetPosition);
 				}
 			}
 		}
@@ -537,7 +549,7 @@ namespace TileMapEdModeToolkitLocal
 			: Materials.Add(Material);
 	}
 
-	bool AppendStaticMeshGeometry(
+	bool AppendStaticMeshRenderDataGeometry(
 		UStaticMesh* SourceMesh,
 		UMaterialInterface* SlotZeroOverride,
 		const FTransform& LocalTransform,
@@ -547,8 +559,197 @@ namespace TileMapEdModeToolkitLocal
 	{
 		if (
 			!SourceMesh ||
-			SourceMesh->GetNumSourceModels() <= 0
+			!SourceMesh->RenderData ||
+			SourceMesh->RenderData->LODResources.Num() <= 0
 			)
+		{
+			return false;
+		}
+
+		const FStaticMeshLODResources& LODResources =
+			SourceMesh->RenderData->LODResources[0];
+		const FPositionVertexBuffer& PositionBuffer =
+			LODResources.VertexBuffers.PositionVertexBuffer;
+		const FStaticMeshVertexBuffer& VertexBuffer =
+			LODResources.VertexBuffers.StaticMeshVertexBuffer;
+		const FColorVertexBuffer& ColorBuffer =
+			LODResources.VertexBuffers.ColorVertexBuffer;
+		const int32 VertexCount =
+			static_cast<int32>(PositionBuffer.GetNumVertices());
+		const int32 IndexCount =
+			static_cast<int32>(LODResources.IndexBuffer.GetNumIndices());
+		int32 WedgeCount = 0;
+
+		if (
+			VertexCount <= 0 ||
+			IndexCount <= 0 ||
+			static_cast<int32>(VertexBuffer.GetNumVertices()) != VertexCount
+			)
+		{
+			return false;
+		}
+
+		// Validate every rendered triangle before modifying the destination mesh.
+		// This keeps a failed fallback from leaving a partially appended block.
+		for (const FStaticMeshSection& Section : LODResources.Sections)
+		{
+			const int32 SectionWedgeCount = Section.NumTriangles * 3;
+			const int32 SectionEndIndex =
+				static_cast<int32>(Section.FirstIndex) +
+				SectionWedgeCount;
+
+			if (
+				SectionWedgeCount <= 0 ||
+				SectionEndIndex > IndexCount
+				)
+			{
+				if (SectionWedgeCount <= 0)
+				{
+					continue;
+				}
+
+				return false;
+			}
+
+			for (
+				int32 SourceIndexOffset = 0;
+				SourceIndexOffset < SectionWedgeCount;
+				++SourceIndexOffset
+				)
+			{
+				const uint32 SourceVertexIndex =
+					LODResources.IndexBuffer.GetIndex(
+						Section.FirstIndex + SourceIndexOffset
+					);
+
+				if (SourceVertexIndex >= static_cast<uint32>(VertexCount))
+				{
+					return false;
+				}
+			}
+
+			WedgeCount += SectionWedgeCount;
+		}
+
+		if (WedgeCount <= 0)
+		{
+			return false;
+		}
+
+		const uint32 VertexOffset = static_cast<uint32>(
+			OutRawMesh.VertexPositions.Num()
+		);
+
+		for (int32 VertexIndex = 0; VertexIndex < VertexCount; ++VertexIndex)
+		{
+			OutRawMesh.VertexPositions.Add(
+				LocalTransform.TransformPosition(
+					PositionBuffer.VertexPosition(VertexIndex)
+				)
+			);
+		}
+
+		const bool bHasVertexColors =
+			static_cast<int32>(ColorBuffer.GetNumVertices()) == VertexCount;
+		const bool bHasUV0 = VertexBuffer.GetNumTexCoords() > 0;
+
+		for (const FStaticMeshSection& Section : LODResources.Sections)
+		{
+			const int32 SectionWedgeCount = Section.NumTriangles * 3;
+
+			if (SectionWedgeCount <= 0)
+			{
+				continue;
+			}
+
+			UMaterialInterface* Material =
+				Section.MaterialIndex == 0 && SlotZeroOverride
+				? SlotZeroOverride
+				: SourceMesh->GetMaterial(Section.MaterialIndex);
+			const int32 MaterialIndex =
+				FindOrAddMaterial(OutMaterials, Material);
+
+			for (
+				int32 SourceIndexOffset = 0;
+				SourceIndexOffset < SectionWedgeCount;
+				++SourceIndexOffset
+				)
+			{
+				const uint32 SourceVertexIndex =
+					LODResources.IndexBuffer.GetIndex(
+						Section.FirstIndex + SourceIndexOffset
+					);
+
+				OutRawMesh.WedgeIndices.Add(
+					VertexOffset + SourceVertexIndex
+				);
+				OutRawMesh.WedgeTangentX.Add(
+					LocalTransform.TransformVectorNoScale(
+						VertexBuffer.VertexTangentX(SourceVertexIndex)
+					).GetSafeNormal()
+				);
+				OutRawMesh.WedgeTangentY.Add(
+					LocalTransform.TransformVectorNoScale(
+						VertexBuffer.VertexTangentY(SourceVertexIndex)
+					).GetSafeNormal()
+				);
+				OutRawMesh.WedgeTangentZ.Add(
+					LocalTransform.TransformVectorNoScale(
+						VertexBuffer.VertexTangentZ(SourceVertexIndex)
+					).GetSafeNormal()
+				);
+				OutRawMesh.WedgeTexCoords[0].Add(
+					bHasUV0
+					? VertexBuffer.GetVertexUV(SourceVertexIndex, 0)
+					: FVector2D::ZeroVector
+				);
+				OutRawMesh.WedgeColors.Add(
+					bHasVertexColors
+					? ColorBuffer.VertexColor(SourceVertexIndex)
+					: FColor::White
+				);
+
+				if (SourceIndexOffset % 3 == 2)
+				{
+					OutRawMesh.FaceMaterialIndices.Add(MaterialIndex);
+					OutRawMesh.FaceSmoothingMasks.Add(0);
+				}
+			}
+		}
+
+		return true;
+	}
+
+	bool AppendStaticMeshGeometry(
+		UStaticMesh* SourceMesh,
+		UMaterialInterface* SlotZeroOverride,
+		const FTransform& LocalTransform,
+		FRawMesh& OutRawMesh,
+		TArray<UMaterialInterface*>& OutMaterials
+	)
+	{
+		if (!SourceMesh)
+		{
+			return false;
+		}
+
+		// Bake the same built LOD 0 geometry used by the live HISM first. This
+		// includes import/build transforms that are not necessarily represented by
+		// the editable source RawMesh positions.
+		if (
+			AppendStaticMeshRenderDataGeometry(
+				SourceMesh,
+				SlotZeroOverride,
+				LocalTransform,
+				OutRawMesh,
+				OutMaterials
+			)
+			)
+		{
+			return true;
+		}
+
+		if (SourceMesh->GetNumSourceModels() <= 0)
 		{
 			return false;
 		}
@@ -568,7 +769,8 @@ namespace TileMapEdModeToolkitLocal
 
 		if (
 			SourceRawMesh.VertexPositions.Num() == 0 ||
-			SourceRawMesh.WedgeIndices.Num() == 0
+			SourceRawMesh.WedgeIndices.Num() == 0 ||
+			!SourceRawMesh.IsValidOrFixable()
 			)
 		{
 			return false;
@@ -2373,8 +2575,13 @@ namespace TileMapEdModeToolkitLocal
 			{
 				if (
 					!IsValid(ContinuousComponent) ||
-					!ContinuousComponent->GetName().StartsWith(
-						TEXT("TileContinuousChunk_")
+					(
+						!ContinuousComponent->GetName().StartsWith(
+							TEXT("TileContinuousChunk_")
+						) &&
+						!ContinuousComponent->GetName().StartsWith(
+							TEXT("TilePathOverlayChunk_")
+						)
 					)
 					)
 				{
@@ -2401,33 +2608,97 @@ namespace TileMapEdModeToolkitLocal
 				}
 			}
 
+			int32 AppendedStandaloneBlockCount = 0;
+			int32 AppendedExplicitOverrideCount = 0;
+
 			for (
 				const FIntVector& GridPosition :
 				TerrainActor->OccupiedBlocks
 				)
 			{
-				if (TerrainActor->IsContinuousSurfaceBlock(GridPosition))
+				if (
+					TerrainActor->ShouldUseContinuousTerrainForBlock(
+						GridPosition
+					)
+					)
 				{
 					continue;
 				}
 
 				const int32 TileType =
 					TerrainActor->GetBlockTileType(GridPosition);
-
-				bAppendedGeometry =
+				UStaticMesh* TileMesh =
+					TerrainActor->GetTileMesh(TileType);
+				const bool bAppendedBlock =
 					AppendStaticMeshGeometry(
-						TerrainActor->GetTileMesh(TileType),
-						TerrainActor->GetTileMaterialOverride(
-							TileType
-						),
-						TerrainActor->GetBlockLocalTransform(
-							GridPosition
-						),
+						TileMesh,
+						TerrainActor->GetTileMaterialOverride(TileType),
+						TerrainActor->GetBlockLocalTransform(GridPosition),
 						OutRawMesh,
 						OutMaterials
-					) ||
-					bAppendedGeometry;
+					);
+
+				if (!bAppendedBlock)
+				{
+					UE_LOG(
+						LogTemp,
+						Error,
+						TEXT(
+							"TileMap bake aborted: standalone block "
+							"(%d,%d,%d), tile type %d, mesh %s has "
+							"neither readable rendered LOD0 geometry nor "
+							"readable raw source geometry."
+						),
+						GridPosition.X,
+						GridPosition.Y,
+						GridPosition.Z,
+						TileType,
+						*GetNameSafe(TileMesh)
+					);
+					return false;
+				}
+
+				bAppendedGeometry = true;
+				++AppendedStandaloneBlockCount;
+
+				if (
+					TerrainActor->IsBlockExcludedFromContinuousTerrain(
+						GridPosition
+					)
+					)
+				{
+					++AppendedExplicitOverrideCount;
+				}
 			}
+
+			if (
+				AppendedExplicitOverrideCount !=
+				TerrainActor->ModularTerrainBlocks.Num()
+				)
+			{
+				UE_LOG(
+					LogTemp,
+					Error,
+					TEXT(
+						"TileMap bake aborted: expected %d explicit "
+						"modular overrides but appended %d."
+					),
+					TerrainActor->ModularTerrainBlocks.Num(),
+					AppendedExplicitOverrideCount
+				);
+				return false;
+			}
+
+			UE_LOG(
+				LogTemp,
+				Display,
+				TEXT(
+					"TileMap hybrid bake appended %d standalone blocks, "
+					"including %d explicit modular overrides."
+				),
+				AppendedStandaloneBlockCount,
+				AppendedExplicitOverrideCount
+			);
 
 			return
 				bAppendedGeometry &&
@@ -2644,14 +2915,9 @@ namespace TileMapEdModeToolkitLocal
 	struct FTerrainDetailCandidate
 	{
 		FIntVector SurfaceBlock;
-		ETileMapTerrainDetailPlacement Placement;
-		FIntVector Direction;
 
 		FTerrainDetailCandidate()
-			:
-			SurfaceBlock(FIntVector::ZeroValue),
-			Placement(ETileMapTerrainDetailPlacement::Ground),
-			Direction(FIntVector::ZeroValue)
+			: SurfaceBlock(FIntVector::ZeroValue)
 		{
 		}
 	};
@@ -2659,7 +2925,6 @@ namespace TileMapEdModeToolkitLocal
 	uint32 MakeTerrainDetailSeed(
 		int32 BaseSeed,
 		const FIntVector& GridPosition,
-		ETileMapTerrainDetailPlacement Placement,
 		uint32 Salt
 	)
 	{
@@ -2667,7 +2932,6 @@ namespace TileMapEdModeToolkitLocal
 		Result ^= static_cast<uint32>(GridPosition.X) * 73856093u;
 		Result ^= static_cast<uint32>(GridPosition.Y) * 19349663u;
 		Result ^= static_cast<uint32>(GridPosition.Z) * 83492791u;
-		Result ^= static_cast<uint32>(Placement) * 2654435761u;
 		Result ^= Result >> 16;
 		Result *= 2246822519u;
 		Result ^= Result >> 13;
@@ -2708,7 +2972,6 @@ namespace TileMapEdModeToolkitLocal
 
 	int32 ChooseTerrainDetailDefinition(
 		ATileMapTerrainActor* TerrainActor,
-		ETileMapTerrainDetailPlacement Placement,
 		FRandomStream& RandomStream
 	)
 	{
@@ -2725,7 +2988,6 @@ namespace TileMapEdModeToolkitLocal
 			)
 		{
 			if (
-				Definition.Placement == Placement &&
 				Definition.Mesh &&
 				Definition.Weight > 0.0f
 				)
@@ -2752,7 +3014,6 @@ namespace TileMapEdModeToolkitLocal
 				TerrainActor->TerrainDetailPalette[DefinitionIndex];
 
 			if (
-				Definition.Placement != Placement ||
 				!Definition.Mesh ||
 				Definition.Weight <= 0.0f
 				)
@@ -2771,9 +3032,206 @@ namespace TileMapEdModeToolkitLocal
 		return INDEX_NONE;
 	}
 
+	float GetTerrainDetailFootprintRadius(
+		const FTileMapTerrainDetailDefinition& Definition,
+		const FVector& InstanceScale
+	)
+	{
+		if (!Definition.Mesh)
+		{
+			return 0.0f;
+		}
+
+		const FBoxSphereBounds MeshBounds = Definition.Mesh->GetBounds();
+		float MaximumRadiusSquared = 0.0f;
+
+		for (int32 XSign = -1; XSign <= 1; XSign += 2)
+		{
+			for (int32 YSign = -1; YSign <= 1; YSign += 2)
+			{
+				const FVector2D ScaledCorner(
+					(
+						MeshBounds.Origin.X +
+						(XSign * MeshBounds.BoxExtent.X)
+					) * InstanceScale.X,
+					(
+						MeshBounds.Origin.Y +
+						(YSign * MeshBounds.BoxExtent.Y)
+					) * InstanceScale.Y
+				);
+				MaximumRadiusSquared = FMath::Max(
+					MaximumRadiusSquared,
+					ScaledCorner.SizeSquared()
+				);
+			}
+		}
+
+		return FMath::Sqrt(MaximumRadiusSquared);
+	}
+
+	float TerrainDetailPointSegmentDistanceSquared(
+		const FVector2D& Point,
+		const FVector2D& SegmentStart,
+		const FVector2D& SegmentEnd
+	)
+	{
+		const FVector2D Segment = SegmentEnd - SegmentStart;
+		const float SegmentLengthSquared = Segment.SizeSquared();
+
+		if (SegmentLengthSquared <= SMALL_NUMBER)
+		{
+			return (Point - SegmentStart).SizeSquared();
+		}
+
+		const float SegmentAlpha = FMath::Clamp(
+			FVector2D::DotProduct(Point - SegmentStart, Segment) /
+				SegmentLengthSquared,
+			0.0f,
+			1.0f
+		);
+		const FVector2D ClosestPoint =
+			SegmentStart + (Segment * SegmentAlpha);
+		return (Point - ClosestPoint).SizeSquared();
+	}
+
+	bool IsTerrainDetailFootprintSupported(
+		const TSet<FIntVector>& SupportedSurfaceBlocks,
+		const FIntVector& SourceSurfaceBlock,
+		const FVector& LocalLocation,
+		float FootprintRadius,
+		float GridSize,
+		float SurfaceEdgePadding
+	)
+	{
+		const FVector2D SurfacePoint(LocalLocation.X, LocalLocation.Y);
+		const FIntVector CenterSurfaceBlock(
+			FMath::FloorToInt(LocalLocation.X / GridSize),
+			FMath::FloorToInt(LocalLocation.Y / GridSize),
+			SourceSurfaceBlock.Z
+		);
+
+		if (!SupportedSurfaceBlocks.Contains(CenterSurfaceBlock))
+		{
+			return false;
+		}
+
+		// Mesh bounds plus the terrain's own top chamfer supply automatic
+		// foliage-style edge padding. This keeps the entire base on the flat top
+		// instead of allowing it to float over a beveled cliff lip.
+		const float RequiredClearance = FMath::Max(
+			FootprintRadius + SurfaceEdgePadding,
+			0.0f
+		);
+
+		if (RequiredClearance <= KINDA_SMALL_NUMBER)
+		{
+			return true;
+		}
+
+		// Reject accidentally gigantic or badly scaled assets before their
+		// bounds could turn this bake-only local edge query into a huge scan.
+		if (RequiredClearance > GridSize * 8.0f)
+		{
+			return false;
+		}
+
+		const int32 MinimumGridX =
+			FMath::FloorToInt(
+				(LocalLocation.X - RequiredClearance) / GridSize
+			) - 1;
+		const int32 MaximumGridX =
+			FMath::FloorToInt(
+				(LocalLocation.X + RequiredClearance) / GridSize
+			) + 1;
+		const int32 MinimumGridY =
+			FMath::FloorToInt(
+				(LocalLocation.Y - RequiredClearance) / GridSize
+			) - 1;
+		const int32 MaximumGridY =
+			FMath::FloorToInt(
+				(LocalLocation.Y + RequiredClearance) / GridSize
+			) + 1;
+		const float RequiredClearanceSquared =
+			RequiredClearance * RequiredClearance;
+		const FIntVector CardinalDirections[4] =
+		{
+			FIntVector(1, 0, 0),
+			FIntVector(0, 1, 0),
+			FIntVector(-1, 0, 0),
+			FIntVector(0, -1, 0)
+		};
+
+		for (int32 GridX = MinimumGridX; GridX <= MaximumGridX; ++GridX)
+		{
+			for (int32 GridY = MinimumGridY; GridY <= MaximumGridY; ++GridY)
+			{
+				const FIntVector SurfaceBlock(
+					GridX,
+					GridY,
+					SourceSurfaceBlock.Z
+				);
+
+				if (!SupportedSurfaceBlocks.Contains(SurfaceBlock))
+				{
+					continue;
+				}
+
+				const float MinimumX = GridX * GridSize;
+				const float MaximumX = MinimumX + GridSize;
+				const float MinimumY = GridY * GridSize;
+				const float MaximumY = MinimumY + GridSize;
+
+				for (const FIntVector& Direction : CardinalDirections)
+				{
+					if (SupportedSurfaceBlocks.Contains(SurfaceBlock + Direction))
+					{
+						continue;
+					}
+
+					FVector2D SegmentStart;
+					FVector2D SegmentEnd;
+
+					if (Direction.X > 0)
+					{
+						SegmentStart = FVector2D(MaximumX, MinimumY);
+						SegmentEnd = FVector2D(MaximumX, MaximumY);
+					}
+					else if (Direction.X < 0)
+					{
+						SegmentStart = FVector2D(MinimumX, MinimumY);
+						SegmentEnd = FVector2D(MinimumX, MaximumY);
+					}
+					else if (Direction.Y > 0)
+					{
+						SegmentStart = FVector2D(MinimumX, MaximumY);
+						SegmentEnd = FVector2D(MaximumX, MaximumY);
+					}
+					else
+					{
+						SegmentStart = FVector2D(MinimumX, MinimumY);
+						SegmentEnd = FVector2D(MaximumX, MinimumY);
+					}
+
+					if (
+						TerrainDetailPointSegmentDistanceSquared(
+							SurfacePoint,
+							SegmentStart,
+							SegmentEnd
+						) < RequiredClearanceSquared
+						)
+					{
+						return false;
+					}
+				}
+			}
+		}
+
+		return true;
+	}
+
 	bool IsTerrainDetailTooClose(
 		const FVector& LocalLocation,
-		const TArray<FVector>& AcceptedLocations,
+		const TArray<FVector>& AcceptedSurfaceLocations,
 		float MinimumSpacing,
 		float GridSize
 	)
@@ -2786,7 +3244,7 @@ namespace TileMapEdModeToolkitLocal
 		const float MinimumSpacingSquared =
 			MinimumSpacing * MinimumSpacing;
 
-		for (const FVector& AcceptedLocation : AcceptedLocations)
+		for (const FVector& AcceptedLocation : AcceptedSurfaceLocations)
 		{
 			const FVector Delta = LocalLocation - AcceptedLocation;
 
@@ -2814,9 +3272,68 @@ namespace TileMapEdModeToolkitLocal
 	{
 		OutDetailActor = nullptr;
 
+		if (!TerrainActor || !EditorWorld)
+		{
+			return 0;
+		}
+
+		// Replace the prior detail result for this terrain instead of allowing
+		// stale bake actors to remain at positions from an older terrain shape.
+		// v1.2.70 actors use Owner. Legacy unowned actors are safe to replace
+		// when this is the level's only terrain, or when their transform still
+		// matches, without touching a differently transformed terrain's pass.
+		TArray<AActor*> PreviousDetailActors;
+		int32 TerrainActorCountInLevel = 0;
+
+		for (TActorIterator<ATileMapTerrainActor> It(EditorWorld); It; ++It)
+		{
+			if ((*It)->GetLevel() == ActorLevel)
+			{
+				++TerrainActorCountInLevel;
+			}
+		}
+
+		for (TActorIterator<AActor> It(EditorWorld); It; ++It)
+		{
+			AActor* ExistingActor = *It;
+
+			if (
+				!ExistingActor ||
+				ExistingActor == TerrainActor ||
+				!ExistingActor->Tags.Contains(
+					FName(TEXT("TileMapTerrainDetails"))
+				) ||
+				ExistingActor->GetLevel() != ActorLevel
+				)
+			{
+				continue;
+			}
+
+			const bool bOwnedByTerrain =
+				ExistingActor->GetOwner() == TerrainActor;
+			const bool bLegacyTransformMatch =
+				!ExistingActor->GetOwner() &&
+				(
+					TerrainActorCountInLevel == 1 ||
+					ExistingActor->GetActorTransform().Equals(
+						TerrainActor->GetActorTransform(),
+						0.01f
+					)
+				);
+
+			if (bOwnedByTerrain || bLegacyTransformMatch)
+			{
+				PreviousDetailActors.Add(ExistingActor);
+			}
+		}
+
+		for (AActor* PreviousDetailActor : PreviousDetailActors)
+		{
+			PreviousDetailActor->Modify();
+			PreviousDetailActor->Destroy();
+		}
+
 		if (
-			!TerrainActor ||
-			!EditorWorld ||
 			!TerrainActor->bGenerateTerrainDetailsOnBake ||
 			TerrainActor->TerrainDetailPalette.Num() == 0 ||
 			TerrainActor->TerrainDetailMaximumInstances <= 0
@@ -2825,26 +3342,19 @@ namespace TileMapEdModeToolkitLocal
 			return 0;
 		}
 
-		const float Density = FMath::Clamp(
-			TerrainActor->TerrainDetailDensity,
+		const float SurfaceCoverage = FMath::Clamp(
+			TerrainActor->TerrainDetailCoveragePercent,
 			0.0f,
-			1.0f
-		);
+			100.0f
+		) / 100.0f;
 
-		if (Density <= 0.0f)
+		if (SurfaceCoverage <= 0.0f)
 		{
 			return 0;
 		}
 
-		const FIntVector CardinalDirections[4] =
-		{
-			FIntVector(1, 0, 0),
-			FIntVector(0, 1, 0),
-			FIntVector(-1, 0, 0),
-			FIntVector(0, -1, 0)
-		};
-
 		TArray<FIntVector> SurfaceBlocks;
+		TSet<FIntVector> SupportedSurfaceBlocks;
 
 		for (
 			const FIntVector& GridPosition :
@@ -2857,6 +3367,7 @@ namespace TileMapEdModeToolkitLocal
 				)
 			{
 				SurfaceBlocks.Add(GridPosition);
+				SupportedSurfaceBlocks.Add(GridPosition);
 			}
 		}
 
@@ -2881,92 +3392,25 @@ namespace TileMapEdModeToolkitLocal
 
 		for (const FIntVector& SurfaceBlock : SurfaceBlocks)
 		{
-			TArray<FIntVector> CliffTopDirections;
-			TArray<FIntVector> CliffBaseDirections;
-
-			for (const FIntVector& Direction : CardinalDirections)
-			{
-				if (TerrainActor->HasBlock(
-					SurfaceBlock + Direction + FIntVector(0, 0, 1)
-				))
-				{
-					CliffBaseDirections.Add(Direction);
-				}
-				else if (!TerrainActor->HasBlock(SurfaceBlock + Direction))
-				{
-					CliffTopDirections.Add(Direction);
-				}
-			}
-
 			FTerrainDetailCandidate Candidate;
 			Candidate.SurfaceBlock = SurfaceBlock;
-
-			if (CliffBaseDirections.Num() > 0)
-			{
-				Candidate.Placement =
-					ETileMapTerrainDetailPlacement::CliffBase;
-
-				FRandomStream DirectionStream(
-					static_cast<int32>(
-						MakeTerrainDetailSeed(
-							TerrainActor->TerrainDetailSeed,
-							SurfaceBlock,
-							Candidate.Placement,
-							0x12f4a9bdu
-						)
-					)
-				);
-
-				Candidate.Direction = CliffBaseDirections[
-					DirectionStream.RandRange(
-						0,
-						CliffBaseDirections.Num() - 1
-					)
-				];
-			}
-			else if (CliffTopDirections.Num() > 0)
-			{
-				Candidate.Placement =
-					ETileMapTerrainDetailPlacement::CliffTop;
-
-				FRandomStream DirectionStream(
-					static_cast<int32>(
-						MakeTerrainDetailSeed(
-							TerrainActor->TerrainDetailSeed,
-							SurfaceBlock,
-							Candidate.Placement,
-							0x88c7e35bu
-						)
-					)
-				);
-
-				Candidate.Direction = CliffTopDirections[
-					DirectionStream.RandRange(
-						0,
-						CliffTopDirections.Num() - 1
-					)
-				];
-			}
-			else
-			{
-				Candidate.Placement =
-					ETileMapTerrainDetailPlacement::Ground;
-			}
-
 			Candidates.Add(Candidate);
 		}
 
 		const float GridSize =
 			FMath::Max(TerrainActor->GridSize, 1.0f);
 		const float GridScale = GridSize / 100.0f;
+		const float SurfaceEdgePadding = FMath::Max(
+			FMath::Clamp(
+				TerrainActor->ContinuousChamferWidth,
+				0.0f,
+				GridSize * 0.3f
+			),
+			2.0f * GridScale
+		);
 		const float MinimumSpacing =
 			FMath::Max(TerrainActor->TerrainDetailMinimumSpacingCells, 0) *
 			GridSize;
-		const float EdgeInset = FMath::Clamp(
-			TerrainActor->TerrainDetailEdgeInset * GridScale,
-			0.0f,
-			GridSize * 0.5f
-		);
 		const int32 MaximumInstances = FMath::Clamp(
 			TerrainActor->TerrainDetailMaximumInstances,
 			0,
@@ -2974,11 +3418,11 @@ namespace TileMapEdModeToolkitLocal
 		);
 
 		TMap<int32, TArray<FTransform> > InstancesByDefinition;
-		TArray<FVector> AcceptedLocations;
+		TArray<FVector> AcceptedSurfaceLocations;
 
 		for (const FTerrainDetailCandidate& Candidate : Candidates)
 		{
-			if (AcceptedLocations.Num() >= MaximumInstances)
+			if (AcceptedSurfaceLocations.Num() >= MaximumInstances)
 			{
 				break;
 			}
@@ -2988,13 +3432,12 @@ namespace TileMapEdModeToolkitLocal
 					MakeTerrainDetailSeed(
 						TerrainActor->TerrainDetailSeed,
 						Candidate.SurfaceBlock,
-						Candidate.Placement,
 						0x6a09e667u
 					)
 				)
 			);
 
-			if (RandomStream.FRand() > Density)
+			if (RandomStream.FRand() > SurfaceCoverage)
 			{
 				continue;
 			}
@@ -3002,7 +3445,6 @@ namespace TileMapEdModeToolkitLocal
 			const int32 DefinitionIndex =
 				ChooseTerrainDetailDefinition(
 					TerrainActor,
-					Candidate.Placement,
 					RandomStream
 				);
 
@@ -3018,66 +3460,11 @@ namespace TileMapEdModeToolkitLocal
 			const FTileMapTerrainDetailDefinition& Definition =
 				TerrainActor->TerrainDetailPalette[DefinitionIndex];
 
-			FVector LocalLocation =
-				TerrainActor->GridToLocal(Candidate.SurfaceBlock) +
-				FVector(
-					0.0f,
-					0.0f,
-					(GridSize * 0.5f) -
-						(FMath::Max(Definition.SinkDepth, 0.0f) * GridScale)
-				);
-
-			if (Candidate.Placement == ETileMapTerrainDetailPlacement::Ground)
-			{
-				const float JitterLimit = GridSize * 0.25f;
-				LocalLocation.X += RandomStream.FRandRange(
-					-JitterLimit,
-					JitterLimit
-				);
-				LocalLocation.Y += RandomStream.FRandRange(
-					-JitterLimit,
-					JitterLimit
-				);
-			}
-			else
-			{
-				const FVector Direction(
-					static_cast<float>(Candidate.Direction.X),
-					static_cast<float>(Candidate.Direction.Y),
-					0.0f
-				);
-				const FVector Tangent(-Direction.Y, Direction.X, 0.0f);
-				LocalLocation += Direction * ((GridSize * 0.5f) - EdgeInset);
-				LocalLocation += Tangent * RandomStream.FRandRange(
-					-GridSize * 0.2f,
-					GridSize * 0.2f
-				);
-			}
-
-			if (IsTerrainDetailTooClose(
-				LocalLocation,
-				AcceptedLocations,
-				MinimumSpacing,
-				GridSize
-			))
-			{
-				continue;
-			}
-
 			float YawDegrees = 0.0f;
 
 			if (Definition.bRandomYaw)
 			{
 				YawDegrees = RandomStream.FRandRange(0.0f, 360.0f);
-			}
-			else if (Candidate.Direction != FIntVector::ZeroValue)
-			{
-				YawDegrees = FMath::RadiansToDegrees(
-					FMath::Atan2(
-						static_cast<float>(Candidate.Direction.Y),
-						static_cast<float>(Candidate.Direction.X)
-					)
-				);
 			}
 
 			const float MinimumUniformScale = FMath::Max(
@@ -3098,18 +3485,101 @@ namespace TileMapEdModeToolkitLocal
 				MinimumUniformScale,
 				MaximumUniformScale
 			);
+			const FVector InstanceScale =
+				Definition.MeshScale * (GridScale * UniformScale);
+			const FBoxSphereBounds MeshBounds = Definition.Mesh->GetBounds();
+			const float ScaledMinimumBoundZ =
+				(MeshBounds.Origin.Z - MeshBounds.BoxExtent.Z) *
+				InstanceScale.Z;
+			const float ScaledMaximumBoundZ =
+				(MeshBounds.Origin.Z + MeshBounds.BoxExtent.Z) *
+				InstanceScale.Z;
+			const float MeshMinimumZ = FMath::Min(
+				ScaledMinimumBoundZ,
+				ScaledMaximumBoundZ
+			);
+			const float FootprintRadius =
+				GetTerrainDetailFootprintRadius(Definition, InstanceScale);
+			const float SurfaceZ =
+				(Candidate.SurfaceBlock.Z + 1) * GridSize;
+			const float JitterLimit = FMath::Max(
+				(GridSize * 0.5f) - KINDA_SMALL_NUMBER,
+				0.0f
+			);
+			FVector LocalLocation = FVector::ZeroVector;
+			FVector AcceptedSpacingLocation = FVector::ZeroVector;
+			bool bFoundSupportedPlacement = false;
+
+			// As with landscape foliage, try several random points on the chosen
+			// surface. A failed edge or hole test should move the instance rather
+			// than immediately discard an otherwise eligible surface block.
+			for (
+				int32 PlacementAttempt = 0;
+				PlacementAttempt < 8;
+				++PlacementAttempt
+				)
+			{
+				LocalLocation =
+					TerrainActor->GridToLocal(Candidate.SurfaceBlock);
+				LocalLocation.X += RandomStream.FRandRange(
+					-JitterLimit,
+					JitterLimit
+				);
+				LocalLocation.Y += RandomStream.FRandRange(
+					-JitterLimit,
+					JitterLimit
+				);
+				LocalLocation.Z =
+					SurfaceZ -
+					MeshMinimumZ -
+					(FMath::Max(Definition.SinkDepth, 0.0f) * GridScale);
+				const FVector SurfaceSpacingLocation(
+					LocalLocation.X,
+					LocalLocation.Y,
+					SurfaceZ
+				);
+
+				if (
+					!IsTerrainDetailFootprintSupported(
+						SupportedSurfaceBlocks,
+						Candidate.SurfaceBlock,
+						LocalLocation,
+						FootprintRadius,
+						GridSize,
+						SurfaceEdgePadding
+					) ||
+					IsTerrainDetailTooClose(
+						SurfaceSpacingLocation,
+						AcceptedSurfaceLocations,
+						MinimumSpacing,
+						GridSize
+					)
+					)
+				{
+					continue;
+				}
+
+				bFoundSupportedPlacement = true;
+				AcceptedSpacingLocation = SurfaceSpacingLocation;
+				break;
+			}
+
+			if (!bFoundSupportedPlacement)
+			{
+				continue;
+			}
 
 			InstancesByDefinition.FindOrAdd(DefinitionIndex).Add(
 				FTransform(
 					FRotator(0.0f, YawDegrees, 0.0f),
 					LocalLocation,
-					Definition.MeshScale * (GridScale * UniformScale)
+					InstanceScale
 				)
 			);
-			AcceptedLocations.Add(LocalLocation);
+			AcceptedSurfaceLocations.Add(AcceptedSpacingLocation);
 		}
 
-		if (AcceptedLocations.Num() == 0)
+		if (AcceptedSurfaceLocations.Num() == 0)
 		{
 			return 0;
 		}
@@ -3130,6 +3600,7 @@ namespace TileMapEdModeToolkitLocal
 		}
 
 		DetailActor->SetActorLabel(TEXT("TileMap_Terrain_Details_Baked"));
+		DetailActor->SetOwner(TerrainActor);
 		DetailActor->Tags.AddUnique(FName(TEXT("TileMapTerrainDetails")));
 
 		USceneComponent* DetailRoot = NewObject<USceneComponent>(
@@ -3256,7 +3727,7 @@ namespace TileMapEdModeToolkitLocal
 		}
 
 		OutDetailActor = DetailActor;
-		return AcceptedLocations.Num();
+		return AcceptedSurfaceLocations.Num();
 	}
 
 	UStaticMesh* BakeTerrainToStaticMesh(
@@ -4705,6 +5176,7 @@ void FTileMapEdModeToolkit::Init(
 					TArray<int32> TileTypes;
 					TArray<uint8> Rotations;
 					TArray<FIntVector> PaintedPathPositions;
+					TArray<FIntVector> ModularTerrainPositions;
 					int32 TargetOverlapCount = 0;
 					int32 SourceOverlapCount = 0;
 					float MaximumSnapDistance = 0.0f;
@@ -4718,6 +5190,7 @@ void FTileMapEdModeToolkit::Init(
 							TileTypes,
 							Rotations,
 							PaintedPathPositions,
+							ModularTerrainPositions,
 							TargetOverlapCount,
 							SourceOverlapCount,
 							MaximumSnapDistance,
@@ -4763,6 +5236,11 @@ void FTileMapEdModeToolkit::Init(
 						true
 					);
 
+					Target->SetBlocksContinuousTerrain(
+						ModularTerrainPositions,
+						false
+					);
+
 					int32 RemovedSourceCount = 0;
 
 					for (ATileMapTerrainActor* Source : Sources)
@@ -4785,10 +5263,11 @@ void FTileMapEdModeToolkit::Init(
 						EAppMsgType::Ok,
 						FText::FromString(
 							FString::Printf(
-								TEXT("Snapped and merged %d blocks into %s, preserved %d painted path cells, and removed %d source actor(s). The target kept %d occupied cells; %d duplicate source cells were skipped. Maximum snap correction: %.1f units. One Undo restores both target and sources."),
+								TEXT("Snapped and merged %d blocks into %s, preserved %d painted path cells and %d modular terrain overrides, and removed %d source actor(s). The target kept %d occupied cells; %d duplicate source cells were skipped. Maximum snap correction: %.1f units. One Undo restores both target and sources."),
 								GridPositions.Num(),
 								*Target->GetActorLabel(),
 								PaintedPathPositions.Num(),
+								ModularTerrainPositions.Num(),
 								RemovedSourceCount,
 								TargetOverlapCount,
 								SourceOverlapCount,
@@ -4890,6 +5369,34 @@ void FTileMapEdModeToolkit::Init(
 				LOCTEXT(
 					"ErasePathTool",
 					"Erase Path"
+				)
+			)
+		]
+
+	// PAINT MODULAR TERRAIN OVERRIDE
+	+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(10.0f, 5.0f)
+		[
+			MakeToolCheckBox(
+				ETileMapCursorTool::PaintModularTerrain,
+				LOCTEXT(
+					"PaintModularTerrainTool",
+					"Paint Modular Blocks"
+				)
+			)
+		]
+
+	// RESTORE CONTINUOUS TERRAIN
+	+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(10.0f, 5.0f)
+		[
+			MakeToolCheckBox(
+				ETileMapCursorTool::PaintContinuousTerrain,
+				LOCTEXT(
+					"PaintContinuousTerrainTool",
+					"Restore Continuous Blocks"
 				)
 			)
 		]
@@ -5277,7 +5784,7 @@ void FTileMapEdModeToolkit::Init(
 						{
 							BakeMessage = LOCTEXT(
 								"BakeFailed",
-								"The terrain could not be baked. Make sure it contains blocks and every palette mesh has valid LOD 0 source geometry."
+								"The terrain could not be baked. Make sure it contains blocks and every palette mesh has readable LOD 0 geometry. Check the Output Log for the exact block and mesh that failed."
 							);
 						}
 						else if (
@@ -5297,7 +5804,7 @@ void FTileMapEdModeToolkit::Init(
 						{
 							BakeMessage = LOCTEXT(
 								"BakeSucceededWithoutEligibleTerrainDetails",
-								"The optimized terrain mesh was created in /Game/TileMapBakes. Terrain Detail Pass was enabled, but no structural detail instances were selected. Check that the palette has a valid mesh for the needed Ground, Cliff Top, or Cliff Base region and that Density and Maximum Instances are above zero."
+								"The optimized terrain mesh was created in /Game/TileMapBakes. Terrain Detail Pass was enabled, but no surface details were placed. Check that Surface Detail Meshes contains a valid mesh, Surface Coverage and Maximum Detail Instances are above zero, and the mesh is small enough to fit on the available terrain surface."
 							);
 						}
 						else
@@ -5327,7 +5834,7 @@ void FTileMapEdModeToolkit::Init(
 				.Text(
 					LOCTEXT(
 						"CursorToolHelp",
-						"Stairs use one fixed 33.69-degree standard: two occupied cells, twelve physical steps, and 25-unit low/high landings. Paint Path and Erase Path work on upward ground surfaces in both continuous and modular/HISM modes, including ramp and stair surfaces. The path is OneMinus(VertexColor.G); connect that mask to the alpha of the ground/path texture blend in the terrain material. Terrain Detail Pass is configured in the selected terrain actor's Details panel, is disabled by default, and creates separate bake-time HISM rock/mound pieces without adding triangles to the optimized terrain asset. Vegetation remains a foliage-tool job. Replace Block Type changes palette metadata, while Delete removes occupied cells. Every mouse stroke is one Undo/Redo history step."
+						"With Use Continuous Terrain Prototype enabled, Paint Modular Blocks excludes individual occupied cells from the continuous mesh and renders their authored palette mesh through HISM. Restore Continuous Blocks removes that override. Paths remain available through the lightweight modular overlay. Stairs use one fixed 33.69-degree standard: two occupied cells, twelve physical steps, and 25-unit low/high landings. The path is OneMinus(VertexColor.G); connect that mask to the alpha of the ground/path texture blend in the terrain material. Terrain Detail Pass is configured in the selected terrain actor's Details panel, is disabled by default, and scatters separate bake-time HISM meshes across supported top surfaces like landscape foliage. Mesh bounds automatically keep every detail inside the terrain edge and align its base to the surface. Replace Block Type changes palette metadata, while Delete removes occupied cells. Every mouse stroke is one Undo/Redo history step."
 					)
 				)
 		]
