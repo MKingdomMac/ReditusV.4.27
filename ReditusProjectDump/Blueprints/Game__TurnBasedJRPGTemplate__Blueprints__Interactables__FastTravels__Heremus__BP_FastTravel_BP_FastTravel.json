@@ -1,0 +1,1622 @@
+{
+	"Name": "BP_FastTravel",
+	"Path": "/Game/TurnBasedJRPGTemplate/Blueprints/Interactables/FastTravels/Heremus/BP_FastTravel.BP_FastTravel",
+	"ParentClass": "/Game/TurnBasedJRPGTemplate/Blueprints/Interactables/BP_InteractionDetector.BP_InteractionDetector_C",
+	"GeneratedClass": "/Game/TurnBasedJRPGTemplate/Blueprints/Interactables/FastTravels/Heremus/BP_FastTravel.BP_FastTravel_C",
+	"Variables": [
+		{
+			"Name": "interactionDetector",
+			"Guid": "6AAE112A40D97C8907882D9C7B7A09E2",
+			"Category": "Default",
+			"FriendlyName": "Interaction Detector",
+			"DefaultValue": "",
+			"PinCategory": "object",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": "/Game/TurnBasedJRPGTemplate/Blueprints/Interactables/BP_InteractionDetector.BP_InteractionDetector_C"
+		},
+		{
+			"Name": "J RPGPlayer Controller",
+			"Guid": "576EFE184C1A5EB9051FCAB0BB5C1F8A",
+			"Category": "Default",
+			"FriendlyName": "J RPGPlayer Controller",
+			"DefaultValue": "",
+			"PinCategory": "object",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": "/Game/TurnBasedJRPGTemplate/Blueprints/Controllers/BP_JRPGPlayerController.BP_JRPGPlayerController_C"
+		},
+		{
+			"Name": "SiteName",
+			"Guid": "D72A66EE4B32E967EFB1F08414F9E1B5",
+			"Category": "Default",
+			"FriendlyName": "Site Name",
+			"DefaultValue": "",
+			"PinCategory": "byte",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": "/Game/TurnBasedJRPGTemplate/Blueprints/Enums/E_FastTravelSites.E_FastTravelSites"
+		},
+		{
+			"Name": "Fast Travel Site",
+			"Guid": "7DFD68C64E6C143E38E4388DEA5A8331",
+			"Category": "Default",
+			"FriendlyName": "Fast Travel Site",
+			"DefaultValue": "",
+			"PinCategory": "name",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": ""
+		},
+		{
+			"Name": "FastTravelOverlapped",
+			"Guid": "DED091A14234CBB7A2CDA5A059D46D74",
+			"Category": "Default",
+			"FriendlyName": "Fast Travel Overlapped",
+			"DefaultValue": "",
+			"PinCategory": "mcdelegate",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": ""
+		}
+	],
+	"Components": [
+		{
+			"VariableName": "StaticMesh",
+			"SCSNodeName": "SCS_Node_1"
+		},
+		{
+			"VariableName": "Sphere",
+			"SCSNodeName": "SCS_Node_4"
+		},
+		{
+			"VariableName": "ParticleSystem",
+			"SCSNodeName": "SCS_Node_6"
+		},
+		{
+			"VariableName": "MapIcon",
+			"SCSNodeName": "SCS_Node_5"
+		},
+		{
+			"VariableName": "SphereCollision",
+			"SCSNodeName": "SCS_Node_7"
+		}
+	],
+	"Graphs": [
+		{
+			"Kind": "Ubergraph",
+			"Name": "EventGraph",
+			"Path": "/Game/TurnBasedJRPGTemplate/Blueprints/Interactables/FastTravels/Heremus/BP_FastTravel.BP_FastTravel:EventGraph",
+			"Nodes": [
+				{
+					"Name": "K2Node_Event_1",
+					"Class": "/Script/BlueprintGraph.K2Node_Event",
+					"Title": "Event ActorBeginOverlap",
+					"Guid": "2064476745F5920348462A93A7DA77E9",
+					"PosX": 0,
+					"PosY": 208,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "OtherActor",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Event_2",
+					"Class": "/Script/BlueprintGraph.K2Node_Event",
+					"Title": "Event Tick",
+					"Guid": "AD0331504308CFCA5A284C804246061F",
+					"PosX": 0,
+					"PosY": 416,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "DeltaSeconds",
+							"Direction": "Output",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "EdGraphNode_Comment_35",
+					"Class": "/Script/UnrealEd.EdGraphNode_Comment",
+					"Title": "Bind events to interaction and load",
+					"Guid": "20EF73CA4731C8D58F0C8DA6FC4128A1",
+					"PosX": -3472,
+					"PosY": -1552,
+					"Pins": []
+				},
+				{
+					"Name": "K2Node_CreateWidget_2",
+					"Class": "/Script/UMGEditor.K2Node_CreateWidget",
+					"Title": "Create BP Fast Travel Discovered Notification Widget",
+					"Guid": "ED56C39348974F21334CE79779851493",
+					"PosX": -1584,
+					"PosY": -496,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_3.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_9.execute"
+							]
+						},
+						{
+							"Name": "Class",
+							"Direction": "Input",
+							"Category": "class",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Game/TurnBasedJRPGTemplate/Blueprints/UI/BP_FastTravelDiscoveredNotification.BP_FastTravelDiscoveredNotification_C",
+							"LinkedTo": []
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_9.self"
+							]
+						},
+						{
+							"Name": "OwningPlayer",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "quest",
+							"Direction": "Input",
+							"Category": "class",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "jRPGPlayerController",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_4.J RPGPlayer Controller"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_9",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Add to Viewport\nTarget is User Widget",
+					"Guid": "CE96338D45C7E8D111BB34AD409555CD",
+					"PosX": -1120,
+					"PosY": -512,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CreateWidget_2.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_0.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CreateWidget_2.ReturnValue"
+							]
+						},
+						{
+							"Name": "ZOrder",
+							"Direction": "Input",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_15",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Set Visibility\nTarget is Scene Component",
+					"Guid": "9295B46B4C48F4B1F034E0A62D4E964F",
+					"PosX": 3504,
+					"PosY": -544,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "bNewVisibility",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "true",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "bPropagateToChildren",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_MacroInstance_0",
+					"Class": "/Script/BlueprintGraph.K2Node_MacroInstance",
+					"Title": "Do Once",
+					"Guid": "AA586DE149A5038668886F91E076F416",
+					"PosX": -2128,
+					"PosY": -496,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_0.else"
+							]
+						},
+						{
+							"Name": "Reset",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Start Closed",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Completed",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_3.execute"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableSet_1",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableSet",
+					"Title": "Set J RPGPlayer Controller",
+					"Guid": "A0AED4004DD72349F0E90EB41DB7A820",
+					"PosX": -1392,
+					"PosY": -704,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "J RPGPlayer Controller",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Output_Get",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_2",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get J RPGPlayer Controller",
+					"Guid": "42F62D634F4ECB00907C4F939929ABF6",
+					"PosX": -1344,
+					"PosY": -208,
+					"Pins": [
+						{
+							"Name": "J RPGPlayer Controller",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_0.self"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_4",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get J RPGPlayer Controller",
+					"Guid": "DA75A1FE4E18B604DFFE98BA5695F0F7",
+					"PosX": -3008,
+					"PosY": -208,
+					"Pins": [
+						{
+							"Name": "J RPGPlayer Controller",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_5.self",
+								"K2Node_CreateWidget_2.jRPGPlayerController"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_5",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get FastTravelSites",
+					"Guid": "EFA95A0542D9E534646D96AD8A0F9359",
+					"PosX": -2768,
+					"PosY": -192,
+					"Pins": [
+						{
+							"Name": "FastTravelSites",
+							"Direction": "Output",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_1.TargetArray"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_4.J RPGPlayer Controller"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_IfThenElse_0",
+					"Class": "/Script/BlueprintGraph.K2Node_IfThenElse",
+					"Title": "Branch",
+					"Guid": "C63137294A5FCDEC39906F83E0837B7D",
+					"PosX": -2416,
+					"PosY": -496,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_3.then"
+							]
+						},
+						{
+							"Name": "Condition",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "true",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_1.ReturnValue"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "else",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_MacroInstance_0.execute"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_9",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get Fast Travel Site",
+					"Guid": "4B92DAC8477EC886C0919EA0471FC339",
+					"PosX": -1104,
+					"PosY": -144,
+					"Pins": [
+						{
+							"Name": "Fast Travel Site",
+							"Direction": "Output",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "None",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_0.NewItem"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_3",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Print String",
+					"Guid": "60E3162B4EDAB4938F469FB4ED2821C5",
+					"PosX": -1808,
+					"PosY": -496,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_MacroInstance_0.Completed"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CreateWidget_2.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetSystemLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "WorldContextObject",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "InString",
+							"Direction": "Input",
+							"Category": "string",
+							"SubCategory": "None",
+							"DefaultValue": "fast travel",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "bPrintToScreen",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "true",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "bPrintToLog",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "true",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "TextColor",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "(R=0.000000,G=0.660000,B=1.000000,A=1.000000)",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Duration",
+							"Direction": "Input",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "2.000000",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_ComponentBoundEvent_1",
+					"Class": "/Script/BlueprintGraph.K2Node_ComponentBoundEvent",
+					"Title": "On Component Begin Overlap (SphereCollision)",
+					"Guid": "2DBD62B5428D822A8B104499484E0669",
+					"PosX": -3440,
+					"PosY": -496,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_3.execute"
+							]
+						},
+						{
+							"Name": "OverlappedComponent",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "OtherActor",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_3.Object"
+							]
+						},
+						{
+							"Name": "OtherComp",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "OtherBodyIndex",
+							"Direction": "Output",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "bFromSweep",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "SweepResult",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_DynamicCast_3",
+					"Class": "/Script/BlueprintGraph.K2Node_DynamicCast",
+					"Title": "Cast To BP_JRPGCharacterBase",
+					"Guid": "3920F40E429BACF25B39019EB42A7EAD",
+					"PosX": -3040,
+					"PosY": -496,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_ComponentBoundEvent_1.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_0.execute"
+							]
+						},
+						{
+							"Name": "CastFailed",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Object",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_ComponentBoundEvent_1.OtherActor"
+							]
+						},
+						{
+							"Name": "AsBP JRPGCharacter Base",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "bSuccess",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallDelegate_0",
+					"Class": "/Script/BlueprintGraph.K2Node_CallDelegate",
+					"Title": "Call Fast Travel Overlapped",
+					"Guid": "287F2B8B40932A6CB88FC1944B6BF1F3",
+					"PosX": -240,
+					"PosY": -496,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_0.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CreateWidget_0",
+					"Class": "/Script/UMGEditor.K2Node_CreateWidget",
+					"Title": "Create BP Fast Travel UI Widget",
+					"Guid": "B22BAD5F4EEFCFA15BA1689D7CEDA9DB",
+					"PosX": -2544,
+					"PosY": -976,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_1.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_2.execute"
+							]
+						},
+						{
+							"Name": "Class",
+							"Direction": "Input",
+							"Category": "class",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Game/TurnBasedJRPGTemplate/Blueprints/UI/MainMenu/BP_FastTravelUI.BP_FastTravelUI_C",
+							"LinkedTo": []
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_2.self"
+							]
+						},
+						{
+							"Name": "OwningPlayer",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "title",
+							"Direction": "Input",
+							"Category": "text",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "JrpgController",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_15.J RPGPlayer Controller"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_2",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Add to Viewport\nTarget is User Widget",
+					"Guid": "F644B21A406FEAE5909125835C2B5BCE",
+					"PosX": -2176,
+					"PosY": -992,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CreateWidget_0.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CreateWidget_0.ReturnValue"
+							]
+						},
+						{
+							"Name": "ZOrder",
+							"Direction": "Input",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Event_6",
+					"Class": "/Script/BlueprintGraph.K2Node_Event",
+					"Title": "Event On Interacted Handler",
+					"Guid": "BA3A416B4F1817ABD31688AE9DA0E861",
+					"PosX": -3392,
+					"PosY": -976,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_1.execute"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_13",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get Can Fast Travel?",
+					"Guid": "BF96A66B4FD2EB8B881416A08E7D84BF",
+					"PosX": -3056,
+					"PosY": -848,
+					"Pins": [
+						{
+							"Name": "Can Fast Travel?",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_1.Condition"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_15.J RPGPlayer Controller"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_IfThenElse_1",
+					"Class": "/Script/BlueprintGraph.K2Node_IfThenElse",
+					"Title": "Branch",
+					"Guid": "46CB3A8142E950AD062D1699ECD7F566",
+					"PosX": -3024,
+					"PosY": -976,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Event_6.then"
+							]
+						},
+						{
+							"Name": "Condition",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "true",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_13.Can Fast Travel?"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CreateWidget_0.execute"
+							]
+						},
+						{
+							"Name": "else",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Event_7",
+					"Class": "/Script/BlueprintGraph.K2Node_Event",
+					"Title": "Event BeginPlay",
+					"Guid": "490E2AC34B9AC1107AD716804C21D7CB",
+					"PosX": -3344,
+					"PosY": -1264,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_0.execute"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_DynamicCast_0",
+					"Class": "/Script/BlueprintGraph.K2Node_DynamicCast",
+					"Title": "Cast To BP_JRPGPlayerController",
+					"Guid": "CFDF6B9B4DFD0379613831BBA5217C8B",
+					"PosX": -3136,
+					"PosY": -1184,
+					"Pins": [
+						{
+							"Name": "Object",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_5.ReturnValue"
+							]
+						},
+						{
+							"Name": "AsBP JRPGPlayer Controller",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_0.J RPGPlayer Controller"
+							]
+						},
+						{
+							"Name": "bSuccess",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_5",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Player Controller",
+					"Guid": "6515D5A94B4FD92BFBBA11985F44B9EA",
+					"PosX": -3360,
+					"PosY": -1168,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__GameplayStatics",
+							"LinkedTo": []
+						},
+						{
+							"Name": "WorldContextObject",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "PlayerIndex",
+							"Direction": "Input",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_0.Object"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableSet_0",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableSet",
+					"Title": "Set J RPGPlayer Controller",
+					"Guid": "ED9D61234E100AAB463968B4BC448842",
+					"PosX": -2752,
+					"PosY": -1248,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Event_7.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "J RPGPlayer Controller",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_0.AsBP JRPGPlayer Controller"
+							]
+						},
+						{
+							"Name": "Output_Get",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_15",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get J RPGPlayer Controller",
+					"Guid": "D329A69E43999479269F06BDF95A1629",
+					"PosX": -3024,
+					"PosY": -768,
+					"Pins": [
+						{
+							"Name": "J RPGPlayer Controller",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_13.self",
+								"K2Node_CreateWidget_0.JrpgController"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_0",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get FastTravelSites",
+					"Guid": "DF0D022042398771B7E8258CD822DD9D",
+					"PosX": -1136,
+					"PosY": -208,
+					"Pins": [
+						{
+							"Name": "FastTravelSites",
+							"Direction": "Output",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_0.TargetArray"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_2.J RPGPlayer Controller"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallArrayFunction_0",
+					"Class": "/Script/BlueprintGraph.K2Node_CallArrayFunction",
+					"Title": "Add Unique",
+					"Guid": "4A0ADD764A8F441850F36EA5E300948C",
+					"PosX": -656,
+					"PosY": -480,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_9.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallDelegate_0.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetArrayLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "TargetArray",
+							"Direction": "Input",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_0.FastTravelSites"
+							]
+						},
+						{
+							"Name": "NewItem",
+							"Direction": "Input",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_9.Fast Travel Site"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallArrayFunction_1",
+					"Class": "/Script/BlueprintGraph.K2Node_CallArrayFunction",
+					"Title": "Contains Item",
+					"Guid": "563821C44A52F1F3DA86978CF4EC61B4",
+					"PosX": -2448,
+					"PosY": -160,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetArrayLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "TargetArray",
+							"Direction": "Input",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_5.FastTravelSites"
+							]
+						},
+						{
+							"Name": "ItemToFind",
+							"Direction": "Input",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_1.Fast Travel Site"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_0.Condition"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_1",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get Fast Travel Site",
+					"Guid": "CE50C8BC4B125F5A10E307817638AEB0",
+					"PosX": -2784,
+					"PosY": -80,
+					"Pins": [
+						{
+							"Name": "Fast Travel Site",
+							"Direction": "Output",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "None",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_1.ItemToFind"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				}
+			]
+		},
+		{
+			"Kind": "Function",
+			"Name": "UserConstructionScript",
+			"Path": "/Game/TurnBasedJRPGTemplate/Blueprints/Interactables/FastTravels/Heremus/BP_FastTravel.BP_FastTravel:UserConstructionScript",
+			"Nodes": [
+				{
+					"Name": "K2Node_FunctionEntry_0",
+					"Class": "/Script/BlueprintGraph.K2Node_FunctionEntry",
+					"Title": "Construction Script",
+					"Guid": "3A550CA847EEE032F1FEAC80B6C8901B",
+					"PosX": 0,
+					"PosY": 0,
+					"Pins": [
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				}
+			]
+		},
+		{
+			"Kind": "DelegateSignature",
+			"Name": "FastTravelOverlapped",
+			"Path": "/Game/TurnBasedJRPGTemplate/Blueprints/Interactables/FastTravels/Heremus/BP_FastTravel.BP_FastTravel:FastTravelOverlapped",
+			"Nodes": [
+				{
+					"Name": "K2Node_FunctionEntry_0",
+					"Class": "/Script/BlueprintGraph.K2Node_FunctionEntry",
+					"Title": "Fast Travel Overlapped",
+					"Guid": "CA85E0B948CD84663E71EDB837EDC9BE",
+					"PosX": 0,
+					"PosY": 0,
+					"Pins": [
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				}
+			]
+		}
+	]
+}

@@ -1,0 +1,1481 @@
+TileMapEditor UE4.27 v1.2.51 - Affine Cliff-Blend Bake Culling
+================================================================
+
+This revision combines v1.2.50's split ground/cliff UV seam with conservative
+affine UV and vertex-color validation in the static-mesh bake optimizer. It is
+specifically intended to make the top, left, right, and internal X-marked cliff
+blend bands reduce like the already-correct circled bottom edge.
+
+Replacement and focused test
+----------------------------
+1. Close Unreal Editor and Visual Studio.
+2. Replace the complete Plugins/TileMapEditor folder with this archive's folder.
+3. Delete only Plugins/TileMapEditor/Binaries and Intermediate.
+4. Regenerate project files and build Development Editor / Win64.
+5. Confirm VersionName is 1.2.51.
+6. Reopen the map or edit one terrain cell to rebuild live chunks.
+7. Bake a new static mesh; an older baked asset cannot update itself.
+8. Enable Vertices or Wireframe and compare all outer and internal cliff axes.
+9. Confirm the visible blend, paths, masks, normals, collision, ramps, stairs,
+   diagonal cuts, corners, overpasses, and wavy silhouette remain unchanged.
+10. Confirm the Output Log contains both the affine cliff-blend optimizer and
+    bake position-weld messages.
+
+Keep v1.2.49 as rollback until UE4.27 compilation and this exact test pass.
+
+Previous revision notes follow.
+
+TileMapEditor UE4.27 v1.2.50 - Direction-Independent Cliff UV Seam
+===================================================================
+
+This revision starts from v1.2.49 and splits UV/tangent ownership at the exact
+ground-to-cliff-lip seam. Ground triangles retain planar ground UVs, while lip
+triangles use the directional cliff-strip UVs. Positions, normals, vertex
+colors, material masks, collision, and triangle count remain unchanged. The
+split is created lazily only where a lip triangle touches a ground vertex.
+
+Replacement and focused test
+----------------------------
+1. Close Unreal Editor and Visual Studio.
+2. Replace the complete Plugins/TileMapEditor folder with this archive's folder.
+3. Delete only Plugins/TileMapEditor/Binaries and Intermediate.
+4. Regenerate project files and build Development Editor / Win64.
+5. Confirm VersionName is 1.2.50.
+6. Reopen the map or edit one terrain cell to rebuild live chunks.
+7. Bake a new static mesh; do not inspect the already baked v1.2.49 asset.
+8. In top view, compare bottom, top, left, right, and internal cliff edges with
+   Vertices or Wireframe enabled. All directions should now optimize and blend
+   consistently while keeping the same wavy physical silhouette.
+9. Inspect paths, diagonal cuts, ramps, stairs, corners, collision, vertex
+   colors, and the cliff-top material on every direction.
+
+Keep v1.2.49 as rollback until UE4.27 compilation and the directional visual
+test pass.
+
+Previous revision notes follow.
+
+TileMapEditor UE4.27 v1.2.49 - Fixed Low-Poly Continuous Topology
+=================================================================
+
+This revision starts from v1.2.48. It removes the exposed Chamfer Subdivisions
+Per Tile property, fixes the former 16/12/32 subdivision floors, applies one
+internal low-density rule to detailed continuous geometry, samples ordinary
+wavy walls by physical length, and always welds raw-mesh position indices after
+continuous bake simplification.
+
+Replacement and build
+---------------------
+1. Close Unreal Editor and Visual Studio.
+2. Replace the complete Plugins/TileMapEditor folder with this archive's folder.
+3. Delete only Plugins/TileMapEditor/Binaries and Intermediate.
+4. Regenerate project files.
+5. Build Development Editor / Win64.
+6. Reopen the map and force continuous chunks to rebuild.
+
+Focused test
+------------
+1. Confirm VersionName is 1.2.49.
+2. Confirm Chamfer Subdivisions Per Tile is no longer displayed.
+3. Compare the same terrain against v1.2.48 in Lit and wireframe views.
+4. Inspect the v1.2.48 inner-lip fix, straight cliffs, convex/concave corners,
+   all ramp and diagonal-cut directions, stairs, paths, supports, overpasses,
+   chunk borders, undersides, and collision.
+5. Bake the same terrain and record LOD0 triangle and vertex counts.
+6. Confirm Output Log contains TileMap bake position weld.
+
+Keep v1.2.48 as rollback until UE4.27 visual and collision tests pass.
+
+Previous revision notes follow.
+
+TileMapEditor UE4.27 v1.2.48 - Irregular Inner Cliff Lip
+========================================================
+
+This focused revision starts from v1.2.47 and changes only the horizontal
+placement of the inner row of ordinary continuous-terrain cliff chamfers. It
+keeps half of the existing deterministic edge wave at that row so the physical
+ground-to-lip boundary no longer forms a ruler-straight strip.
+
+Replacement and build
+---------------------
+1. Close Unreal Editor and Visual Studio.
+2. Replace the complete Plugins/TileMapEditor folder with this archive's folder.
+3. Delete only Plugins/TileMapEditor/Binaries and Intermediate.
+4. Regenerate project files.
+5. Build Development Editor / Win64.
+6. Reopen the same map and force continuous chunks to rebuild.
+
+Focused test
+------------
+1. Confirm VersionName is 1.2.48.
+2. Restore the original accepted CliffTopMask material branch. Do not keep the
+   experimental extra Multiply 2 / Saturate branch.
+3. Inspect the reported long cliff edge in Lit and Unlit modes.
+4. Confirm the inner lip boundary is gently irregular while the flat top stays
+   level and the exposed outer silhouette matches v1.2.47.
+5. Check corners, equal-height neighbors, paths, chunk borders, collision, and
+   the optimized static-mesh bake.
+
+Keep v1.2.47 as rollback until the UE4.27 visual and collision checks pass.
+
+Previous revision notes follow.
+
+TileMapEditor UE4.27 v1.2.47 - Modular Path Printf Compile Fix
+================================================================
+
+This compile-only revision starts from v1.2.46. It replaces the conditional
+format argument in FindOrCreateContinuousChunkComponent with two direct
+FString::Printf calls so UE4.27 retains the required TEXT literal array type.
+
+Replacement and build
+---------------------
+1. Close Unreal Editor and Visual Studio.
+2. Replace the complete Plugins/TileMapEditor folder with this archive's folder.
+3. Delete only Plugins/TileMapEditor/Binaries and Intermediate.
+4. Regenerate project files.
+5. Build Development Editor / Win64.
+6. Confirm the prior E0304 at TileMapTerrainActor.cpp line 3571 is gone.
+
+Scope check
+-----------
+- VersionName is 1.2.47.
+- No terrain, path, bake, collision, decoration, slant, stair, or material
+  behavior was changed.
+- Continue with the v1.2.46 terrain-detail and v1.2.45 modular-path tests below
+  only after the C++ build succeeds.
+
+Previous revision notes follow.
+
+TileMapEditor UE4.27 v1.2.46 - Optional Terrain Detail Pass
+================================================================
+
+This focused revision starts from the exact packaged v1.2.45 source and adds a
+disabled-by-default structural detail pass to Bake Optimized Static Mesh. The
+details are separate HISM instances, not triangles in the terrain asset.
+
+Replacement and build
+---------------------
+1. Close Unreal Editor and Visual Studio.
+2. Back up the currently working Plugins/TileMapEditor directory.
+3. Remove the entire old project Plugins/TileMapEditor directory.
+4. Copy the TileMapEditor directory from this archive into project Plugins/.
+5. Delete Plugins/TileMapEditor/Binaries and Intermediate if they exist.
+6. Regenerate project files and build Development Editor / Win64 with UE4.27.
+7. Start Unreal Editor only after the C++ build completes successfully.
+
+Initial setup
+-------------
+1. Confirm the plugin reports VersionName 1.2.46.
+2. Select the editable TileMap terrain actor.
+3. Open Details > Tile Map > Terrain Detail Pass.
+4. Leave Generate Terrain Details During Bake disabled while confirming the
+   existing terrain still bakes exactly like v1.2.45.
+5. Add one low-poly mesh to each desired Terrain Detail Palette placement:
+   Ground Bump / Mound, Cliff Top / Corner, and Cliff Base.
+6. Author meshes around a 100-unit cell with their origin at the intended
+   contact point. If Random Yaw is disabled, +X faces outward for Cliff Top and
+   toward the higher wall for Cliff Base.
+7. Keep collision disabled unless a particular rock must block the player.
+8. Enable Generate Terrain Details During Bake only when ready to test it.
+
+Focused bake test
+-----------------
+1. Bake once with the pass disabled and record SM_TileMapTerrain LOD0 triangle
+   and vertex counts.
+2. Enable the pass and bake the identical terrain again.
+3. Confirm the terrain static mesh counts are identical. A second actor named
+   TileMap_Terrain_Details_Baked should contain the HISM instances.
+4. Confirm details appear only on eligible flat ground, cliff tops/corners, or
+   lower ground beside a one-level-higher wall.
+5. Confirm no automatic details appear on ramps, fixed-45 horizontal cuts,
+   stairs, bridges/overpasses, a painted path, or the one-cell path clearance.
+6. Check flat terrain, stacked platforms, concave/convex corners, unsupported
+   platforms, chunk boundaries, and all elevations for floating or buried
+   pieces.
+7. Move, rotate, and scale a test terrain actor, then bake it and confirm the
+   separate detail actor remains exactly aligned with the baked terrain.
+8. Bake twice with the same seed and confirm placement is identical. Change the
+   seed and confirm it changes without editing terrain geometry.
+9. Test Density, Maximum Detail Instances, Minimum Spacing, Cliff Detail Edge
+   Inset, Uniform Scale Range, Sink Depth, and HISM cull distances.
+10. Inspect player collision. The optimized terrain owns collision; only palette
+   entries with Enable Collision should add detail collision.
+11. Disable Continuous Terrain and repeat a small bake to confirm the v1.2.45
+    modular/HISM path overlay still works and the detail actor remains separate.
+12. Delete the detail actor independently and confirm the baked terrain actor
+    and static-mesh asset remain intact.
+
+Important export behavior
+-------------------------
+The terrain asset in /Game/TileMapBakes intentionally excludes the detail
+instances. Export or keep the separate detail actor when those structural
+pieces are wanted. This separation is what protects the optimized terrain
+polygon count and allows HISM culling.
+
+Verification status
+-------------------
+The source was inspected and statically checked in this environment, but it
+cannot be compiled or visually verified here in the user's UE4.27 project. Do
+not make v1.2.46 the new baseline until these focused UE4.27 tests pass. v1.2.45
+is the direct source parent; keep the user-tested v1.2.43 package as the
+confirmed rollback.
+
+Previous revision notes follow.
+
+TileMapEditor UE4.27 v1.2.45 - Modular/HISM Path Painting
+================================================================
+
+This focused revision starts from the user-accepted v1.2.43 source. It does not
+include the no-benefit v1.2.44 bake experiment. Paint Path and Erase Path now
+work while Use Continuous Terrain Prototype is disabled. The accepted full
+continuous-terrain geometry and v1.2.43 bake simplifier are unchanged.
+
+Replacement and build
+---------------------
+1. Close Unreal Editor and Visual Studio.
+2. Back up the accepted v1.2.43 Plugins/TileMapEditor directory.
+3. Remove the entire old project Plugins/TileMapEditor directory.
+4. Copy the TileMapEditor directory from this archive into project Plugins/.
+5. Delete Plugins/TileMapEditor/Binaries and Intermediate if they exist.
+6. Regenerate project files and build Development Editor / Win64 with UE4.27.
+7. Start Unreal Editor only after the C++ build completes successfully.
+
+Existing material hookup
+------------------------
+- Keep the existing path mask hookup: OneMinus(VertexColor.G) is the alpha of
+  the ground/path material blend. No PerInstanceCustomData nodes are required.
+- Modular mode renders a collision-free path-only procedural surface 0.25
+  units above the modular meshes. It contains only triangles touched by the
+  soft path mask; it does not recreate the full continuous terrain.
+- The path-only surface uses the same material as its source tile. World-space
+  ground/path projection is recommended so the mask-zero part exactly matches
+  the modular surface below it.
+- Bake Optimized Static Mesh includes these path-only sections and their vertex
+  colors when Continuous Terrain is disabled.
+
+Focused test
+------------
+1. Confirm VersionName is 1.2.45 and disable Use Continuous Terrain Prototype.
+2. Paint and erase a path across ordinary top blocks. Confirm the path is
+   visible, softly blended, and Undo/Redo remains one transaction per stroke.
+3. Paint an L, a one-cell hole, and a stroke across a 16-cell chunk boundary.
+   Confirm adjacent painted cells have no internal blend seam.
+4. Paint all rotations of a vertical ramp, fixed-45 horizontal cut, and fixed
+   stairs. Confirm the mask stays on upward surfaces and not walls/undersides.
+5. Confirm modular collision is unchanged; the path-only components must not
+   add collision or shadows.
+6. Toggle Continuous Terrain on and confirm the previously accepted continuous
+   terrain and its path appearance are unchanged.
+7. With Continuous Terrain off, bake a static mesh. Confirm the path and soft
+   mask survive, then inspect collision across path boundaries.
+
+Verification status
+-------------------
+The source was inspected and statically checked in this environment, but it
+cannot be compiled or visually verified here in the user's UE4.27 project. Do
+not make v1.2.45 the new baseline until the focused UE4.27 tests pass.
+
+Previous revision notes follow.
+
+TileMapEditor UE4.27 v1.2.43 - Cross-Cell Bake Optimization
+================================================================
+
+This focused revision starts from the user-tested v1.2.42 candidate and removes
+only the bake simplifier's one-grid-cell region limit. Compatible coplanar
+regions may now simplify across cell and continuous-chunk boundaries. All
+material, mask, UV, tangent, plane, winding, boundary-ownership, hole, and
+non-manifold safety checks remain enabled. The minor reported X+ ramp-foot issue
+is deferred and unchanged.
+
+Replacement and build
+---------------------
+1. Close Unreal Editor and Visual Studio.
+2. Back up the currently working v1.2.42 TileMapEditor plugin and baked mesh.
+3. Remove the entire old project Plugins/TileMapEditor directory.
+4. Copy the TileMapEditor directory from this archive into project Plugins/.
+5. Delete Plugins/TileMapEditor/Binaries and Intermediate if they exist.
+6. Regenerate project files and build Development Editor / Win64 with UE4.27.
+7. Open the same terrain without changing its actor settings.
+
+Focused test
+------------
+1. Confirm VersionName is 1.2.43.
+2. Bake the same terrain used to test v1.2.42.
+3. Record the LOD0 triangle and vertex counts.
+4. Compare rendered and wireframe geometry at flat tops, walls, masks, chunk
+   borders, all slant/cut directions, stairs, corners, supports, and undersides.
+5. Walk collision over the entire test terrain.
+6. Keep v1.2.42 as the rollback until v1.2.43 passes these UE4.27 checks.
+
+Previous revision notes follow.
+
+TileMapEditor UE4.27 v1.2.42 - Optimized Bake Hash Compile Fix
+================================================================
+
+This revision corrects the UE4.27 compile failure in v1.2.41's custom bake
+optimizer key hashing. It does not change the optimizer algorithm or runtime
+terrain geometry. v1.2.40 remains the accepted baseline until this revision is
+compiled and verified in the user's UE4.27 project.
+
+Replacement and build
+---------------------
+1. Close Unreal Editor and Visual Studio.
+2. Back up the currently accepted v1.2.40 TileMapEditor plugin.
+3. Remove the entire old project Plugins/TileMapEditor directory.
+4. Copy the TileMapEditor directory from this archive into project Plugins/.
+5. Delete only the project Intermediate and Binaries folders needed to force a
+   clean plugin rebuild; do not delete Content, Config, or Source.
+6. Regenerate project files if Unreal requests it.
+7. Build the project's Editor target for Win64 Development Editor in Visual
+   Studio or with the UE4.27 UnrealBuildTool.
+8. Start Unreal Editor only after the build completes successfully.
+
+If compilation still fails, copy the first red compiler error from the Build
+Output window (including file and line), not only the IntelliSense Error List.
+
+Focused verification
+--------------------
+1. Confirm the plugin reports VersionName 1.2.42.
+2. Confirm ordinary continuous terrain and all existing slant/stair/path tools
+   behave like the v1.2.40 baseline.
+3. Bake the same test terrain and compare topology counts and appearance.
+4. Do not accept this revision until it has been verified inside UE4.27.
+
+Previous revision notes follow.
+
+TileMapEditor v1.2.41 - UE4.27 install and test notes
+=====================================================
+
+Conservative static-mesh bake optimization (v1.2.41)
+----------------------------------------------------
+This focused revision starts from the user-accepted v1.2.40 source. Bake
+Optimized Static Mesh now replaces only verified planar, constant-mask,
+affine-UV triangle regions with boundary triangulation. It locks junction
+vertices used by neighboring geometry and retains authored wedge normals and
+tangents during static-mesh build. Live terrain generation is unchanged.
+
+Read README_v1.2.41.txt for the exact preservation rules and required
+before/after topology, material, winding, collision, ramp, cut, stair, path,
+stacked-block, and overpass tests. The Output Log reports the raw continuous
+triangle count before and after each bake. The package is source-inspected but
+has not been compiled or visually verified in the user's UE4.27 project.
+
+Taller lower cliff-base mask (v1.2.40)
+--------------------------------------
+This focused revision starts from the user-accepted v1.2.39 cliff-top UV
+revision. It changes only the constructor default for Cliff Foot Blend Height
+from 10 to 20 Unreal units. This doubles the physical lower-wall band carrying
+the inverse VertexColor.R cliff-base mask.
+
+Existing terrain actors retain their saved per-instance value. After replacing
+the plugin, select each existing terrain actor and either type 20 into Cliff
+Foot Blend Height or click its yellow reset arrow to adopt the new 20-unit
+default. Reopen the map or make one terrain edit so continuous chunks rebuild.
+
+Read README_v1.2.40.txt for the exact scope and focused test.
+
+Dedicated cliff-top UVs (v1.2.39)
+---------------------------------
+This focused revision starts from v1.2.38 and changes only the UV0/tangent data
+of geometry already classified by the upper CliffEdge mask. It does not alter
+terrain positions, triangles, collision, tools, or lower cliff-base placement.
+
+Read README_v1.2.39.txt before replacing the plugin. The material must sample
+the cliff-top albedo and normal through TextureCoordinate index 0 instead of a
+WorldAlignedTexture. The exact UV contract and focused ordinary/corner/cut/
+vertical-ramp test matrix are documented there.
+
+This package has been source-inspected and statically checked, but it has not
+been compiled or visually verified inside the user's UE4.27 project. Keep
+v1.2.38 available until the v1.2.39 debug-strip test passes.
+
+Installation
+------------
+1. Close Unreal Editor and Visual Studio.
+2. Replace the project's entire Plugins/TileMapEditor folder with this folder.
+3. Delete only these generated folders if they exist:
+   Plugins/TileMapEditor/Binaries
+   Plugins/TileMapEditor/Intermediate
+4. Regenerate the Visual Studio project files.
+5. Build the Development Editor / Win64 target, then reopen Unreal Editor.
+6. If the withdrawn v1.2.16 was previously opened, Replace Block Type on its
+   Diagonal Edge cell with a normal tile and apply the 45-degree Diagonal Edge
+   again. This assigns the proven V4 generated asset. Delete a generated
+   SM_TileMapV5DiagonalEdge asset only after no block or palette entry refers
+   to it.
+
+Scrollable Tile Map panel (v1.2.36)
+----------------------------------
+This UI-only revision wraps the complete Tile Map mode controls in a vertical
+scroll box. When the panel is docked narrowly on the right or its height is
+shorter than the controls, use the mouse wheel or scrollbar to reach every
+tool. No terrain, stair, ramp, diagonal, material-mask, collision, merge, or
+bake function changed from v1.2.35.
+
+Focused UI test:
+1. Dock Tile Map mode on the right and shorten the panel until controls no
+   longer fit.
+2. Confirm the complete panel scrolls from the title through the final help.
+3. Confirm checkboxes, spin boxes, merge buttons, and Bake remain clickable.
+4. Widen and resize the panel, then reopen Tile Map mode and repeat.
+
+Fixed gradual stairs (v1.2.35)
+--------------------------------
+This focused revision starts from v1.2.34. It adds one fixed stair standard:
+two existing cells, twelve physical steps, a 100-unit rise over a 150-unit
+stepped run, and 25-unit low/high landings. The design angle is 33.690067
+degrees. See README_v1.2.35.txt for the exact topology ownership rules and
+required four-direction, neighbor, parallel-run, unsupported, collision,
+path-mask, and bake tests. Existing Vertical Ramp and fixed-45 Horizontal
+Diagonal Edge generation were not rewritten.
+
+This package has been source-inspected and statically checked, but it has not
+been compiled or visually verified inside the user's UE4.27 project. Do not
+accept it as a new working baseline until the v1.2.35 test list passes.
+
+Path Paint Tool and requested editor cleanup (v1.2.34)
+------------------------------------------------------
+This revision starts from v1.2.33. The user-verified v1.2.31 continuous
+terrain, ramp, fixed-45 horizontal cut, corner, collision, and bake geometry
+positions are retained. No material asset is included in this source-only ZIP;
+the terrain material must consume the new path mask as described below.
+
+Files and focused changes:
+- Source/TileMapRuntime/Public/TileMapTerrainActor.h adds the persistent
+  PaintedPathBlocks layer, Path Edge Blend Width, and path edit/query API.
+- Source/TileMapRuntime/Private/TileMapTerrainActor.cpp builds a smooth
+  signed-distance mask only on upward continuous-terrain surfaces. The mask is
+  emitted on flat ground, vertical ramps, and fixed-45 horizontal cuts. Block
+  delete/move/clear and copied-terrain merge keep the path data consistent.
+- Source/TileMapEditor/Public/TileMapEdMode.h and Private/TileMapEdMode.cpp add
+  Paint Path and Erase Path with one Undo/Redo transaction per mouse stroke.
+- Source/TileMapEditor/Private/TileMapEdModeToolkit.cpp adds the two controls,
+  renames Paint / Replace Tile to Replace Block Type, removes the redundant
+  Raise/Lower controls, preserves path cells during copied-terrain merge, and
+  deletes successfully merged source actors in the same Undo transaction.
+
+Material hookup (required to see the path texture):
+1. Open the material assigned as Default Terrain Material.
+2. Add a Vertex Color node, take its G channel, and pass it through OneMinus.
+   This result is the path mask: 0 is ordinary ground and 1 is full path.
+3. Use that mask as the Alpha of a Lerp between the ordinary ground texture
+   result (A) and the path texture result (B). The source mask already contains
+   the soft edge; do not add a hard If/step node.
+4. Keep the existing cliff-foot material mask on OneMinus(VertexColor.R).
+   R and G are independent. B and A remain white/reserved.
+5. Apply/save the material. Existing terrain remains ordinary ground until a
+   path is painted.
+
+Path behavior:
+- In v1.2.34, Paint Path and Erase Path accepted only upward-facing visible
+  continuous ground. Clicking a cliff wall or underside was rejected.
+- The saved layer is independent from block type, autotiling, rotation, and
+  slant metadata. Replace Block Type does not erase a path.
+- Adjacent painted cells are treated as one union, so there is no blend seam
+  between them. Only the outer boundary blends, including smooth convex and
+  concave path corners.
+- Path Edge Blend Width defaults to 20 Unreal units. Only cells along a path
+  boundary receive extra top-surface samples; fully painted interiors and
+  terrain far from a path are not subdivided for this feature.
+- Editing a path rebuilds its dirty chunk and neighboring chunks so a blend
+  crossing a chunk edge stays continuous.
+- Cliff walls, undersides, lip positions, triangle winding, and collision
+  ownership are not modified by the path mask. Bake Optimized Static Mesh
+  already copies procedural vertex colors, so the same material path survives
+  baking.
+- Modular/HISM fallback did not render this mask in v1.2.34. v1.2.45 adds the
+  focused path-only overlay described at the top of this file.
+
+Focused path test:
+1. Hook up a deliberately obvious path texture using OneMinus(VertexColor.G).
+2. On a large flat top, Paint Path across 4-6 cells. Confirm one continuous
+   center with a soft outer edge and no seams between painted cells.
+3. Paint an L and a one-cell hole. Confirm the outer and concave edge blends
+   are rounded rather than square transparent slits.
+4. Erase the middle of a stroke, Undo once, and Redo once. Each mouse stroke
+   must be one history step.
+5. Paint across a 16-cell chunk boundary and inspect both sides.
+6. Paint all segments of a 45-degree ramp and a two-cell 26.565-degree ramp in
+   all four rotations. Confirm the path follows the slope and does not appear
+   on the side bank, neighbor wall, or underside.
+7. Paint all four fixed-45 horizontal-cut rotations. Confirm only the upward
+   triangular ground carries the path.
+8. Stack ordinary blocks beside and above painted ground. Confirm covered path
+   data is hidden and no cliff wall receives the path texture.
+9. Bake Optimized Static Mesh and apply the same material. Confirm the baked
+   mesh retains the path mask.
+10. Duplicate a painted terrain actor, Snap + Merge it, and confirm its path
+    cells transfer, the source actor is removed, and one Undo restores both the
+    source actor and the original target.
+
+This package has been source-inspected and statically checked, but it has not
+been compiled or visually verified inside the user's UE4.27 project. Treat the
+above in-editor test as required verification before accepting v1.2.34.
+
+Snapped unbounded terrain merge (v1.2.33)
+-----------------------------------------
+This focused revision starts again from the user-checked v1.2.31 source. It
+replaces the rejected v1.2.32 exact-alignment merge with a forgiving snapped
+merge. Continuous-terrain geometry, ramp geometry, horizontal-cut geometry,
+collision, and baking code are unchanged.
+
+What changed:
+- The target is treated as an unlimited 3D integer lattice. It has no finite
+  X, Y, Z, occupied-area, actor-bounds, or current-chunk boundary.
+- A source may be completely disconnected, far beyond the target's occupied
+  area, above it, below it, or in negative grid coordinates.
+- Each source block center is transformed through world space and rounded to
+  the nearest target grid-cell center. Exact actor-origin alignment is no
+  longer required.
+- The source still requires the same Grid Size, actor scale, block mesh, and
+  ordered tile palette. It may use an exact 0/90/180/270-degree relative yaw.
+- Existing target cells always win. They no longer cancel the complete merge,
+  even when their current auto-tile visual differs from the source.
+- When selected sources overlap each other, the first deterministically sorted
+  source supplies the cell and later duplicate source cells are skipped.
+- Added blocks retain tile type, ramp/diagonal segment identity, and corrected
+  quarter-turn rotation. Auto-tiling is re-evaluated only around the joined
+  boundary.
+- The target is modified once and only dirty plus neighboring chunks rebuild.
+  Source actors are never moved, edited, hidden, or deleted.
+- The complete target mutation is one Undo/Redo transaction.
+- The success message reports added blocks, retained target overlaps, skipped
+  source overlaps, and the largest physical snap correction.
+
+The snap is for whole occupied cells. A half-height ramp surface remains inside
+its copied cells because its tile metadata is retained. This does not add
+half-cell occupancy; small half-height ledges and irregular rock protrusions
+belong to the planned separate terrain-detail module layer.
+
+Exact merge workflow:
+1. Select the terrain actor that should receive the copied block data.
+2. In Tile Map mode, under Snapped Terrain Merge, click
+   Set Selected as Merge Target.
+3. Duplicate one or more compatible terrain actors normally.
+4. Move the copies approximately to the desired world position and elevation.
+   They do not need to touch or overlap the target's current terrain.
+5. Select the copied source actors in the World Outliner. The stored target may
+   also remain selected.
+6. Click Snap + Merge Selected.
+7. Read the added/overlap/snap report, hide the source actors, and inspect the
+   target. Delete sources only after approval.
+
+Focused test:
+1. Recreate the reported setup. Offset the source actor by a non-grid amount
+   such as 23 units and click Snap + Merge Selected. Confirm there is no
+   "not aligned" rejection and that the result occupies the nearest cells.
+2. Put the source several thousand units beyond the target's current occupied
+   area. Confirm new distant chunks are created in the same target actor.
+3. Repeat above, below, and on the negative X/Y side of the target.
+4. Merge a disconnected source at +300 Z and confirm the full elevation is
+   retained without needing terrain beneath it.
+5. Overlap ordinary source cells with existing target cells. Confirm the target
+   cells remain and all empty source cells are still added.
+6. Repeat with selected sources that overlap each other. Confirm the merge
+   completes and reports skipped duplicate source cells.
+7. Merge one-cell 45-degree and two-cell 26.565-degree Vertical Ramps in all
+   four rotations. Confirm fractional ramp surfaces and segment order remain.
+8. Merge fixed-45 Horizontal Diagonal Edges in all four rotations.
+9. Repeat with source actor yaw 90, 180, and 270 degrees.
+10. Undo once and confirm every added cell disappears together. Redo once and
+    confirm the snapped merge returns.
+11. Recheck v1.2.31 ramp ground contacts, v1.2.30 endpoint smoothing, v1.2.29
+    neighbor-wall closure, and v1.2.28 fixed-45 corner winding.
+12. After viewport approval, test collision and Bake Optimized Static Mesh.
+
+Ramp contacts use ground treatment (v1.2.31)
+------------------------------------------------
+This focused revision removes the cliff-foot material mask wherever an ordinary
+continuous wall or lower ground contact involves a valid continuous Vertical
+Ramp. It starts from the user-verified v1.2.30 source.
+
+Diagnosis:
+- The ramp generator itself never emitted the cliff-foot mask.
+- The ordinary cliff generator enabled its foot mask whenever continuous
+  support existed on both sides of a wall.
+- A lone ramp could satisfy that ordinary support test at its upper contact.
+  Two side-by-side ramps suppress their shared wall, so the same mask was not
+  generated there. This caused the layout-dependent band in the screenshot.
+
+What changed:
+- Ordinary top-surface contact detection now rejects Cliff Foot Blend when the
+  adjacent support or stacked contact is a continuous Vertical Ramp.
+- Ordinary wall-foot detection now rejects Cliff Foot Blend when either lower
+  contact cell is a continuous Vertical Ramp.
+- The ramp surface remains ground-treated with its existing UVs and unmasked
+  vertex colors. There is no replacement overlap or filler geometry.
+- Ordinary supported cliffs that do not touch a ramp retain Cliff Foot Blend
+  Width/Height and their existing vertex-color material mask.
+- Cliff Foot Blend defaults remain 12/10 for ordinary terrain.
+- v1.2.30 ramp endpoint positions/normals, v1.2.29 NeighborWall closure, fixed
+  horizontal 45-degree corners, collision, baking, and editor code are unchanged.
+
+Focused test:
+1. Recreate the screenshot with one 45-degree ramp meeting its upper neighbor.
+   Confirm the circled ramp-contact band is absent.
+2. Place a second compatible ramp beside it. The single- and double-ramp
+   contacts must now use the same unblended ground treatment.
+3. Repeat with the two-cell 26.565-degree ramp and in all four directions.
+4. Recheck the rounded high/low transitions from v1.2.30.
+5. Recheck an ordinary supported cliff with no ramp contact. Its existing
+   12-unit by 10-unit foot blend must remain visible.
+6. Recheck the v1.2.29 ordinary cube beside each ramp and inspect its closure.
+7. After viewport approval, verify collision and Bake Optimized Static Mesh.
+
+Curvature-continuous vertical-ramp endpoints (v1.2.30)
+------------------------------------------------------
+This focused revision rounds the longitudinal transition where a Vertical Ramp
+leaves the lower flat terrain and where it reaches the upper flat terrain. It
+starts from the checked v1.2.29 neighbor-wall source.
+
+Diagnosis:
+- v1.2.29 already reached a horizontal tangent at each ramp endpoint, but it
+  completed the complete transition inside the 10-12 unit chamfer width.
+- Its cubic endpoint curve was position- and tangent-continuous, but curvature
+  changed abruptly where the rounded end rejoined the straight ramp.
+- That narrow curvature break is the sharp crease visible in the screenshots.
+
+What changed:
+- Ramp endpoint easing now uses a symmetric quintic Hermite curve with exact
+  position, tangent, and curvature continuity at the flat and straight joins.
+- Longitudinal endpoint width is twice Chamfer Width, clamped to 4-30 units.
+  With the requested 12-unit default chamfer, each rounded transition is 24
+  physical units long.
+- The ramp retains exact 0 and 100 endpoint heights. Multi-cell ramp segment
+  joins and the straight middle profile are unchanged.
+- Additional vertices are redistributed across the wider endpoint curve; the
+  subdivision count and triangle-generation statements are unchanged.
+- v1.2.29 NeighborWall classification, wall construction, winding, and ownership
+  are unchanged; its lower boundary follows the newly rounded ramp profile.
+- Horizontal Diagonal Edge geometry and editor code remain unchanged.
+
+Requested new-actor defaults:
+- Use Continuous Terrain: enabled
+- Chamfer Subdivisions: 8
+- Chamfer Width: 12
+- Chamfer Depth: 5
+- Cliff Edge Irregularity: 10
+- Cliff Edge Wavelength: 144
+- Cliff Corner Radius: 20
+- Cliff Foot Blend Width: 12
+- Cliff Foot Blend Height: 10
+
+These constructor defaults apply to newly placed terrain actors. Existing
+actors retain their serialized settings; use each property's yellow reset
+arrow or enter the listed values to update an existing map.
+
+Focused test:
+1. Recreate the one-cell 45-degree ramp in the first screenshot. Inspect both
+   the upper flat-to-slope join and the lower slope-to-flat join.
+2. Repeat the two-cell 26.565-degree arrangement in the circled screenshot.
+   Confirm both ends are rounded and the middle cell boundary remains smooth.
+3. Repeat both ramp lengths in +X, +Y, -X, and -Y.
+4. Place an ordinary cube along each long side. Reconfirm the v1.2.29 cube is
+   not deformed and its explicit neighbor wall has no missing strip.
+5. Test an exposed ramp, a supported ramp, and an unsupported raised ramp.
+6. Re-test the checked horizontal 45-degree corner arrangement at Cliff Corner
+   Radius 20, 10, and 1.
+7. After viewport approval, verify collision and Bake Optimized Static Mesh.
+
+Natural ramp edge with explicit neighbor wall (v1.2.29)
+-------------------------------------------------------
+This focused revision addresses the deformed ordinary cube and missing strip
+beside a Continuous Terrain Vertical Ramp. It changes only the ownership of a
+ramp boundary touching a same-layer continuous ordinary block.
+
+Diagnosis:
+- The old Bank mode forced the complete shared ramp edge to the ordinary
+  block's 100-unit top height. At the foot of a two-cell 26.565-degree ramp,
+  this pulled the natural height from 0 to 100 inside the transition width.
+- Bank mode emitted no vertical wall.
+- The ordinary block also suppressed its shared wall because the ramp reported
+  full cell-edge coverage.
+- Changing chamfer, irregularity, wavelength, or corner radius could alter the
+  appearance but could not give that height-difference surface an owner.
+
+What changed:
+- A mismatched-height boundary beside a continuous ordinary block now uses
+  NeighborWall instead of Bank.
+- The rule is deliberately limited to non-ramp, non-diagonal continuous cubes;
+  other slant junctions retain their v1.2.28 classification.
+- The ramp surface retains its natural evaluated height on the exact grid line;
+  it is not raised, waved, or rounded toward the neighbor.
+- One neighbor-facing vertical strip is generated from that natural ramp edge
+  up to the ordinary block's flat top. It shrinks continuously to zero at the
+  ramp's high endpoint.
+- The final collapsed endpoint is emitted as one genuine triangle instead of a
+  quad containing a zero-area triangle.
+- Legacy/modular neighbors retain the existing Bank fallback.
+- The one-cell 45-degree and two-cell 26.565-degree profiles use the same rule
+  in all four rotations.
+- v1.2.28 horizontal Diagonal Edge footprint, endpoint classifier, owner-wound
+  corner strips, vertex positions, and editor restriction remain unchanged.
+- Ramp metadata, run validation, segment placement, low/high easing, exposed
+  side walls, underside support, collision, and baking paths are unchanged.
+
+Focused test:
+1. Recreate the reported two-cell 26.565-degree +X ramp with an ordinary block
+   along one long side. Confirm the ramp stays natural and the block stays flat.
+2. Inspect the complete shared side from the low foot to the high endpoint. The
+   vertical difference must be closed with no transparent strip.
+3. Repeat with the ordinary block on the opposite long side.
+4. Repeat +Y, -X, and -Y.
+5. Repeat with the one-cell 45-degree ramp in all four directions.
+6. Test an exposed ramp with no side neighbor and confirm its existing lip and
+   side-wall geometry is unchanged.
+7. Re-test the checked v1.2.28 horizontal two-corner arrangement at Cliff
+   Corner Radius 10 and 1.
+8. After viewport approval, verify collision and Bake Optimized Static Mesh.
+
+Corner-owned tangent winding (v1.2.28)
+---------------------------------------
+This focused revision addresses the radius-dependent white strips at rounded
+45-degree Diagonal Edge junctions. It changes the transition wall normal used
+to select triangle winding; it does not change the transition positions.
+
+Diagnosis:
+- BuildExposedBoundarySegments already knew the outward normal of the diagonal
+  face and the adjoining straight face.
+- TryBuildDiagonalTangentJunction retained only their ray directions and threw
+  their ownership normals away.
+- RoundDiagonalTangentPoint therefore used one hard-coded radial sign for all
+  corner topologies. Convex and concave junctions do not share that sign.
+- Changing the global sign moved the back-facing transition strip to another
+  corner. Reducing Cliff Corner Radius only made the same strip narrower.
+
+What changed:
+- Each collected diagonal and straight boundary ray now retains its exposed
+  surface outward normal.
+- The tangent construction tests both endpoint radii against those two owning
+  normals and resolves one consistent RadialNormalSign for the entire arc.
+- The rounded strip supplies that owner-derived outward normal to the existing
+  wall-quad winding test.
+- The triangle statements, vertex positions, tangent radius, chamfer, waviness,
+  A450 footprint, coverage rules, collision, and baking paths are unchanged.
+- Horizontal Diagonal Edge remains fixed at 45 degrees.
+- Vertical Ramp metadata, generation, support rules, and editor code are
+  unchanged.
+
+Focused test:
+1. Set Cliff Corner Radius back to 10 and recreate the two-corner arrangement
+   shown in the reported screenshot. Inspect both vertical transition strips.
+2. Repeat at radius 1. The radius should change the curve size but must not
+   change face visibility.
+3. Repeat the arrangement in +X, +Y, -X, and -Y.
+4. Test one outer convex diagonal corner and one inward/concave diagonal
+   junction in every rotation.
+5. Disable Continuous Terrain and confirm the modular result is unchanged.
+6. Re-test ordinary isolated, adjacent, L-shaped, and stacked blocks.
+7. Re-test the one-cell 45-degree and two-cell 26.565-degree Vertical Ramps in
+   all four directions.
+8. After viewport approval, verify collision and Bake Optimized Static Mesh.
+
+Symmetric 45-degree endpoint ownership (v1.2.27)
+-------------------------------------------------
+This focused revision addresses the second white slit exposed by the v1.2.26
+tangent-winding correction. It changes endpoint classification only.
+
+Diagnosis:
+- Every full-cell 45-degree Diagonal Edge has one acute 45-degree endpoint and
+  one obtuse 135-degree endpoint in all four rotations.
+- v1.2.26 accepted only the 135-degree endpoint. The exact 45-degree endpoint
+  was deliberately excluded by the old shallow-cut classifier, so correcting
+  the first endpoint made the remaining unowned endpoint visible elsewhere.
+
+What changed:
+- The continuous tangent classifier now accepts only the two valid angles for
+  the fixed 45-degree footprint: 45 and 135 degrees, with a 0.1-degree numeric
+  tolerance.
+- Both endpoints now use the same transition geometry and the outward normal
+  corrected in v1.2.26.
+- No shallow horizontal angle is recognized or generated.
+- Vertex and triangle statements, cell coverage, the A450 footprint, wall
+  ownership, chamfer dimensions, waviness, collision, and baking are unchanged.
+- Vertical Ramp metadata, generated ramp geometry, continuous ramp geometry,
+  boundary modes, support rules, and editor behavior are unchanged.
+
+Focused test:
+1. Recreate the +X screenshot with Continuous Terrain enabled. Inspect both
+   vertical endpoints of the diagonal wall from the terrain exterior.
+2. Repeat in +Y, -X, and -Y. Neither endpoint should move the hidden strip to
+   the opposite side.
+3. Disable Continuous Terrain and confirm the modular result is unchanged.
+4. Re-test ordinary isolated, adjacent, L-shaped, and stacked blocks.
+5. Re-test the existing one-cell 45-degree and two-cell 26.565-degree Vertical
+   Ramps in all four directions.
+6. After viewport approval, verify collision and Bake Optimized Static Mesh.
+
+Continuous 45-degree tangent winding (v1.2.26)
+------------------------------------------------
+This focused revision addresses the white opening visible only when Continuous
+Terrain is enabled. It changes no occupied-block editing and adds no filler
+face.
+
+Diagnosis:
+- The 45-degree diagonal and neighboring straight cliff already generate the
+  physical tangent transition strip and use the same endpoint positions.
+- At the 135-degree cut junction, the fillet circle center lies on the empty
+  side. The existing normal pointed from that center back into occupied terrain.
+- In all four rotations, that normal has dot product -0.924 with both owning
+  faces' outward normals. The wall helper therefore wound the strip inward, so
+  back-face culling displayed it as a hole.
+
+What changed:
+- The tangent-strip normal now points from the rounded boundary toward the
+  empty-side circle center. Its dot product with both adjoining outward normals
+  is +0.924 in +X, +Y, -X, and -Y.
+- Vertex positions, boundary coverage, wall ownership, triangle statements,
+  45-degree footprint, waviness, chamfer dimensions, collision, and baking are
+  unchanged.
+- Vertical Ramp metadata, generated ramp geometry, continuous ramp geometry,
+  support rules, boundary modes, and ramp normals are unchanged from v1.2.25
+  and the attached v1.2.24 baseline.
+
+Focused test:
+1. Recreate the screenshot with Continuous Terrain enabled and a 45-degree
+   Diagonal Edge in +Y. Inspect the circled junction from outside and inside.
+2. Repeat in +X, -X, and -Y. The tangent strip must be visible from the terrain
+   exterior and culled only when viewed from inside the solid terrain.
+3. Disable Continuous Terrain and confirm the modular result is unchanged.
+4. Re-test ordinary isolated, adjacent, L-shaped, and stacked blocks.
+5. Re-test the existing one-cell 45-degree and two-cell 26.565-degree Vertical
+   Ramps in all four directions before changing any ramp geometry.
+6. After viewport approval, verify collision and Bake Optimized Static Mesh.
+
+45-degree-only horizontal cuts (v1.2.25)
+------------------------------------------
+This revision starts from the exact attached v1.2.24 source and changes only
+the angle eligibility of horizontal Diagonal Edge cuts. Vertical Ramp geometry
+is intentionally unchanged.
+
+What changed:
+- Apply Slant always passes 45 degrees when Diagonal Edge is selected.
+- The Diagonal Edge asset generator always creates the full-cell A450 triangle;
+  its fractional tangent calculation has been removed.
+- The angle field is disabled and displays 45 while Diagonal Edge is selected.
+  The saved adjustable angle remains available only to Vertical Ramp mode.
+- Continuous terrain recognizes only V4 Diagonal Edge A450 assets. Existing
+  A050-A449 assets remain loadable through modular HISM fallback so saved maps
+  are not rewritten silently, but new shallow horizontal cuts cannot be made.
+
+Vertical Ramp audit:
+- Ramp segment count and the existing 45/26.565-degree calculations are
+  unchanged.
+- Ramp asset vertices, continuous ramp vertices, boundary modes, support and
+  underside rules, triangle indices, normals, collision, and baking are
+  unchanged from the attached v1.2.24 baseline.
+
+Focused test:
+1. Select Diagonal Edge. Confirm the angle field is disabled, reads 45, and the
+   status text says the horizontal cut is fixed at 45 degrees.
+2. Apply it in +X, +Y, -X, and -Y. Every newly generated asset name must contain
+   A450; no A050-A449 asset should be generated.
+3. Select Ramp. Confirm the angle field becomes adjustable again. Test the
+   existing one-cell 45-degree and two-cell 26.565-degree ramps in all four
+   directions before making any vertical-ramp geometry changes.
+4. Verify ordinary terrain, collision, and Bake Optimized Static Mesh.
+
+Shallow diagonal endpoint closure (v1.2.24)
+--------------------------------------------
+This focused correction closes the vertical slit that could appear where a
+horizontal Diagonal Edge below 45 degrees met its neighboring straight cliff
+wall. It does not change the saved angle, triangular footprint, or 45-degree
+cut behavior.
+
+What changed:
+- The continuous tangent-junction classifier now recognizes both valid ends of
+  a 5-45 degree horizontal cut: the obtuse fractional endpoint and the acute
+  grid-corner endpoint.
+- The acute endpoint now uses the same shared tangent boundary as the diagonal
+  wall. It is no longer mistaken for an ordinary convex cube corner whose
+  separate rounding could pull the straight wall away and expose a white slit.
+- Flat tops, wavy exposed lips, mostly vertical cliff faces, materials,
+  collision, baking, chunk ownership, occupied-block data, editor commands,
+  undo/redo, ramps, and modular fallback are unchanged.
+
+Focused test:
+1. Apply horizontal Diagonal Edge cuts at 5, 23, 32, 39, and 44 degrees on an
+   exposed cliff row. Inspect both vertical endpoints from above and below.
+2. Repeat in +X, +Y, -X, and -Y directions. Confirm the diagonal and straight
+   walls share a closed, smooth endpoint with no white vertical strip.
+3. Repeat at 45 degrees and confirm its established corner remains unchanged.
+4. Verify stacked/supported cuts, ordinary flat and stacked terrain, collision,
+   and Bake Optimized Static Mesh.
+
+Supported-slant foot closure (v1.2.23)
+---------------------------------------
+This focused correction closes the remaining openings at the bottom of a
+supported slant. It does not begin the next horizontal-slant shaping pass.
+
+What changed:
+- The low end of the first Vertical Ramp segment now detects terrain touching
+  it one elevation lower. That shared foot remains on the exact grid boundary
+  instead of receiving an exposed-edge wave that can pull it away and open a
+  crack.
+- A supported horizontal Diagonal Edge now restores only the visible triangle
+  complement of its support block's flat top. The occupied triangle remains
+  buried, so this does not reintroduce a full internal face.
+- The restored support boundary uses the same fractional endpoint and tangent
+  rounding as the diagonal wall bottom, closing both endpoint slivers without
+  an overlap, spike, or floating patch.
+- Materials, collision, baking, chunk ownership, occupied-block data, editor
+  commands, undo/redo, and the established ramp/diagonal surface shapes are
+  unchanged.
+
+Focused test:
+1. Place a supported 45-degree and 26.6-degree Vertical Ramp. Inspect the low
+   foot from above, both sides, and below. Confirm it meets lower terrain with
+   no white strip or pulled-away wavy seam.
+2. Repeat the ramp test in all four directions.
+3. Place a supported shallow horizontal Diagonal Edge. Inspect both endpoints
+   at the bottom of its diagonal wall. Confirm the lower flat top fills the
+   visible complement and exactly follows each rounded endpoint.
+4. Repeat at 45 degrees and in all four directions.
+5. Verify unsupported overpasses retain their underside, directly covered
+   slants retain fallback, and ordinary flat/stacked terrain is unchanged.
+6. Verify collision and Bake Optimized Static Mesh preserve the closure.
+
+Supported-slant ownership correction (v1.2.22)
+------------------------------------------------
+This focused correction fixes the shared eligibility mistake visible in the
+v1.2.21 viewport test. A block directly underneath a slant is support, not a
+reason to reject its continuous surface. Rejecting supported slants left their
+old HISM wedge beside continuous neighbors that had already removed shared
+faces, producing the transparent white openings in both screenshots.
+
+What changed:
+- Complete V4 Vertical Ramp runs may now use the v1.2.21 continuous ramp when
+  ordinary occupied blocks support them from below.
+- V4 horizontal Diagonal Edge cuts from 5 through 45 degrees may now use the
+  v1.2.20 continuous cut when supported from below.
+- A block directly above still keeps the slant on modular fallback, preserving
+  covered stacks until that distinct topology is implemented.
+- If any slant must fall back, it no longer claims that it completely covers a
+  shared neighbor boundary. The continuous neighbor keeps its closing face, so
+  malformed, covered, or mixed slants cannot create a transparent hole.
+- The ramp surface, diagonal shape, editor command, occupied-block data,
+  material, collision, bake, undo/redo, and chunking algorithms are unchanged.
+
+Focused test:
+1. Make a two-cell 26.6-degree Vertical Ramp on top of ordinary occupied
+   support blocks. Confirm the ramp is continuous, the high transition is
+   rounded, the long edges use the physical bank/lip, and no white opening
+   remains. Repeat at 45 degrees.
+2. Repeat the supported Vertical Ramp test in +X, +Y, -X, and -Y directions.
+3. Make supported horizontal Diagonal Edge cuts at 23 and 45 degrees. Confirm
+   the exact fractional cut, neighboring wall, rounded endpoint, and wavy lip
+   are present without a transparent triangle or vertical strip.
+4. Repeat the horizontal test in all four directions.
+5. Add a block directly above one slant cell. Confirm that complete slant uses
+   modular fallback and its continuous neighbors remain closed.
+6. Verify an unsupported raised slant, flat and stacked ordinary terrain,
+   collision, and Bake Optimized Static Mesh.
+
+Continuous vertical-ramp surface (v1.2.21)
+------------------------------------------
+This focused revision moves ordinary complete V4 Vertical Ramp runs into the
+same chunked procedural terrain surface as their flat neighbors. It covers the
+45-degree one-cell ramp and every shallower effective ramp through the existing
+eight-cell limit. It does not change the ramp editor command or occupied-block
+data.
+
+What changed:
+- Existing V4 palette names provide the saved segment count, segment index,
+  effective angle, and block rotation. The runtime validates the complete run
+  before consuming any segment, so a damaged or unsupported run never becomes
+  a partly procedural ramp.
+- The ramp rises continuously across every segment. Internal segment edges use
+  identical positions, normals, and world-space UVs, eliminating modular seams.
+- A short physical curve reduces the slope to zero where the last segment meets
+  the upper flat block. This removes the hard transverse crease with geometry,
+  not smooth normals alone.
+- Each long side is classified independently. A matching parallel ramp is a
+  true seam; an adjacent flat block receives a narrow, mostly vertical rounded
+  bank; and an empty side receives a chamfered wall with a gently irregular
+  physical lip.
+- The flat-side bank keeps the exact shared grid boundary, then varies the
+  inner edge of its transition. The cliff outline is visibly wavy without a
+  crack, floating strip, or disagreement with the neighboring top.
+- The generated ramp uses the established procedural section, material, dirty
+  chunk, collision, and optimized-static-mesh bake paths.
+
+Focused test:
+1. Replace the complete plugin folder and clear Binaries/Intermediate before
+   rebuilding the Development Editor / Win64 target.
+2. Enable Use Continuous Terrain Prototype. Apply Vertical Ramp at displayed
+   45 degrees and at requested 23 degrees (the existing two-cell 26.6-degree
+   effective ramp).
+3. Repeat both tests in +X, +Y, -X, and -Y directions.
+4. Keep flat blocks along both long sides and beyond the high end. Confirm the
+   surrounding top remains present, the side transitions are rounded and
+   gently irregular, and the high ramp-to-flat crease is physically softened.
+5. Remove one or both side neighbors. Confirm each exposed ramp edge has a
+   narrow wavy lip over a mostly vertical wall, with no transparent face.
+6. For a two- through eight-cell ramp, inspect every internal segment join.
+   Confirm there is no gap, spike, hard cell seam, floating wedge, or flipped
+   face.
+7. Add a block directly above or below any ramp segment, or place a mismatched
+   slant beside it. Confirm the complete ramp remains on the modular HISM
+   fallback instead of becoming partly procedural. Also test an unsupported
+   raised run and confirm its procedural underside is closed.
+8. Re-test a flat/stacked block, a 45-degree horizontal cut, and a shallow
+   horizontal cut to confirm their v1.2.20 behavior is unchanged.
+9. Verify collision follows the rounded ramp and Bake Optimized Static Mesh
+   preserves the same geometry and material.
+
+This revision changes only V4 Vertical Ramp recognition and continuous ramp
+surface generation. It does not change the editor mode/toolkit, slant command,
+cursor preview, stroke undo/redo, palette/autotiling, occupied-block storage,
+horizontal-cut topology, material assignment, collision policy, bake command,
+or chunk size. Directly covered, directly supported, malformed, and mixed-slant
+ramps retain the modular fallback; an unsupported raised run remains valid as
+an enclosed overpass.
+
+Continuous variable-angle horizontal cuts (v1.2.20)
+----------------------------------------------------
+This focused revision extends the proven continuous 45-degree horizontal-cut
+surface to ordinary unstacked V4 cuts from 5 through 45 degrees. It fixes the
+large missing cliff section that appeared below 45 degrees without changing
+Vertical Ramp geometry or any editor command.
+
+What changed:
+- A shallow triangular cut now reports the exact fractional interval it owns
+  on a shared grid edge. The neighboring full block emits only the uncovered
+  part of its cliff wall; it no longer removes or draws the entire edge.
+- The exposed diagonal receives the same narrow physical chamfer, gently wavy
+  top lip, mostly vertical wall, collision, and baked-static-mesh outline as
+  the established 45-degree cut.
+- The diagonal endpoint can lie between grid corners. Both the cut and its
+  straight neighbor derive the same circular tangent junction at that exact
+  point, eliminating the sharp angle, crack, spike, and floating wedge.
+- Top and wall sampling adds the fractional endpoint only on cells that touch
+  a shallow cut. Ordinary distant cells keep the established low-cost mesh.
+- At 45 degrees the fractional interval becomes a full edge, preserving the
+  v1.2.19/v1.2.18 topology.
+
+Focused test:
+1. Apply horizontal Diagonal Edge cuts at 5, 10, 23, 35, and 45 degrees.
+2. Repeat each test in +X, +Y, -X, and -Y directions beside a full flat block.
+3. Confirm the cut is connected to its neighbor, the uncovered cliff is
+   present, and no internal shared wall remains.
+4. Inspect both diagonal endpoints. Confirm the exposed lip is wavy away from
+   the junction and the diagonal-to-straight turn is physically rounded.
+5. Verify there is no missing geometry, crack, overlap, flipped face, pointed
+   seam, floating wedge, or detached patch.
+6. Re-test 45 degrees to confirm its established result is unchanged.
+7. Verify collision and Bake Optimized Static Mesh preserve the visible shape.
+8. Stack a block above or below a cut and confirm the unchanged V4 modular HISM
+   fallback remains supported. Verify Vertical Ramp is also unchanged.
+
+This revision does not change occupied-block data, slant editing, Vertical
+Ramps, cursor preview, stroke undo/redo, palette/autotiling, materials,
+chunk-dirtying rules, or the modular fallback. Only the continuous unstacked
+horizontal-cut topology and its immediately shared neighbor boundary change.
+
+UE4.27 edge-direction compile correction (v1.2.19)
+--------------------------------------------------
+This revision changes no terrain geometry. UE4.27 does not provide a unary
+minus operator for FIntVector, so the v1.2.18 neighbor-edge query did not
+compile at TileMapTerrainActor.cpp lines 987-989. The reverse direction is now
+constructed explicitly from the negated X, Y, and Z components.
+
+After replacing the plugin and clearing Binaries/Intermediate, rebuild the
+Development Editor / Win64 target. The C2678, C2088, and C2660 errors at that
+call must be gone. Then perform the unchanged v1.2.18 tangent-fillet test below.
+
+Physical diagonal-to-straight tangent fillet (v1.2.18)
+------------------------------------------------------
+This focused revision removes the sharp plan-view point where an ordinary
+continuous 45-degree Diagonal Edge meets a straight neighboring cliff edge.
+The diagonal cell and full neighboring cell now derive the same circular arc,
+so neither side owns a detached patch and their shared transition cannot open.
+
+What changed:
+- The visible top outline, narrow lip, mostly vertical wall, exposed underside,
+  collision, and optimized static-mesh bake all use the same physical fillet.
+- The arc is mathematically tangent to both the diagonal and straight boundary;
+  it therefore changes direction gradually instead of forming a sharp corner.
+- Cliff Edge Irregularity fades to zero before the fillet and resumes beyond
+  it. The curve stays clean instead of accumulating a spike at the junction.
+- Cliff Corner Radius controls the base roundness. Because this junction turns
+  only 45 degrees, its tangent circle uses twice that base radius so the visible
+  arc length is comparable to an ordinary 90-degree corner. The normal
+  first-test value remains 10 on the 100-unit grid.
+- The flat top away from the narrow exposed lip remains on its original plane.
+- All four 45-degree directions use the same rotation-independent junction
+  calculation.
+
+Focused test:
+1. Make the same outer-corner 45-degree Diagonal Edge shown in the v1.2.17 test.
+2. Inspect both ends of its diagonal cliff in +X, +Y, -X, and -Y directions.
+3. Set Cliff Corner Radius to 10 and Chamfer Subdivisions Per Tile to 8.
+4. Confirm each diagonal-to-straight junction is a physical curved silhouette,
+   with no gap, overlap, floating wedge, or pointed vertical seam.
+5. Raise Cliff Edge Irregularity to 8-10 temporarily. Confirm the diagonal and
+   straight lips remain wavy away from the arc but do not spike inside it.
+6. Verify collision and Bake Optimized Static Mesh preserve the same outline.
+7. Confirm a non-45 cut, Vertical Ramp, or cut with a block directly above or
+   below still uses the unchanged modular V4 fallback.
+
+This revision does not change the slant editing command, Vertical Ramp geometry,
+occupied-block data, cursor preview, stroke undo/redo, palette/autotiling, HISM
+fallback, materials, or chunk-dirtying rules.
+
+Continuous 45-degree horizontal-cut foundation (v1.2.17)
+---------------------------------------------------------
+This revision replaces the withdrawn v1.2.16 experiment. It does not round or
+inset a standalone diagonal static mesh. An ordinary unstacked 45-degree
+Diagonal Edge is now generated by the same chunked procedural surface as its
+flat neighbors.
+
+What changed:
+- The triangle keeps its two grid-aligned attachment edges exactly on the
+  100-unit cell boundaries, so connected neighbors cannot separate.
+- Only the actual exposed diagonal and any genuinely exposed outer sides emit
+  cliff walls. Internal/buried faces remain suppressed.
+- The top is tessellated inside the triangular footprint. Its interior remains
+  on the original flat Z plane; only the existing narrow chamfer distance can
+  lower the exposed boundary.
+- The diagonal top lip uses the actor's existing Cliff Edge Irregularity and
+  Cliff Edge Wavelength settings. The main wall below it remains vertical.
+- All four quarter-turn directions use the same topology.
+- Applying or rotating a cut rebuilds touched chunks and neighboring chunks,
+  including when the edited cell lies on a chunk boundary.
+
+Deliberate fallback in this focused revision:
+- Non-45-degree horizontal cuts remain on their original V4 HISM mesh.
+- A horizontal cut with an occupied block directly above or below it remains
+  on the original V4 HISM mesh. This preserves stacked terrain and overpass
+  support until their partial-cell transition topology is added.
+- Vertical Ramp behavior is unchanged.
+- The diagonal-to-orthogonal endpoint is watertight. v1.2.18 adds its dedicated
+  tangent fillet without changing this foundation.
+
+Focused test:
+1. Replace the complete plugin folder and clear Binaries/Intermediate.
+2. Reapply any cut that was created by the withdrawn v1.2.16 so its palette
+   entry uses the V4 generated asset.
+3. Enable Use Continuous Terrain Prototype.
+4. Use a 45-degree Diagonal Edge on a ground-level outer corner.
+5. Test +X, +Y, -X, and -Y directions.
+6. Confirm there is no detached triangular wedge, missing attachment face, or
+   gap to either neighboring flat cell.
+7. Raise Cliff Edge Irregularity temporarily to 8-10 to make the physical
+   diagonal waviness obvious, then return to the preferred value.
+8. Put a block directly above or below a diagonal cut and confirm that case
+   safely uses the old modular mesh rather than opening a hole.
+9. Verify collision and Bake Optimized Static Mesh on the ordinary unstacked
+   45-degree case.
+
+Single-material cliff-foot blend mask (v1.2.15)
+------------------------------------------------
+This revision adds an automatically generated vertex-color mask where a
+continuous cliff wall rests against visible lower continuous ground. It adds no
+material slot and no additional mesh section or draw call.
+
+The mask covers both sides of the contact:
+- It fades outward across the lower ground.
+- It fades upward over a short band of the cliff wall.
+- Rounded stack-transition patches and concave cliff corners are included.
+- Buried faces, unsupported overpasses, modular ramps, and diagonal cuts are
+  deliberately excluded.
+
+The mask is stored inverted for compatibility with existing white vertex colors:
+
+    CliffFootMask = OneMinus(VertexColor.R)
+
+Ordinary continuous terrain remains white, and modular/HISM meshes and slants
+therefore evaluate to a zero foot mask. Do not multiply the complete Vertex
+Color RGB value into the material. Read only R through a OneMinus node.
+
+Master-material first hookup:
+1. Add a Vertex Color node.
+2. Connect its R output to a OneMinus node.
+3. Use that result as the Alpha of a Lerp.
+4. Connect the existing terrain result to A and a temporary bright red color to
+   B. Compile and confirm that only the wall/ground contact band turns red.
+5. Replace the red debug color with the desired soil, moss, darkening, or
+   cliff-foot material result.
+
+When using Material Attributes, use the same mask as the Alpha of Blend Material
+Attributes instead of a color Lerp. After the basic band is visible, world-space
+noise can perturb the mask inside the master material without changing mesh
+topology.
+
+New selected-actor controls under Tile Map > Continuous Terrain:
+- Cliff Foot Blend Width: horizontal ground fade, default 12.
+- Cliff Foot Blend Height: vertical cliff fade, default 10.
+
+Setting both controls to 0 leaves all generated vertex colors white and disables
+the feature. Optimized static-mesh baking already copies procedural vertex
+colors, so the same master-material blend is preserved after baking.
+
+No slant, diagonal-cut, cursor, painting, undo/redo, collision, HISM fallback,
+material assignment, cliff-lip shape, or occupied-block data logic was changed.
+
+Cliff-edge stacked-corner support (v1.2.14)
+------------------------------------------------
+This revision fixes the small triangular opening that could appear where a
+rounded block corner is stacked directly above the chamfered or wavy boundary
+of its supporting layer. The existing rounded inner arc is unchanged. Its
+outer transition vertex now follows the visible support surface's actual
+height, while the adjacent horizontal waviness fades back to their shared grid
+corner. This keeps the transition fan valid and makes the two surfaces meet.
+
+The v1.2.12 corner-patch triangulation is preserved. Interior stacks still use
+the original flat transition, and a zero-irregularity edge still follows the
+straight v1.2.12 horizontal path except for the existing physical chamfer.
+
+Focused verification:
+- Place a block above an interior block: the transition remains flat and full.
+- Place a block above a straight exposed cliff edge: no triangular opening.
+- Repeat at all four cliff-corner rotations and at a three-block concave notch.
+- Set Cliff Edge Irregularity to 0 and then above 0; both remain watertight.
+- Check collision from above and beside the repaired transition.
+
+No slant, diagonal-cut, editor-tool, undo/redo, material, HISM fallback, cursor,
+or optimized static-mesh baking logic was changed.
+
+Subtle deterministic cliff-lip waviness (v1.2.13)
+-------------------------------------------------
+This revision adds physical horizontal irregularity only to the narrow exposed
+top lip. The flat ground interior keeps its original Z plane. Rounded corner
+arcs remain clean, and the waviness fades into them instead of producing spikes.
+The main cliff face keeps its original straight footprint; only a shallow upper
+transition connects it to the irregular rim.
+
+Recommended first test values on the selected terrain actor:
+- Chamfer Subdivisions Per Tile: 8
+- Chamfer Width: 10
+- Chamfer Depth: 5
+- Cliff Edge Irregularity: 4
+- Cliff Edge Wavelength: 65
+- Cliff Corner Radius: 10
+
+Existing actors retain their saved Chamfer Width and Chamfer Depth. If the old
+30/10 values are still displayed, enter 10/5 manually or click their reset
+arrows. New actors use 10/5 by default.
+
+The edge curve is sampled from world position, wall direction, and terrain
+layer, so adjoining tiles and chunks calculate identical shared lip vertices.
+Setting Cliff Edge Irregularity to 0 restores the v1.2.12 straight-edge path.
+Slants and diagonal cuts deliberately remain on their existing modular path.
+
+Supported convex-corner transition caps (v1.2.12)
+-------------------------------------------------
+This revision fixes the small white triangular opening that could appear at the
+bottom of a rounded cliff corner resting on a wider supporting terrain layer.
+The narrow cutout is now triangulated from the actual square corner along each
+rounded-arc segment. It no longer uses a center fan outside the concave patch.
+The same correction is used for downward-facing stack transitions.
+
+No cliff-wall, flat-top, chamfer, slant, editor-tool, collision, material,
+undo/redo, HISM fallback, or optimized-baking behavior was otherwise changed.
+
+Declaration-placement correction (v1.2.11)
+-------------------------------------------
+This revision fixes the v1.2.10 compile error shown by Visual Studio. The
+ChamferDepth local is now declared exactly once in GetContinuousTopSurfaceZ
+and exactly once in BuildContinuousChunk, before either function uses it.
+Terrain geometry and editor behavior are otherwise unchanged from v1.2.10.
+
+Physical cliff-corner fillets (v1.2.10)
+----------------------------------------
+This revision removes the remaining sharp vertical cliff lines. Long cliff
+spans remain planar and mostly vertical, but their endpoints are physically
+trimmed and joined by narrow curved geometry.
+
+- Convex outside corners receive a rounded silhouette.
+- Concave notches, including a 2x2 group with one deleted block, receive an
+  inward rounded fillet.
+- Flat top interiors remain exactly on their original Z plane.
+- The rounded top boundary, wall strip, floating underside, and stack
+  transition patches share the same corner radius so they remain supported.
+
+Set Cliff Corner Radius to 10 for the first test. Chamfer Subdivisions Per Tile
+also controls corner smoothness; 8 is the normal default and 16 is a denser
+visual test. This does not modify ramps or diagonal cuts yet.
+
+Continuous face-winding correction (from v1.2.9)
+------------------------------------------------
+This revision changes only the triangle winding of the continuous procedural
+terrain. It now follows the same proven 0,2,1 front-face convention used by the
+original v1.2.6 optimized static-mesh builder. Top surfaces, cliff walls,
+chamfer strips, and exposed undersides therefore render from their outward side.
+
+The chamfer dimensions and terrain-shaping rules from v1.2.8 are unchanged.
+The modular/HISM fallback, slants, cursor tools, collision, materials, undo/redo,
+and optimized mesh baking are unchanged.
+
+Exposed top-edge chamfer prototype (from v1.2.8)
+------------------------------------------------
+This revision replaces v1.2.7's incorrect full-height boundary waviness with a
+physical chamfer applied only where flat ground drops into an exposed cliff.
+It does not replace or delete the original modular/HISM renderer.
+
+1. Create or select the TileMap_Terrain actor.
+2. In Details, open Tile Map > Continuous Terrain.
+3. Enable Use Continuous Terrain Prototype.
+4. Leave Chamfer Subdivisions at 8, Chamfer Width at 14, and Chamfer Depth at
+   8 for the first test.
+5. Click Create Test Grid.
+
+Expected result:
+- Flat top faces are visible when viewed from above.
+- Cliff and chamfer faces are visible from outside the terrain, not from inside.
+- Long cliff walls stay flat while their vertical endpoints become rounded.
+- A deleted corner produces a curved inward notch instead of a sharp 90-degree
+  vertical seam.
+- Adjacent ordinary blocks read as one continuous terrain mass with no seams.
+- Buried faces and internal cliff faces are not generated.
+- The interior ground remains exactly on its 100-unit Z plane.
+- Only a narrow band beside an exposed top cliff edge slopes downward.
+- The cliff wall beneath that band is a straight planar vertical face.
+- The cliff wall is never made wavy or pushed sideways.
+- A 2x2 group with one corner block removed produces a rounded chamfer
+  transition where the remaining three top surfaces meet the missing corner.
+- Stacked terrain has no internal faces between its occupied blocks.
+- Floating blocks above Z=0 receive exposed underside geometry for overpasses.
+- Chunk boundaries calculate identical chamfer heights, with no gaps.
+- Collision, cursor editing, undo/redo, materials, and optimized baking remain
+  active in this mode.
+
+Disable Use Continuous Terrain Prototype at any time to restore the complete
+v1.2.6 chunked HISM rendering path.
+
+Scope of this prototype:
+- Existing Ramp and Diagonal Edge tiles deliberately remain on their original
+  modular mesh path. Their geometry and editor behavior were not changed.
+- Slant-to-chamfer stitching is deliberately deferred until the ordinary
+  flat/stacked chamfer is visually and functionally approved.
+
+Shared terrain material
+-----------------------
+1. Select the TileMap_Terrain actor.
+2. In Details, open Tile Map > Rendering.
+3. Assign MI_Reditus_Terrain to Default Terrain Material.
+
+When assigned, this shared material intentionally takes precedence over the
+default cube material and palette material overrides. It is automatically used
+by flat blocks, generated slants, rebuilt HISM chunks, and optimized baked
+meshes. Clear the property to return to individual mesh/palette materials.
+
+Slants
+------
+- Ramp converts a complete run of existing blocks into one continuous wedge
+  inside those cells. It rises from the bottom of the first selected block to
+  the top of the last block; it does not add slope geometry above full cubes.
+- Choose +X, +Y, -X, or -Y before applying. The complete run is rotated for
+  you; individual Rotate clicks are no longer required.
+- The requested angle is snapped to the nearest grid-compatible run from one
+  through eight tiles. The mode panel displays the tile count and actual angle.
+- The clicked block is the low end. The rise continues in the chosen direction.
+- Every block needed by the displayed run length must already exist at the
+  clicked elevation. If any block is missing, the preview is red and no partial
+  ramp is applied.
+- Diagonal Edge changes the selected block into a diagonal boundary and removes
+  only the nearest column behind the selected cut direction, including blocks
+  stacked at or above the selected elevation. It never continues deleting
+  through another row or column of the map.
+- Slant Angle accepts 5 through 45 degrees.
+- The generated slant uses the material of the currently selected Active Tile.
+- Apply Slant automatically changes all matching ramp segments in one action.
+- Paint / Replace Tile restores another palette tile.
+- Delete Block removes the block completely.
+- Generated static meshes are reused from /Game/TileMapGenerated.
+
+Elevation-aware auto tiling
+---------------------------
+Each Tile Palette entry now has:
+- Auto Tile Set
+- Auto Shape
+
+Give related modular assets the same non-empty Auto Tile Set, such as Grass.
+Assign each mesh its role: Flat, Edge, Outer Corner, Inner Corner, Cliff,
+Pass / Bridge, Peninsula, or Island. Painting any member of the set selects the
+correct available sibling variant and rotation based on nearby occupied cells.
+
+Base mesh orientation assumptions before automatic 90-degree rotation:
+- Edge and Cliff face/open toward +X.
+- Outer Corner is open toward +X and +Y.
+- Inner Corner's missing diagonal is +X and +Y.
+- Pass / Bridge is open on +X and -X.
+- Peninsula is closed toward -Y.
+
+If a requested shape is absent, the resolver uses the set's Manual / Any entry
+when available. If neither exists, it safely keeps the current tile.
+
+Efficiency
+----------
+- Terrain remains chunked and rendered with HISM components.
+- Edits resolve only the affected cell and immediate neighboring elevations.
+- Only touched chunks rebuild.
+- Generated slant meshes are cached and shared instead of creating one mesh per
+  placed block.
+- A multi-tile ramp updates tile type and absolute direction as one batch, then
+  rebuilds each affected HISM chunk only once.
+- Each mouse stroke remains one native Unreal Undo/Redo transaction.
+
+Primary fixes in this package
+-----------------------------
+- Added physical convex and concave vertical cliff-corner fillets. This changes
+  the silhouette; it is not a smooth-normal-only lighting trick.
+- Added matching top, underside, and stacked transition geometry around rounded
+  corners so collision and static-mesh baking receive the same surface.
+- Corrected reversed triangle winding in every continuous procedural surface:
+  flat tops, exposed cliff walls, chamfer strips, and exposed undersides.
+- Added a persistent Default Terrain Material property. One assignment now
+  propagates to every tile type, generated slant, chunk rebuild, and bake.
+- Restored the original working horizontal diagonal orientation. New V4
+  generated meshes prevent older incorrectly oriented cached assets from being
+  reused.
+- Moved ramp surfaces inside the selected cells so the original cubes are
+  genuinely converted into wedges rather than receiving extra geometry above.
+- Diagonal Edge removes only its nearest cut-side neighbor and that neighbor's
+  upper stack. Vertical Ramp never deletes neighboring terrain.
+- Aligned each diagonal boundary mesh with its selected cut direction.
+- Replaced the repeated one-cube wedge with closed, height-matched ramp segment
+  meshes. Adjacent segments now meet at the same height without half-slants.
+- Added +X, +Y, -X, and -Y direction controls and automatic rotation for the
+  complete ramp run.
+- Corrected the Diagonal Edge top-face winding so the cap is visible from above.
+- Versioned generated slant asset names so old broken cached meshes are not
+  reused.
+- Restored the missing closing brace in FTileMapEdMode::HandleClick. That brace
+  caused the misleading AssetRegistry, ThumbnailRenderer, Selection, and
+  EngineUtils C2888 error cascade under Unreal unity builds.
+- Restored the missing EnsureSlantTile implementation.
+- Added Ramp / Diagonal Edge selection and an angle control.
+- Added elevation-aware modular variant selection and local refresh behavior.
+TileMapEditor UE4.27 v1.2.42 - Optimized Bake Hash Compile Fix
+================================================================
+
+This revision corrects the UE4.27 compile failure in v1.2.41's custom bake
+optimizer key hashing. It does not change the optimizer algorithm or runtime
+terrain geometry. v1.2.40 remains the accepted baseline until this revision is
+compiled and verified in the user's UE4.27 project.
+
+Replacement and build
+---------------------
+1. Close Unreal Editor and Visual Studio.
+2. Back up the currently accepted v1.2.40 TileMapEditor plugin.
+3. Remove the entire old project Plugins/TileMapEditor directory.
+4. Copy the TileMapEditor directory from this archive into project Plugins/.
+5. Delete only the project Intermediate and Binaries folders needed to force a
+   clean plugin rebuild; do not delete Content, Config, or Source.
+6. Regenerate project files if Unreal requests it.
+7. Build the project's Editor target for Win64 Development Editor in Visual
+   Studio or with the UE4.27 UnrealBuildTool.
+8. Start Unreal Editor only after the build completes successfully.
+
+If compilation still fails, copy the first red compiler error from the Build
+Output window (including file and line), not only the IntelliSense Error List.
+
+Focused verification
+--------------------
+1. Confirm the plugin reports VersionName 1.2.42.
+2. Confirm ordinary continuous terrain and all existing slant/stair/path tools
+   behave like the v1.2.40 baseline.
+3. Bake the same test terrain and compare topology counts and appearance.
+4. Do not accept this revision until it has been verified inside UE4.27.
+
+Previous revision notes follow.

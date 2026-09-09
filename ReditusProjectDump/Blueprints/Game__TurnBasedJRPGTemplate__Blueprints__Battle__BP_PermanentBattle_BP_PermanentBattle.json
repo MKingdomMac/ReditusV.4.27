@@ -1,0 +1,3053 @@
+{
+	"Name": "BP_PermanentBattle",
+	"Path": "/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_PermanentBattle.BP_PermanentBattle",
+	"ParentClass": "/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_FixedEnemyBattleBase.BP_FixedEnemyBattleBase_C",
+	"GeneratedClass": "/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_PermanentBattle.BP_PermanentBattle_C",
+	"Variables": [
+		{
+			"Name": "minDelayToBattle",
+			"Guid": "2CEE38B640F7E23238CC92B6739F567F",
+			"Category": "Default",
+			"FriendlyName": "Min Delay to Battle",
+			"DefaultValue": "",
+			"PinCategory": "float",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": ""
+		},
+		{
+			"Name": "maxDelayToBattle",
+			"Guid": "6FF027684419F4F8215F55B83DF3DAE8",
+			"Category": "Default",
+			"FriendlyName": "Max Delay to Battle",
+			"DefaultValue": "",
+			"PinCategory": "float",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": ""
+		},
+		{
+			"Name": "currentExploreCharacter",
+			"Guid": "DE295A864588A2039516C599FBB5206B",
+			"Category": "Default",
+			"FriendlyName": "Current Explore Character",
+			"DefaultValue": "",
+			"PinCategory": "object",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": "/Script/Engine.Actor"
+		}
+	],
+	"Components": [],
+	"Graphs": [
+		{
+			"Kind": "Ubergraph",
+			"Name": "EventGraph",
+			"Path": "/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_PermanentBattle.BP_PermanentBattle:EventGraph",
+			"Nodes": [
+				{
+					"Name": "K2Node_Event_3",
+					"Class": "/Script/BlueprintGraph.K2Node_Event",
+					"Title": "Event Remove Battle",
+					"Guid": "B2886CCD4B9CF57AE7A4AF954C706944",
+					"PosX": -289,
+					"PosY": -88,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_6.execute"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallDelegate_0",
+					"Class": "/Script/BlueprintGraph.K2Node_CallDelegate",
+					"Title": "Call On Battle Removed",
+					"Guid": "BDD16DD4412465CB32BBD7ABB6E9E07D",
+					"PosX": 463,
+					"PosY": -64,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_7.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_ComponentBoundEvent_0",
+					"Class": "/Script/BlueprintGraph.K2Node_ComponentBoundEvent",
+					"Title": "On Component Begin Overlap (PlayerDetector)",
+					"Guid": "7715DBB34946EDB35E854CB87E1EB043",
+					"PosX": -224,
+					"PosY": 416,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "OverlappedComponent",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "OtherActor",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_14.A",
+								"K2Node_Knot_5.InputPin"
+							]
+						},
+						{
+							"Name": "OtherComp",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_4.InputPin"
+							]
+						},
+						{
+							"Name": "OtherBodyIndex",
+							"Direction": "Output",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "bFromSweep",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "SweepResult",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_3",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Equal (Object)",
+					"Guid": "1BAD00FC4E41737362D9BCBFB1E90710",
+					"PosX": 736,
+					"PosY": 667,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetMathLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "A",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_4.OutputPin"
+							]
+						},
+						{
+							"Name": "B",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_1.BattleDetector"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CommutativeAssociativeBinaryOperator_0.B"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_1",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get BattleDetector",
+					"Guid": "6C994C21418BDA8955D3FD967097F16F",
+					"PosX": 400,
+					"PosY": 688,
+					"Pins": [
+						{
+							"Name": "BattleDetector",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_3.B"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_3.exploreCharacter"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_1",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Retriggerable Delay",
+					"Guid": "001BEF9649564D11A2E7A7934EB42FEE",
+					"PosX": 235,
+					"PosY": 1380,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CustomEvent_1.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_12.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetSystemLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "WorldContextObject",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Duration",
+							"Direction": "Input",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.2",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_2.ReturnValue"
+							]
+						},
+						{
+							"Name": "LatentInfo",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "(Linkage=-1,UUID=-1,ExecutionFunction=\"\",CallbackTarget=None)",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_2",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Random Float in Range",
+					"Guid": "DD0598BF412BEDA8C44BC18F32C73EB2",
+					"PosX": -60,
+					"PosY": 1476,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetMathLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Min",
+							"Direction": "Input",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_4.minDelayToBattle"
+							]
+						},
+						{
+							"Name": "Max",
+							"Direction": "Input",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_5.maxDelayToBattle"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_1.Duration"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_27",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get enemyUnits",
+					"Guid": "C963281C4C5C5E33FCD85C9BB260D498",
+					"PosX": -241,
+					"PosY": 19,
+					"Pins": [
+						{
+							"Name": "enemyUnits",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_6.TargetArray"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallArrayFunction_6",
+					"Class": "/Script/BlueprintGraph.K2Node_CallArrayFunction",
+					"Title": "Clear",
+					"Guid": "F82C6BC0423C5E4D4B02C5A3963CC426",
+					"PosX": -24,
+					"PosY": -73,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Event_3.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_7.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetArrayLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "TargetArray",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_27.enemyUnits"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_28",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get playerUnits",
+					"Guid": "692D159C40640DA8781988A7ADCF8517",
+					"PosX": 3,
+					"PosY": 35,
+					"Pins": [
+						{
+							"Name": "playerUnits",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_7.TargetArray"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallArrayFunction_7",
+					"Class": "/Script/BlueprintGraph.K2Node_CallArrayFunction",
+					"Title": "Clear",
+					"Guid": "773512204A4878080F8B95A14D264F50",
+					"PosX": 219,
+					"PosY": -61,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallArrayFunction_6.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallDelegate_0.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetArrayLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "TargetArray",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_28.playerUnits"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_4",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get minDelayToBattle",
+					"Guid": "A23187AB475ADE2B63C59C8F1BC6D7A2",
+					"PosX": -277,
+					"PosY": 1476,
+					"Pins": [
+						{
+							"Name": "minDelayToBattle",
+							"Direction": "Output",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_2.Min"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_5",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get maxDelayToBattle",
+					"Guid": "11C06C0841BA54C320DB98BEF8422C4F",
+					"PosX": -277,
+					"PosY": 1540,
+					"Pins": [
+						{
+							"Name": "maxDelayToBattle",
+							"Direction": "Output",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_2.Max"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_4",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Init Battle\nTarget is BP Battle Base",
+					"Guid": "C34E408A477A044F9854809DAB1ADF30",
+					"PosX": 1515,
+					"PosY": 1365,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_3.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "IsAmbushed",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "CaeserTraining",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "EdGraphNode_Comment_48",
+					"Class": "/Script/UnrealEd.EdGraphNode_Comment",
+					"Title": "Clear units on battle over",
+					"Guid": "1658609E4536AAA35D0CEBBE7E8260FC",
+					"PosX": -336,
+					"PosY": -176,
+					"Pins": []
+				},
+				{
+					"Name": "EdGraphNode_Comment_49",
+					"Class": "/Script/UnrealEd.EdGraphNode_Comment",
+					"Title": "Detect if player is inside the battle area",
+					"Guid": "16F5A7474A074E45342FAAB555869672",
+					"PosX": -336,
+					"PosY": 176,
+					"Pins": []
+				},
+				{
+					"Name": "K2Node_EnumEquality_0",
+					"Class": "/Script/BlueprintGraph.K2Node_EnumEquality",
+					"Title": "Equal (Enum)",
+					"Guid": "FEA2F3DE41097F54E7D10896810F2A1B",
+					"PosX": 746,
+					"PosY": 1587,
+					"Pins": [
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_3.Condition"
+							]
+						},
+						{
+							"Name": "A",
+							"Direction": "Input",
+							"Category": "byte",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_8.gameState"
+							]
+						},
+						{
+							"Name": "B",
+							"Direction": "Input",
+							"Category": "byte",
+							"SubCategory": "None",
+							"DefaultValue": "NewEnumerator0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_IfThenElse_3",
+					"Class": "/Script/BlueprintGraph.K2Node_IfThenElse",
+					"Title": "Branch",
+					"Guid": "C6615A4D42839464FC8795B4F9A5F63A",
+					"PosX": 1196,
+					"PosY": 1380,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_7.then"
+							]
+						},
+						{
+							"Name": "Condition",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "true",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_EnumEquality_0.ReturnValue"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_4.execute"
+							]
+						},
+						{
+							"Name": "else",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_AddDelegate_1.execute"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CustomEvent_0",
+					"Class": "/Script/BlueprintGraph.K2Node_CustomEvent",
+					"Title": "OnGameStateChangedHandler\nCustom Event",
+					"Guid": "2E5B035F4FA5A27C9CA88B8DE5567B5C",
+					"PosX": 1131,
+					"PosY": 1764,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_AddDelegate_1.Delegate",
+								"K2Node_RemoveDelegate_1.Delegate"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_RemoveDelegate_1.execute"
+							]
+						},
+						{
+							"Name": "gameState",
+							"Direction": "Output",
+							"Category": "byte",
+							"SubCategory": "None",
+							"DefaultValue": "NewEnumerator0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_3.InputPin"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_SwitchEnum_0",
+					"Class": "/Script/BlueprintGraph.K2Node_SwitchEnum",
+					"Title": "Switch on E_GameState",
+					"Guid": "7B0B2F58430785028A0180ACB8F7D327",
+					"PosX": 1915,
+					"PosY": 1780,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_RemoveDelegate_1.then"
+							]
+						},
+						{
+							"Name": "Selection",
+							"Direction": "Input",
+							"Category": "byte",
+							"SubCategory": "None",
+							"DefaultValue": "NewEnumerator0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_1.OutputPin"
+							]
+						},
+						{
+							"Name": "NotEqual_ByteByte",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetMathLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "NewEnumerator0",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_0.execute"
+							]
+						},
+						{
+							"Name": "NewEnumerator3",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "NewEnumerator1",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "NewEnumerator2",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "NewEnumerator5",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_1",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "9D650ED64508D65DFF185C9B3AED69D0",
+					"PosX": 1759,
+					"PosY": 1924,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "byte",
+							"SubCategory": "None",
+							"DefaultValue": "(INVALID)",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_3.OutputPin"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "byte",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_SwitchEnum_0.Selection"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_3",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "760B5D4847A7544F42764A8CE3D18FD9",
+					"PosX": 1499,
+					"PosY": 1924,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "byte",
+							"SubCategory": "None",
+							"DefaultValue": "(INVALID)",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CustomEvent_0.gameState"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "byte",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_1.InputPin"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CustomEvent_1",
+					"Class": "/Script/BlueprintGraph.K2Node_CustomEvent",
+					"Title": "StartBattleInRandomTime\nCustom Event",
+					"Guid": "2380B08642458946390D35881B39FD90",
+					"PosX": -76,
+					"PosY": 1364,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_1.execute"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_15",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Start Battle in Random Time\nTarget is BP Permanent Battle",
+					"Guid": "D9ED234D43A3A9ED5F23A899099761A2",
+					"PosX": 1888,
+					"PosY": 401,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_0.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "self",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_8",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get gameState",
+					"Guid": "33EF85374852FE89E4194BA84A19B732",
+					"PosX": 487,
+					"PosY": 1585,
+					"Pins": [
+						{
+							"Name": "gameState",
+							"Direction": "Output",
+							"Category": "byte",
+							"SubCategory": "None",
+							"DefaultValue": "NewEnumerator0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_EnumEquality_0.A"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_4.AsBP JRPGPlayer Controller"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_AddDelegate_1",
+					"Class": "/Script/BlueprintGraph.K2Node_AddDelegate",
+					"Title": "Bind Event to On Game State Changed",
+					"Guid": "EB5E52D14060E88DC94901A4892050A7",
+					"PosX": 1499,
+					"PosY": 1646,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_3.else"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_0.OutputPin"
+							]
+						},
+						{
+							"Name": "Delegate",
+							"Direction": "Input",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CustomEvent_0.OutputDelegate"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_RemoveDelegate_1",
+					"Class": "/Script/BlueprintGraph.K2Node_RemoveDelegate",
+					"Title": "Unbind Event from On Game State Changed",
+					"Guid": "E2322F2E4573AB5ED4B473BBC768F1DC",
+					"PosX": 1499,
+					"PosY": 1780,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CustomEvent_0.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_SwitchEnum_0.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_0.OutputPin"
+							]
+						},
+						{
+							"Name": "Delegate",
+							"Direction": "Input",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CustomEvent_0.OutputDelegate"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_11",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Player Controller",
+					"Guid": "911EC8A94DB47F7B7939CCA736856F92",
+					"PosX": -197,
+					"PosY": 1674,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__GameplayStatics",
+							"LinkedTo": []
+						},
+						{
+							"Name": "WorldContextObject",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "PlayerIndex",
+							"Direction": "Input",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_4.Object"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_DynamicCast_4",
+					"Class": "/Script/BlueprintGraph.K2Node_DynamicCast",
+					"Title": "Cast To BP_JRPGPlayerController",
+					"Guid": "89499B634F722FBBB7F1E79CD048E99A",
+					"PosX": 107,
+					"PosY": 1674,
+					"Pins": [
+						{
+							"Name": "Object",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_11.ReturnValue"
+							]
+						},
+						{
+							"Name": "AsBP JRPGPlayer Controller",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_8.self",
+								"K2Node_Knot_0.InputPin"
+							]
+						},
+						{
+							"Name": "bSuccess",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_0",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "5A1B9CD040D0C56D6170189C1D00AE7F",
+					"PosX": 1323,
+					"PosY": 1706,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_4.AsBP JRPGPlayer Controller"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_AddDelegate_1.self",
+								"K2Node_RemoveDelegate_1.self"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_14",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Equal (Object)",
+					"Guid": "6A5819AB4D902E33D14DC1AB8DEF417A",
+					"PosX": 400,
+					"PosY": 494,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetMathLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "A",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_ComponentBoundEvent_0.OtherActor"
+							]
+						},
+						{
+							"Name": "B",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_3.exploreCharacter"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CommutativeAssociativeBinaryOperator_0.A"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_3",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get exploreCharacter",
+					"Guid": "E4A46933464D5C4959AA7AAE2CA6E58E",
+					"PosX": 48,
+					"PosY": 688,
+					"Pins": [
+						{
+							"Name": "exploreCharacter",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_14.B",
+								"K2Node_VariableGet_1.self"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_7.jRPGPlayerController"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_12",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Is Player Inside Battle Area\nTarget is BP Permanent Battle",
+					"Guid": "0A7290304C15576E773D108618BE3AE6",
+					"PosX": 507,
+					"PosY": 1364,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_1.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_7.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "self",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "inside",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_7.Condition"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_IfThenElse_7",
+					"Class": "/Script/BlueprintGraph.K2Node_IfThenElse",
+					"Title": "Branch",
+					"Guid": "160940F94CC057422B48809712DBA10D",
+					"PosX": 850,
+					"PosY": 1380,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_12.then"
+							]
+						},
+						{
+							"Name": "Condition",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "true",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_12.inside"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_3.execute"
+							]
+						},
+						{
+							"Name": "else",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Event_1",
+					"Class": "/Script/BlueprintGraph.K2Node_Event",
+					"Title": "Event Overlap Started",
+					"Guid": "5E8E33034395B644EA0AA7B1FBC6237F",
+					"PosX": -224,
+					"PosY": 928,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_1.execute"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_5",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Start Battle in Random Time\nTarget is BP Permanent Battle",
+					"Guid": "F1B427254AA454249CC8A9853641D3F7",
+					"PosX": 816,
+					"PosY": 912,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_1.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "self",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "EdGraphNode_Comment_1",
+					"Class": "/Script/UnrealEd.EdGraphNode_Comment",
+					"Title": "Start battle after delay",
+					"Guid": "E16E262E49502F84D1349E8765285B29",
+					"PosX": -336,
+					"PosY": 1264,
+					"Pins": []
+				},
+				{
+					"Name": "K2Node_VariableGet_7",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get jRPGPlayerController",
+					"Guid": "772F73AA4BB669654EE15A8AC1E9A4B9",
+					"PosX": -224,
+					"PosY": 688,
+					"Pins": [
+						{
+							"Name": "jRPGPlayerController",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_3.self"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_4",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "906A90894F98FE3A0994E896941253AA",
+					"PosX": 240,
+					"PosY": 674,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_ComponentBoundEvent_0.OtherComp"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_3.A"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CommutativeAssociativeBinaryOperator_0",
+					"Class": "/Script/BlueprintGraph.K2Node_CommutativeAssociativeBinaryOperator",
+					"Title": "AND Boolean",
+					"Guid": "4776CD4E4E0606E1BC6C29BC4AAF1959",
+					"PosX": 944,
+					"PosY": 502,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetMathLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "A",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_14.ReturnValue"
+							]
+						},
+						{
+							"Name": "B",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_3.ReturnValue"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_5",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "04E249CF4FC59427C9D8ED8517CEAC76",
+					"PosX": 240,
+					"PosY": 592,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_ComponentBoundEvent_0.OtherActor"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_6.InputPin"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_6",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "01A610D445E3F83820B9F885A03D46A6",
+					"PosX": 1332,
+					"PosY": 592,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_5.OutputPin"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_0.currentExploreCharacter"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableSet_0",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableSet",
+					"Title": "Set currentExploreCharacter",
+					"Guid": "147D1B7B4953A7FD1C2D30B8EA26E3F8",
+					"PosX": 1536,
+					"PosY": 432,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_15.execute"
+							]
+						},
+						{
+							"Name": "currentExploreCharacter",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_6.OutputPin"
+							]
+						},
+						{
+							"Name": "Output_Get",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_2",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get exploreCharacter",
+					"Guid": "9F52D96946005A1F293C46B7D4C409D1",
+					"PosX": 48,
+					"PosY": 1056,
+					"Pins": [
+						{
+							"Name": "exploreCharacter",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_1.currentExploreCharacter"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_0.jRPGPlayerController"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_0",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get jRPGPlayerController",
+					"Guid": "108EF635410D93C56A4B88B281673D1A",
+					"PosX": -224,
+					"PosY": 1056,
+					"Pins": [
+						{
+							"Name": "jRPGPlayerController",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_2.self"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableSet_1",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableSet",
+					"Title": "Set currentExploreCharacter",
+					"Guid": "E313A1BC4502F072322714BA21772646",
+					"PosX": 384,
+					"PosY": 944,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Event_1.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_5.execute"
+							]
+						},
+						{
+							"Name": "currentExploreCharacter",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_2.exploreCharacter"
+							]
+						},
+						{
+							"Name": "Output_Get",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_0",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Overlap Started\nTarget is BP Permanent Battle",
+					"Guid": "DBA9984541513CB495E39A9BD1B645F7",
+					"PosX": 2224,
+					"PosY": 1764,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_SwitchEnum_0.NewEnumerator0"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_6",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get jRPGPlayerController",
+					"Guid": "90A803134ECD31DC5E01A58C3A8E8203",
+					"PosX": 400,
+					"PosY": 560,
+					"Pins": [
+						{
+							"Name": "jRPGPlayerController",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_MacroInstance_0.InputObject"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_MacroInstance_0",
+					"Class": "/Script/BlueprintGraph.K2Node_MacroInstance",
+					"Title": "Is Valid",
+					"Guid": "7CA7CA044AB18BF6F108ACA7720FAAC1",
+					"PosX": 656,
+					"PosY": 416,
+					"Pins": [
+						{
+							"Name": "exec",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "InputObject",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_6.jRPGPlayerController"
+							]
+						},
+						{
+							"Name": "Is Valid",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Is Not Valid",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				}
+			]
+		},
+		{
+			"Kind": "Function",
+			"Name": "UserConstructionScript",
+			"Path": "/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_PermanentBattle.BP_PermanentBattle:UserConstructionScript",
+			"Nodes": [
+				{
+					"Name": "K2Node_FunctionEntry_0",
+					"Class": "/Script/BlueprintGraph.K2Node_FunctionEntry",
+					"Title": "Construction Script",
+					"Guid": "7F5977EA43E14DBC7B24F08DECB5FF16",
+					"PosX": 0,
+					"PosY": 0,
+					"Pins": [
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallParentFunction_0.execute"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallParentFunction_0",
+					"Class": "/Script/BlueprintGraph.K2Node_CallParentFunction",
+					"Title": "Parent: Construction Script",
+					"Guid": "3DAC05F34B34BECE5A4B66A3AABF7A6C",
+					"PosX": 200,
+					"PosY": 0,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_FunctionEntry_0.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				}
+			]
+		},
+		{
+			"Kind": "Function",
+			"Name": "IsPlayerInsideBattleArea",
+			"Path": "/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_PermanentBattle.BP_PermanentBattle:IsPlayerInsideBattleArea",
+			"Nodes": [
+				{
+					"Name": "K2Node_FunctionEntry_0",
+					"Class": "/Script/BlueprintGraph.K2Node_FunctionEntry",
+					"Title": "Is Player Inside Battle Area",
+					"Guid": "4734466C4963BE0F6B7538A87BBED513",
+					"PosX": 0,
+					"PosY": 0,
+					"Pins": [
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_MacroInstance_0.Exec"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_6",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get PlayerDetector",
+					"Guid": "34E6E9EC426A14F6083AB0AE452CFF32",
+					"PosX": -288,
+					"PosY": 135,
+					"Pins": [
+						{
+							"Name": "PlayerDetector",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_7.self"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_7",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Overlapping Components\nTarget is Primitive Component",
+					"Guid": "5372817B4C78B0F715E37AA1AD39BDC1",
+					"PosX": -48,
+					"PosY": 96,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_6.PlayerDetector"
+							]
+						},
+						{
+							"Name": "OutOverlappingComponents",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_MacroInstance_0.Array"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_MacroInstance_0",
+					"Class": "/Script/BlueprintGraph.K2Node_MacroInstance",
+					"Title": "For Each Loop with Break",
+					"Guid": "573731F443294382E6CC508B8C82E1F8",
+					"PosX": 368,
+					"PosY": 0,
+					"Pins": [
+						{
+							"Name": "Exec",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_FunctionEntry_0.then"
+							]
+						},
+						{
+							"Name": "Array",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_7.OutOverlappingComponents"
+							]
+						},
+						{
+							"Name": "Break",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_2.OutputPin"
+							]
+						},
+						{
+							"Name": "LoopBody",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_1.execute"
+							]
+						},
+						{
+							"Name": "Array Element",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_0.InputPin"
+							]
+						},
+						{
+							"Name": "Array Index",
+							"Direction": "Output",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Completed",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_FunctionResult_0.execute"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_9",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Owner\nTarget is Actor Component",
+					"Guid": "CC49FC374BDAE9C0CFB490956C5E0209",
+					"PosX": 736,
+					"PosY": 80,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_0.OutputPin"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_1.Object"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_DynamicCast_1",
+					"Class": "/Script/BlueprintGraph.K2Node_DynamicCast",
+					"Title": "Cast To BP_JRPGCharacterBase",
+					"Guid": "953DD5814B79AD498C9B498ABDE57809",
+					"PosX": 1040,
+					"PosY": 0,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_MacroInstance_0.LoopBody"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_6.execute"
+							]
+						},
+						{
+							"Name": "CastFailed",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Object",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_9.ReturnValue"
+							]
+						},
+						{
+							"Name": "AsBP JRPGCharacter Base",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_7.self",
+								"K2Node_CallFunction_1.A"
+							]
+						},
+						{
+							"Name": "bSuccess",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_10",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Equal (Object)",
+					"Guid": "1F2C981D4077AA3736F7468439172D86",
+					"PosX": 1712,
+					"PosY": 194,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetMathLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "A",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_7.BattleDetector"
+							]
+						},
+						{
+							"Name": "B",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_0.OutputPin"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CommutativeAssociativeBinaryOperator_0.B"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_7",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get BattleDetector",
+					"Guid": "6FF552554B82095AF68F52878B7A6AAF",
+					"PosX": 1399,
+					"PosY": 175,
+					"Pins": [
+						{
+							"Name": "BattleDetector",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_10.A"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_1.AsBP JRPGCharacter Base"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_IfThenElse_6",
+					"Class": "/Script/BlueprintGraph.K2Node_IfThenElse",
+					"Title": "Branch",
+					"Guid": "CBF63D1248EAA3DA4816F89D6D320674",
+					"PosX": 2240,
+					"PosY": 0,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_1.then"
+							]
+						},
+						{
+							"Name": "Condition",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "true",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CommutativeAssociativeBinaryOperator_0.ReturnValue"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_0.execute"
+							]
+						},
+						{
+							"Name": "else",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_0",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "792A3D11406F8789F972DEB7017CEA95",
+					"PosX": 640,
+					"PosY": 224,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_MacroInstance_0.Array Element"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_9.self",
+								"K2Node_CallFunction_10.B"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableSet_0",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableSet",
+					"Title": "Set isInside",
+					"Guid": "CB2D944D4EC16E8EDFD7CE87B49E4314",
+					"PosX": 2512,
+					"PosY": 16,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_6.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_1.InputPin"
+							]
+						},
+						{
+							"Name": "isInside",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "true",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Output_Get",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_1",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "EE9E836E4E171CC6E9DD3B9740224F87",
+					"PosX": 2656,
+					"PosY": -80,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_0.then"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_2.InputPin"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_2",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "A666FDAB4F1D7D3D3C62A09372A3E347",
+					"PosX": 352,
+					"PosY": -80,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_1.OutputPin"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_MacroInstance_0.Break"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_FunctionResult_0",
+					"Class": "/Script/BlueprintGraph.K2Node_FunctionResult",
+					"Title": "Return Node",
+					"Guid": "00C0AEEC48DD38BCD3EE308ED725137C",
+					"PosX": 640,
+					"PosY": 272,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_MacroInstance_0.Completed"
+							]
+						},
+						{
+							"Name": "inside",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_0.isInside"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_0",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get isInside",
+					"Guid": "819A947B44C9B7FC769327905EA9225E",
+					"PosX": 448,
+					"PosY": 323,
+					"Pins": [
+						{
+							"Name": "isInside",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_FunctionResult_0.inside"
+							]
+						}
+					]
+				},
+				{
+					"Name": "EdGraphNode_Comment_0",
+					"Class": "/Script/UnrealEd.EdGraphNode_Comment",
+					"Title": "Returns whether player character is inside battle area  or not",
+					"Guid": "6F64C1D749A95B7BA91344A4BA847F7A",
+					"PosX": -338,
+					"PosY": -170,
+					"Pins": []
+				},
+				{
+					"Name": "K2Node_CommutativeAssociativeBinaryOperator_0",
+					"Class": "/Script/BlueprintGraph.K2Node_CommutativeAssociativeBinaryOperator",
+					"Title": "AND Boolean",
+					"Guid": "3385D353419085D3A5153B8834F4F0A5",
+					"PosX": 1968,
+					"PosY": 182,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetMathLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "A",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_1.ReturnValue"
+							]
+						},
+						{
+							"Name": "B",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_10.ReturnValue"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_6.Condition"
+							]
+						},
+						{
+							"Name": "C",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_2.ReturnValue"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_1",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Equal (Object)",
+					"Guid": "5E36D6744F28907BA1D93393B5667592",
+					"PosX": 1712,
+					"PosY": 81,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetMathLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "A",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_1.AsBP JRPGCharacter Base"
+							]
+						},
+						{
+							"Name": "B",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_3.currentExploreCharacter"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CommutativeAssociativeBinaryOperator_0.A"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_3",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get currentExploreCharacter",
+					"Guid": "2E723CE145198FC016C1E6964900DDA8",
+					"PosX": 1424,
+					"PosY": 101,
+					"Pins": [
+						{
+							"Name": "currentExploreCharacter",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_1.B"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_2",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get currentExploreCharacter",
+					"Guid": "C1CDEECA498043B36E27EEB7857C3FFB",
+					"PosX": 1424,
+					"PosY": 256,
+					"Pins": [
+						{
+							"Name": "currentExploreCharacter",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_2.A"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_2",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Equal (Object)",
+					"Guid": "1B45EC9E40FE90ECBD563B9C14F3B5EF",
+					"PosX": 1712,
+					"PosY": 272,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/Engine.Default__KismetMathLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "A",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_2.currentExploreCharacter"
+							]
+						},
+						{
+							"Name": "B",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_5.exploreCharacter"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CommutativeAssociativeBinaryOperator_0.C"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_4",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get jRPGPlayerController",
+					"Guid": "D4A773D0426645CA641C9FB9E82A57A5",
+					"PosX": 1120,
+					"PosY": 304,
+					"Pins": [
+						{
+							"Name": "jRPGPlayerController",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_5.self"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_5",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get exploreCharacter",
+					"Guid": "6EB070A14D41DBFBA1B7878700806C44",
+					"PosX": 1383,
+					"PosY": 304,
+					"Pins": [
+						{
+							"Name": "exploreCharacter",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_2.B"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_4.jRPGPlayerController"
+							]
+						}
+					]
+				}
+			]
+		}
+	]
+}

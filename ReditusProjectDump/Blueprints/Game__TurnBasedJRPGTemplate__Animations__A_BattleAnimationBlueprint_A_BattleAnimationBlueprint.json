@@ -1,0 +1,882 @@
+{
+	"Name": "A_BattleAnimationBlueprint",
+	"Path": "/Game/TurnBasedJRPGTemplate/Animations/A_BattleAnimationBlueprint.A_BattleAnimationBlueprint",
+	"ParentClass": "/Script/Engine.AnimInstance",
+	"GeneratedClass": "/Game/TurnBasedJRPGTemplate/Animations/A_BattleAnimationBlueprint.A_BattleAnimationBlueprint_C",
+	"Variables": [
+		{
+			"Name": "Speed",
+			"Guid": "DD836DBB41BFF2AC1B9F8EBEEA8F7B6F",
+			"Category": "Default",
+			"FriendlyName": "Speed",
+			"DefaultValue": "",
+			"PinCategory": "float",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": ""
+		},
+		{
+			"Name": "idleAnimation",
+			"Guid": "D7EF3DFC4D5B8DDB86768F9EEA8977BC",
+			"Category": "Default",
+			"FriendlyName": "Idle Animation",
+			"DefaultValue": "",
+			"PinCategory": "object",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": "/Script/Engine.AnimSequenceBase"
+		},
+		{
+			"Name": "dieAnimation",
+			"Guid": "E5FBF9074274A196290D53B63B6986F6",
+			"Category": "Default",
+			"FriendlyName": "Die Animation",
+			"DefaultValue": "",
+			"PinCategory": "object",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": "/Script/Engine.AnimSequenceBase"
+		},
+		{
+			"Name": "isDead",
+			"Guid": "95DABFA14EC88B624F2706A0CAE140DA",
+			"Category": "Default",
+			"FriendlyName": "Is Dead",
+			"DefaultValue": "",
+			"PinCategory": "bool",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": ""
+		}
+	],
+	"Components": [],
+	"Graphs": [
+		{
+			"Kind": "Ubergraph",
+			"Name": "EventGraph",
+			"Path": "/Game/TurnBasedJRPGTemplate/Animations/A_BattleAnimationBlueprint.A_BattleAnimationBlueprint:EventGraph",
+			"Nodes": [
+				{
+					"Name": "K2Node_Event_14",
+					"Class": "/Script/BlueprintGraph.K2Node_Event",
+					"Title": "Event Blueprint Update Animation",
+					"Guid": "B905D6D841D02D86D122189E2DEFEE3C",
+					"PosX": -1168,
+					"PosY": 31,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_0.execute"
+							]
+						},
+						{
+							"Name": "DeltaTimeX",
+							"Direction": "Output",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_2",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Owning Actor\nTarget is Anim Instance",
+					"Guid": "57AF779C41328D67AFA6F9BAA80AF461",
+					"PosX": -1152,
+					"PosY": 161,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_0.Object"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_DynamicCast_0",
+					"Class": "/Script/BlueprintGraph.K2Node_DynamicCast",
+					"Title": "Cast To BP_UnitBase",
+					"Guid": "ED8FD26B42CCA68AE2151184E13BF92A",
+					"PosX": -816,
+					"PosY": 32,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Event_14.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_0.execute"
+							]
+						},
+						{
+							"Name": "CastFailed",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Object",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_2.ReturnValue"
+							]
+						},
+						{
+							"Name": "AsBP Unit Base",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_0.self",
+								"K2Node_Knot_1.InputPin"
+							]
+						},
+						{
+							"Name": "bSuccess",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_0",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get idleAnimation",
+					"Guid": "6AD717D34D76D42F0C36E7B87B3EEA65",
+					"PosX": -352,
+					"PosY": 112,
+					"Pins": [
+						{
+							"Name": "idleAnimation",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_0.idleAnimation"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_0.AsBP Unit Base"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableSet_0",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableSet",
+					"Title": "Set idleAnimation",
+					"Guid": "29F8E36B4933B9841A21B6BD27D37AEF",
+					"PosX": -96,
+					"PosY": 48,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_0.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_1.execute"
+							]
+						},
+						{
+							"Name": "idleAnimation",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_0.idleAnimation"
+							]
+						},
+						{
+							"Name": "Output_Get",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_1",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "8CAA291946315F444E9B38ACFF346A32",
+					"PosX": -544,
+					"PosY": 176,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_DynamicCast_0.AsBP Unit Base"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_0.InputPin"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_0",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "EE0C7A01456821659BD0DEB72D20E953",
+					"PosX": -87,
+					"PosY": 176,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_1.OutputPin"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_2.self",
+								"K2Node_Knot_2.InputPin"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_2",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get dieAnimation",
+					"Guid": "E5260094462B8A5CCD1D10A155A2B136",
+					"PosX": 64,
+					"PosY": 112,
+					"Pins": [
+						{
+							"Name": "dieAnimation",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_1.dieAnimation"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_0.OutputPin"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableSet_1",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableSet",
+					"Title": "Set dieAnimation",
+					"Guid": "D52A0FEF4F66A8B1CB2DA0AC81E099B8",
+					"PosX": 336,
+					"PosY": 48,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_0.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_3.execute"
+							]
+						},
+						{
+							"Name": "dieAnimation",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_2.dieAnimation"
+							]
+						},
+						{
+							"Name": "Output_Get",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_3",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Is Unit Dead\nTarget is BP Unit Base",
+					"Guid": "5F38687C46E9339B579B9EBFB6071B3C",
+					"PosX": 656,
+					"PosY": 16,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_1.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_2.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_2.OutputPin"
+							]
+						},
+						{
+							"Name": "IsUnitDead",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_2.isDead"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_2",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "A66E804A40A701F063C71DB1C36A8B5D",
+					"PosX": 471,
+					"PosY": 176,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_0.OutputPin"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_3.self"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableSet_2",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableSet",
+					"Title": "Set isDead",
+					"Guid": "9E6B68774AEA63AE5398E390923D8CD0",
+					"PosX": 976,
+					"PosY": 48,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_3.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "isDead",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_3.IsUnitDead"
+							]
+						},
+						{
+							"Name": "Output_Get",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				}
+			]
+		},
+		{
+			"Kind": "Function",
+			"Name": "AnimGraph",
+			"Path": "/Game/TurnBasedJRPGTemplate/Animations/A_BattleAnimationBlueprint.A_BattleAnimationBlueprint:AnimGraph",
+			"Nodes": [
+				{
+					"Name": "AnimGraphNode_Root_5",
+					"Class": "/Script/AnimGraph.AnimGraphNode_Root",
+					"Title": "Output Pose\nAnimGraph",
+					"Guid": "ACA33B5E41F3FB40CCDD4B93414472C3",
+					"PosX": -32,
+					"PosY": 84,
+					"Pins": [
+						{
+							"Name": "Result",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "(LinkID=-1,SourceLinkID=-1)",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_BlendListByBool_1.Pose"
+							]
+						}
+					]
+				},
+				{
+					"Name": "AnimGraphNode_BlendListByBool_1",
+					"Class": "/Script/AnimGraph.AnimGraphNode_BlendListByBool",
+					"Title": "Blend Poses by bool",
+					"Guid": "1837610F4087D58564586FAAB79E3425",
+					"PosX": -416,
+					"PosY": 128,
+					"Pins": [
+						{
+							"Name": "bActiveValue",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "False",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_3.isDead"
+							]
+						},
+						{
+							"Name": "BlendPose_0",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "(LinkID=-1,SourceLinkID=-1)",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_SequencePlayer_1.Pose"
+							]
+						},
+						{
+							"Name": "BlendPose_1",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "(LinkID=-1,SourceLinkID=-1)",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_Slot_0.Pose"
+							]
+						},
+						{
+							"Name": "BlendTime_0",
+							"Direction": "Input",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.100000",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "BlendTime_1",
+							"Direction": "Input",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.100000",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Pose",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_Root_5.Result"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_3",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get isDead",
+					"Guid": "4110A5404E47F1BAADA047B4FE6839B2",
+					"PosX": -691,
+					"PosY": 0,
+					"Pins": [
+						{
+							"Name": "isDead",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_BlendListByBool_1.bActiveValue"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "AnimGraphNode_SequencePlayer_1",
+					"Class": "/Script/AnimGraph.AnimGraphNode_SequencePlayer",
+					"Title": "Play Animation Sequence",
+					"Guid": "145EB2CB4A497DEFEA10B3BCCAD57BA6",
+					"PosX": -749,
+					"PosY": 64,
+					"Pins": [
+						{
+							"Name": "Sequence",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_0.dieAnimation"
+							]
+						},
+						{
+							"Name": "Pose",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_BlendListByBool_1.BlendPose_0"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_0",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get dieAnimation",
+					"Guid": "4693216346E7AD3521E473970CF24339",
+					"PosX": -944,
+					"PosY": 87,
+					"Pins": [
+						{
+							"Name": "dieAnimation",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_SequencePlayer_1.Sequence"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_5",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get idleAnimation",
+					"Guid": "1BF948344AAD0F99E4BE10A23D74BCC7",
+					"PosX": -1212,
+					"PosY": 263,
+					"Pins": [
+						{
+							"Name": "idleAnimation",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_SequencePlayer_2.Sequence"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "AnimGraphNode_SequencePlayer_2",
+					"Class": "/Script/AnimGraph.AnimGraphNode_SequencePlayer",
+					"Title": "Play Animation Sequence",
+					"Guid": "3BEE55B84EBF38826BE6B886A7667424",
+					"PosX": -992,
+					"PosY": 240,
+					"Pins": [
+						{
+							"Name": "Sequence",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_5.idleAnimation"
+							]
+						},
+						{
+							"Name": "Pose",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_Slot_0.Source"
+							]
+						}
+					]
+				},
+				{
+					"Name": "AnimGraphNode_Slot_0",
+					"Class": "/Script/AnimGraph.AnimGraphNode_Slot",
+					"Title": "Slot 'DefaultSlot'\nGroup 'DefaultGroup'",
+					"Guid": "57E92E6343525B7826BDB5969023A27A",
+					"PosX": -720,
+					"PosY": 224,
+					"Pins": [
+						{
+							"Name": "Source",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "(LinkID=-1,SourceLinkID=-1)",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_SequencePlayer_2.Pose"
+							]
+						},
+						{
+							"Name": "Pose",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"AnimGraphNode_BlendListByBool_1.BlendPose_1"
+							]
+						}
+					]
+				}
+			]
+		}
+	]
+}

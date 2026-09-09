@@ -1,0 +1,968 @@
+{
+	"Name": "BP_Basic_Movement",
+	"Path": "/Game/Particles/sA_Megapack_v1/sA_StylizedAttacksPack/BluePrints/BP_Basic_Movement.BP_Basic_Movement",
+	"ParentClass": "/Script/Engine.Character",
+	"GeneratedClass": "/Game/Particles/sA_Megapack_v1/sA_StylizedAttacksPack/BluePrints/BP_Basic_Movement.BP_Basic_Movement_C",
+	"Variables": [
+		{
+			"Name": "GunOffset",
+			"Guid": "E2BDFE694B8C12B9AA1A3EB39B2A70C6",
+			"Category": "Default",
+			"FriendlyName": "Gun Offset",
+			"DefaultValue": "",
+			"PinCategory": "struct",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": "/Script/CoreUObject.Vector"
+		},
+		{
+			"Name": "BaseTurnRate",
+			"Guid": "C51EF9D5400CA66F690F00B163EA51F2",
+			"Category": "Default",
+			"FriendlyName": "Base Turn Rate",
+			"DefaultValue": "",
+			"PinCategory": "float",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": ""
+		},
+		{
+			"Name": "BaseLookUpRate",
+			"Guid": "EB08B3BD47D94F527D49E887F7BC968E",
+			"Category": "Default",
+			"FriendlyName": "Base Look Up Rate",
+			"DefaultValue": "",
+			"PinCategory": "float",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": ""
+		},
+		{
+			"Name": "UsingMotionControllers?",
+			"Guid": "985B2D1940160111EDC939BB04D63C3A",
+			"Category": "Default",
+			"FriendlyName": "Using Motion Controllers?",
+			"DefaultValue": "",
+			"PinCategory": "bool",
+			"PinSubCategory": "None",
+			"PinSubCategoryObject": ""
+		}
+	],
+	"Components": [
+		{
+			"VariableName": "FirstPersonCamera",
+			"SCSNodeName": "SCS_Node_5"
+		},
+		{
+			"VariableName": "Sphere",
+			"SCSNodeName": "SCS_Node_1"
+		}
+	],
+	"Graphs": [
+		{
+			"Kind": "Ubergraph",
+			"Name": "EventGraph",
+			"Path": "/Game/Particles/sA_Megapack_v1/sA_StylizedAttacksPack/BluePrints/BP_Basic_Movement.BP_Basic_Movement:EventGraph",
+			"Nodes": [
+				{
+					"Name": "K2Node_CallFunction_1193",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Jump\nTarget is Character",
+					"Guid": "0D5502754E59C0B2D4920984325328A6",
+					"PosX": 1040,
+					"PosY": -896,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_InputAction_60.Pressed"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_InputAction_60",
+					"Class": "/Script/BlueprintGraph.K2Node_InputAction",
+					"Title": "InputAction Jump",
+					"Guid": "85B233A843C15F3ACC54228E364AB796",
+					"PosX": 800,
+					"PosY": -880,
+					"Pins": [
+						{
+							"Name": "Pressed",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_1193.execute"
+							]
+						},
+						{
+							"Name": "Released",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_9464.execute"
+							]
+						},
+						{
+							"Name": "Key",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_9755",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Add Controller Pitch Input\nTarget is Pawn",
+					"Guid": "B8E2DE3548B8812464BB7C9E9B398EC4",
+					"PosX": 1024,
+					"PosY": -1184,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_InputAxisEvent_174.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Val",
+							"Direction": "Input",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_InputAxisEvent_174.AxisValue"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_4678",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Add Controller Yaw Input\nTarget is Pawn",
+					"Guid": "77B670904DAE69A0468997A51F5A3BC2",
+					"PosX": 1008,
+					"PosY": -1344,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_InputAxisEvent_160.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Val",
+							"Direction": "Input",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_InputAxisEvent_160.AxisValue"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_7346",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Add Movement Input\nTarget is Pawn",
+					"Guid": "927116E740354700A7D6B29C67E2ECAD",
+					"PosX": 2272,
+					"PosY": -1312,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_InputAxisEvent_187.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "WorldDirection",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "0, 0, 0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Select_1.ReturnValue"
+							]
+						},
+						{
+							"Name": "ScaleValue",
+							"Direction": "Input",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "1.000000",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_InputAxisEvent_187.AxisValue"
+							]
+						},
+						{
+							"Name": "bForce",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_7445",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Add Movement Input\nTarget is Pawn",
+					"Guid": "249754714AB9077779FDC48BF9FBB457",
+					"PosX": 2336,
+					"PosY": -912,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_InputAxisEvent_197.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "WorldDirection",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "0, 0, 0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Select_0.ReturnValue"
+							]
+						},
+						{
+							"Name": "ScaleValue",
+							"Direction": "Input",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "1.000000",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_InputAxisEvent_197.AxisValue"
+							]
+						},
+						{
+							"Name": "bForce",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_InputAxisEvent_160",
+					"Class": "/Script/BlueprintGraph.K2Node_InputAxisEvent",
+					"Title": "InputAxis Turn",
+					"Guid": "BCECD07D4D9E93042DA209B2671ABF6C",
+					"PosX": 784,
+					"PosY": -1312,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_4678.execute"
+							]
+						},
+						{
+							"Name": "AxisValue",
+							"Direction": "Output",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_4678.Val"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_InputAxisEvent_174",
+					"Class": "/Script/BlueprintGraph.K2Node_InputAxisEvent",
+					"Title": "InputAxis LookUp",
+					"Guid": "69281C864A70D68C5FED4E8E46F1FB14",
+					"PosX": 784,
+					"PosY": -1152,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_9755.execute"
+							]
+						},
+						{
+							"Name": "AxisValue",
+							"Direction": "Output",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_9755.Val"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_InputAxisEvent_187",
+					"Class": "/Script/BlueprintGraph.K2Node_InputAxisEvent",
+					"Title": "InputAxis MoveForward",
+					"Guid": "046ECFF847093C2471FEADB382ABA5CD",
+					"PosX": 1552,
+					"PosY": -1312,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_7346.execute"
+							]
+						},
+						{
+							"Name": "AxisValue",
+							"Direction": "Output",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_7346.ScaleValue"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_InputAxisEvent_197",
+					"Class": "/Script/BlueprintGraph.K2Node_InputAxisEvent",
+					"Title": "InputAxis MoveRight",
+					"Guid": "52073E3D47C3054F2C1673B1096AE99E",
+					"PosX": 1568,
+					"PosY": -896,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_7445.execute"
+							]
+						},
+						{
+							"Name": "AxisValue",
+							"Direction": "Output",
+							"Category": "float",
+							"SubCategory": "None",
+							"DefaultValue": "0.0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_7445.ScaleValue"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_8029",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Actor Forward Vector\nTarget is Actor",
+					"Guid": "11CCF7954A274700BF46568D6F2CCEAC",
+					"PosX": 1680,
+					"PosY": -1072,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "0, 0, 0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Select_1.Option 0"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_8520",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Actor Right Vector\nTarget is Actor",
+					"Guid": "63CB78EA400BFE27CA414F9B1FCD3865",
+					"PosX": 1776,
+					"PosY": -704,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "0, 0, 0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Select_0.Option 0"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_9464",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Stop Jumping\nTarget is Character",
+					"Guid": "87A062894FD2D141EDA0A6924E2F6EF2",
+					"PosX": 1040,
+					"PosY": -784,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_InputAction_60.Released"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Select_1",
+					"Class": "/Script/BlueprintGraph.K2Node_Select",
+					"Title": "Select",
+					"Guid": "15D624D44D2DBDEFC9FC14B022E5DAF6",
+					"PosX": 1984,
+					"PosY": -1120,
+					"Pins": [
+						{
+							"Name": "Option 0",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "0, 0, 0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_8029.ReturnValue"
+							]
+						},
+						{
+							"Name": "Option 1",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "0, 0, 0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_791.ReturnValue"
+							]
+						},
+						{
+							"Name": "Index",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_971.ReturnValue"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_7346.WorldDirection"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_203",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get FirstPersonCamera",
+					"Guid": "DFCB259146E02B1827C882909248A247",
+					"PosX": 1472,
+					"PosY": -1104,
+					"Pins": [
+						{
+							"Name": "FirstPersonCamera",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_791.self"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_791",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Forward Vector\nTarget is Scene Component",
+					"Guid": "06E02C8F413541E52D85A98F8FAAC253",
+					"PosX": 1664,
+					"PosY": -1152,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_203.FirstPersonCamera"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "0, 0, 0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Select_1.Option 1"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_178",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get FirstPersonCamera",
+					"Guid": "B83DFF85450408E06E1C4EA1C8678150",
+					"PosX": 1584,
+					"PosY": -720,
+					"Pins": [
+						{
+							"Name": "FirstPersonCamera",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_792.self"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_792",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Right Vector\nTarget is Scene Component",
+					"Guid": "7FF2289F43BB08EE43AC2B8A7F14276A",
+					"PosX": 1776,
+					"PosY": -784,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_178.FirstPersonCamera"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "0, 0, 0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Select_0.Option 1"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Select_0",
+					"Class": "/Script/BlueprintGraph.K2Node_Select",
+					"Title": "Select",
+					"Guid": "01D23AC54B1D879C731828BDAC1D0AE3",
+					"PosX": 2064,
+					"PosY": -768,
+					"Pins": [
+						{
+							"Name": "Option 0",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "0, 0, 0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_8520.ReturnValue"
+							]
+						},
+						{
+							"Name": "Option 1",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "0, 0, 0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_792.ReturnValue"
+							]
+						},
+						{
+							"Name": "Index",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_243.ReturnValue"
+							]
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_7445.WorldDirection"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_971",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Is Head Mounted Display Enabled",
+					"Guid": "C3E871834665DB7AD28AB68DBB79AFC4",
+					"PosX": 1952,
+					"PosY": -992,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/HeadMountedDisplay.Default__HeadMountedDisplayFunctionLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Select_1.Index"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_243",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Is Head Mounted Display Enabled",
+					"Guid": "5ABA5DF54EDFC25FC1B461BFA6E54AE9",
+					"PosX": 2048,
+					"PosY": -624,
+					"Pins": [
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Script/HeadMountedDisplay.Default__HeadMountedDisplayFunctionLibrary",
+							"LinkedTo": []
+						},
+						{
+							"Name": "ReturnValue",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Select_0.Index"
+							]
+						}
+					]
+				}
+			]
+		},
+		{
+			"Kind": "Function",
+			"Name": "UserConstructionScript",
+			"Path": "/Game/Particles/sA_Megapack_v1/sA_StylizedAttacksPack/BluePrints/BP_Basic_Movement.BP_Basic_Movement:UserConstructionScript",
+			"Nodes": [
+				{
+					"Name": "K2Node_FunctionEntry_146",
+					"Class": "/Script/BlueprintGraph.K2Node_FunctionEntry",
+					"Title": "Construction Script",
+					"Guid": "D218421544A56A1E36A61B82D1EC46AF",
+					"PosX": 16,
+					"PosY": 80,
+					"Pins": [
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				}
+			]
+		}
+	]
+}
