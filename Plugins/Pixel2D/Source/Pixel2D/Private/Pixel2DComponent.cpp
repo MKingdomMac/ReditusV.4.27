@@ -56,6 +56,11 @@ void UPixel2DComponent::SetAnimInstance(UClass * NewAnimInstance)
 	}
 }
 
+void UPixel2DComponent::SetAnimInstanceClass(TSubclassOf<UPixel2DAnimInstance> NewAnimInstanceClass)
+{
+	SetAnimInstance(NewAnimInstanceClass.Get());
+}
+
 bool UPixel2DComponent::InitializeAnimScriptInstance()
 {
 	AnimScriptInstance = NewObject<UPixel2DAnimInstance>(this, SpriteAnimInstance);

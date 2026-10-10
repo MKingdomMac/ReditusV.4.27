@@ -52,6 +52,15 @@ public:
 public:
 	void SetAnimInstance(UClass * NewAnimInstance);
 
+	/**
+	 * Changes the Pixel2D Animation Blueprint used by this component at runtime.
+	 *
+	 * This Blueprint-facing wrapper keeps the existing native SetAnimInstance
+	 * API intact while constraining the input to Pixel2D animation instances.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Animation", meta = (DisplayName = "Set Pixel2D Anim Instance Class"))
+	void SetAnimInstanceClass(TSubclassOf<UPixel2DAnimInstance> NewAnimInstanceClass);
+
 	// Management function for if we want to do an evaluation but may already be running one
 	// bBlockOnTask - if true and we are currently performing parallel eval we wait for it to finish
 	// bPerformPostAnimEvaluation - if true and we are currently performing parallel eval we call PostAnimEvaluation too

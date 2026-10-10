@@ -10,9 +10,9 @@
 			"Category": "Default",
 			"FriendlyName": "Player Unit Class",
 			"DefaultValue": "",
-			"PinCategory": "class",
+			"PinCategory": "name",
 			"PinSubCategory": "None",
-			"PinSubCategoryObject": "/Game/TurnBasedJRPGTemplate/Blueprints/Units/PlayerUnits/BP_PlayerUnitBase.BP_PlayerUnitBase_C"
+			"PinSubCategoryObject": ""
 		}
 	],
 	"Components": [],
@@ -27,7 +27,7 @@
 					"Class": "/Script/BlueprintGraph.K2Node_CallDelegate",
 					"Title": "Call On Item Used",
 					"Guid": "82D362F34C25AE386FBE71AADDA4557E",
-					"PosX": 5248,
+					"PosX": 5600,
 					"PosY": 288,
 					"Pins": [
 						{
@@ -38,7 +38,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_SpawnActorFromClass_0.then"
+								"K2Node_CustomEvent_0.then"
 							]
 						},
 						{
@@ -114,81 +114,13 @@
 						{
 							"Name": "unitClass",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
-							"DefaultValue": "",
+							"DefaultValue": "None",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_ClassDynamicCast_0.Class"
+								"K2Node_VariableSet_2.playerUnitClass"
 							]
-						}
-					]
-				},
-				{
-					"Name": "K2Node_CallFunction_3",
-					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
-					"Title": "Delay",
-					"Guid": "4837A1BA4C34DBC79F76319017294214",
-					"PosX": 4496,
-					"PosY": 288,
-					"Pins": [
-						{
-							"Name": "execute",
-							"Direction": "Input",
-							"Category": "exec",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_CallFunction_17.then"
-							]
-						},
-						{
-							"Name": "then",
-							"Direction": "Output",
-							"Category": "exec",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_SpawnActorFromClass_0.execute"
-							]
-						},
-						{
-							"Name": "self",
-							"Direction": "Input",
-							"Category": "object",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "/Script/Engine.Default__KismetSystemLibrary",
-							"LinkedTo": []
-						},
-						{
-							"Name": "WorldContextObject",
-							"Direction": "Input",
-							"Category": "object",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": []
-						},
-						{
-							"Name": "Duration",
-							"Direction": "Input",
-							"Category": "float",
-							"SubCategory": "None",
-							"DefaultValue": "1.500000",
-							"DefaultObject": "",
-							"LinkedTo": []
-						},
-						{
-							"Name": "LatentInfo",
-							"Direction": "Input",
-							"Category": "struct",
-							"SubCategory": "None",
-							"DefaultValue": "(Linkage=-1,UUID=-1,ExecutionFunction=\"\",CallbackTarget=None)",
-							"DefaultObject": "",
-							"LinkedTo": []
 						}
 					]
 				},
@@ -217,18 +149,19 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_5.execute"
+								"K2Node_CallFunction_8.execute"
 							]
 						},
 						{
 							"Name": "playerUnit",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
-							"DefaultValue": "",
+							"DefaultValue": "None",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_Knot_1.InputPin"
+								"K2Node_Knot_1.InputPin",
+								"K2Node_CallFunction_8.CharacterID"
 							]
 						}
 					]
@@ -266,15 +199,15 @@
 				{
 					"Name": "K2Node_VariableGet_13",
 					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
-					"Title": "Get playerUnits",
+					"Title": "Get PlayerUnitDataID",
 					"Guid": "D9B0F4FC45E9D6DD55CF30A961648B65",
 					"PosX": 514,
 					"PosY": 1268,
 					"Pins": [
 						{
-							"Name": "playerUnits",
+							"Name": "PlayerUnitDataID",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -315,18 +248,18 @@
 						{
 							"Name": "TargetMap",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_VariableGet_13.playerUnits"
+								"K2Node_VariableGet_13.PlayerUnitDataID"
 							]
 						},
 						{
 							"Name": "Key",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -342,8 +275,8 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_5.playerUnitData",
-								"K2Node_Knot_7.InputPin"
+								"K2Node_Knot_7.InputPin",
+								"K2Node_CallFunction_8.playerUnitData"
 							]
 						},
 						{
@@ -373,7 +306,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_5.then"
+								"K2Node_CallFunction_8.then"
 							]
 						},
 						{
@@ -423,98 +356,6 @@
 					]
 				},
 				{
-					"Name": "K2Node_CallFunction_5",
-					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
-					"Title": "Get Player Unit Stats from Data",
-					"Guid": "7142E63E4495B11D61B7EB9ADB28662D",
-					"PosX": 1058,
-					"PosY": 1124,
-					"Pins": [
-						{
-							"Name": "execute",
-							"Direction": "Input",
-							"Category": "exec",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_Event_0.then"
-							]
-						},
-						{
-							"Name": "then",
-							"Direction": "Output",
-							"Category": "exec",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_SetFieldsInStruct_0.execute"
-							]
-						},
-						{
-							"Name": "self",
-							"Direction": "Input",
-							"Category": "object",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "/Game/TurnBasedJRPGTemplate/Blueprints/Controllers/BP_JRPGFunctionLibrary.Default__BP_JRPGFunctionLibrary_C",
-							"LinkedTo": []
-						},
-						{
-							"Name": "playerUnit",
-							"Direction": "Input",
-							"Category": "class",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_Knot_0.OutputPin"
-							]
-						},
-						{
-							"Name": "playerUnitData",
-							"Direction": "Input",
-							"Category": "struct",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_CallFunction_1.Value"
-							]
-						},
-						{
-							"Name": "__WorldContext",
-							"Direction": "Input",
-							"Category": "object",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": []
-						},
-						{
-							"Name": "playerUnitStats",
-							"Direction": "Output",
-							"Category": "struct",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_BreakStruct_0.S_UnitStats"
-							]
-						},
-						{
-							"Name": "level",
-							"Direction": "Output",
-							"Category": "int",
-							"SubCategory": "None",
-							"DefaultValue": "0",
-							"DefaultObject": "",
-							"LinkedTo": []
-						}
-					]
-				},
-				{
 					"Name": "K2Node_Knot_0",
 					"Class": "/Script/BlueprintGraph.K2Node_Knot",
 					"Title": "Reroute Node",
@@ -525,7 +366,7 @@
 						{
 							"Name": "InputPin",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -536,12 +377,11 @@
 						{
 							"Name": "OutputPin",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_5.playerUnit",
 								"K2Node_Knot_3.InputPin"
 							]
 						}
@@ -558,7 +398,7 @@
 						{
 							"Name": "InputPin",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -569,7 +409,7 @@
 						{
 							"Name": "OutputPin",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -596,7 +436,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_5.playerUnitStats"
+								"K2Node_CallFunction_8.playerUnitStats"
 							]
 						},
 						{
@@ -612,6 +452,24 @@
 						},
 						{
 							"Name": "maxMP_4_402F570E47A131E33E462B9D0D778331",
+							"Direction": "Output",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Attack_56_24D8527844E2DFB657716C9F16A4AE21",
+							"Direction": "Output",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "MagicalAttack_57_C0C7731143A09315B418E7876A1F2F19",
 							"Direction": "Output",
 							"Category": "int",
 							"SubCategory": "None",
@@ -681,15 +539,15 @@
 				{
 					"Name": "K2Node_VariableGet_19",
 					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
-					"Title": "Get playerUnits",
+					"Title": "Get PlayerUnitDataID",
 					"Guid": "02097BC14447C8EC289E768CE1F08A37",
 					"PosX": 1968,
 					"PosY": 1344,
 					"Pins": [
 						{
-							"Name": "playerUnits",
+							"Name": "PlayerUnitDataID",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -752,18 +610,18 @@
 						{
 							"Name": "TargetMap",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_VariableGet_19.playerUnits"
+								"K2Node_VariableGet_19.PlayerUnitDataID"
 							]
 						},
 						{
 							"Name": "Key",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -795,7 +653,7 @@
 						{
 							"Name": "InputPin",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -806,7 +664,7 @@
 						{
 							"Name": "OutputPin",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -929,50 +787,9 @@
 					]
 				},
 				{
-					"Name": "K2Node_ClassDynamicCast_0",
-					"Class": "/Script/BlueprintGraph.K2Node_ClassDynamicCast",
-					"Title": "Cast To BP_PlayerUnitBase Class",
-					"Guid": "B844F2DA4B29B47EEEC1BA8C04C01548",
-					"PosX": 256,
-					"PosY": 128,
-					"Pins": [
-						{
-							"Name": "Class",
-							"Direction": "Input",
-							"Category": "class",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_Event_4.unitClass"
-							]
-						},
-						{
-							"Name": "AsBP Player Unit Base",
-							"Direction": "Output",
-							"Category": "class",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_VariableSet_2.playerUnitClass"
-							]
-						},
-						{
-							"Name": "bSuccess",
-							"Direction": "Output",
-							"Category": "bool",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": []
-						}
-					]
-				},
-				{
 					"Name": "K2Node_SpawnActorFromClass_1",
 					"Class": "/Script/BlueprintGraph.K2Node_SpawnActorFromClass",
-					"Title": "SpawnActor",
+					"Title": "SpawnActor BP Player Unit Base",
 					"Guid": "FD2451A642786F2498E2948B09012FE0",
 					"PosX": 1712,
 					"PosY": 288,
@@ -985,7 +802,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_11.then"
+								"K2Node_IfThenElse_1.then"
 							]
 						},
 						{
@@ -1005,10 +822,8 @@
 							"Category": "class",
 							"SubCategory": "None",
 							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_VariableGet_21.playerUnitClass"
-							]
+							"DefaultObject": "/Game/TurnBasedJRPGTemplate/Blueprints/Units/PlayerUnits/BP_PlayerUnitBase.BP_PlayerUnitBase_C",
+							"LinkedTo": []
 						},
 						{
 							"Name": "ReturnValue",
@@ -1051,6 +866,17 @@
 							"LinkedTo": []
 						},
 						{
+							"Name": "CharacterID",
+							"Direction": "Input",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "None",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_21.playerUnitClass"
+							]
+						},
+						{
 							"Name": "level",
 							"Direction": "Input",
 							"Category": "int",
@@ -1058,7 +884,7 @@
 							"DefaultValue": "0",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_11.level"
+								"K2Node_CallFunction_23.level"
 							]
 						},
 						{
@@ -1125,15 +951,15 @@
 				{
 					"Name": "K2Node_VariableGet_33",
 					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
-					"Title": "Get playerUnits",
+					"Title": "Get PlayerUnitDataID",
 					"Guid": "A7B38D0048D4E30F6B4EDD8C558A6BA6",
 					"PosX": 448,
 					"PosY": 472,
 					"Pins": [
 						{
-							"Name": "playerUnits",
+							"Name": "PlayerUnitDataID",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -1174,18 +1000,18 @@
 						{
 							"Name": "TargetMap",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_VariableGet_33.playerUnits"
+								"K2Node_VariableGet_33.PlayerUnitDataID"
 							]
 						},
 						{
 							"Name": "Key",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -1201,7 +1027,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_11.playerUnitData"
+								"K2Node_CallFunction_23.playerUnitData"
 							]
 						},
 						{
@@ -1261,8 +1087,8 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_VariableGet_20.self",
-								"K2Node_Knot_2.InputPin"
+								"K2Node_Knot_2.InputPin",
+								"K2Node_VariableGet_30.self"
 							]
 						},
 						{
@@ -1429,8 +1255,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_VariableGet_9.self",
-								"K2Node_CallFunction_0.self"
+								"K2Node_Knot_20.InputPin"
 							]
 						},
 						{
@@ -1494,7 +1319,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_8.self"
+								"K2Node_CallFunction_19.self"
 							]
 						},
 						{
@@ -1511,7 +1336,7 @@
 					]
 				},
 				{
-					"Name": "K2Node_CallFunction_8",
+					"Name": "K2Node_CallFunction_19",
 					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
 					"Title": "Display Unit UI\nTarget is BP Player Unit List UI",
 					"Guid": "509542AC4170DB26D937869692240AC2",
@@ -1526,7 +1351,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_0.then"
+								"K2Node_CallFunction_7.then"
 							]
 						},
 						{
@@ -1576,92 +1401,6 @@
 					]
 				},
 				{
-					"Name": "K2Node_VariableGet_9",
-					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
-					"Title": "Get deadPlayerUnits",
-					"Guid": "47F2831C4F58A60961F80F826A638657",
-					"PosX": 3639,
-					"PosY": 656,
-					"Pins": [
-						{
-							"Name": "deadPlayerUnits",
-							"Direction": "Output",
-							"Category": "class",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_CallFunction_10.TargetMap"
-							]
-						},
-						{
-							"Name": "self",
-							"Direction": "Input",
-							"Category": "object",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_VariableGet_15.currentBattle"
-							]
-						}
-					]
-				},
-				{
-					"Name": "K2Node_CallFunction_0",
-					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
-					"Title": "Init Player Unit\nTarget is BP Battle Base",
-					"Guid": "468DDD8044FE4AE2E1E287A3A5DD51FD",
-					"PosX": 2928,
-					"PosY": 272,
-					"Pins": [
-						{
-							"Name": "execute",
-							"Direction": "Input",
-							"Category": "exec",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_CallFunction_7.then"
-							]
-						},
-						{
-							"Name": "then",
-							"Direction": "Output",
-							"Category": "exec",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_CallFunction_8.execute"
-							]
-						},
-						{
-							"Name": "self",
-							"Direction": "Input",
-							"Category": "object",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_VariableGet_15.currentBattle"
-							]
-						},
-						{
-							"Name": "playerUnit",
-							"Direction": "Input",
-							"Category": "object",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_Knot_9.OutputPin"
-							]
-						}
-					]
-				},
-				{
 					"Name": "K2Node_VariableGet_3",
 					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
 					"Title": "Get jRPGPlayerController",
@@ -1694,15 +1433,15 @@
 				{
 					"Name": "K2Node_VariableGet_4",
 					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
-					"Title": "Get playerUnits",
+					"Title": "Get PlayerUnitDataID",
 					"Guid": "A85622C844B93D5CAE3221AE252ACF7C",
 					"PosX": 1696,
 					"PosY": 720,
 					"Pins": [
 						{
-							"Name": "playerUnits",
+							"Name": "PlayerUnitDataID",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -1743,18 +1482,18 @@
 						{
 							"Name": "TargetMap",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_VariableGet_4.playerUnits"
+								"K2Node_VariableGet_4.PlayerUnitDataID"
 							]
 						},
 						{
 							"Name": "Key",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -1889,16 +1628,7 @@
 							"LinkedTo": []
 						},
 						{
-							"Name": "minAttack_14_0D64A0224152A597434ECDAF6DFC9964",
-							"Direction": "Output",
-							"Category": "int",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": []
-						},
-						{
-							"Name": "maxAttack_15_24D8527844E2DFB657716C9F16A4AE21",
+							"Name": "Attack_56_24D8527844E2DFB657716C9F16A4AE21",
 							"Direction": "Output",
 							"Category": "int",
 							"SubCategory": "None",
@@ -1934,16 +1664,7 @@
 							"LinkedTo": []
 						},
 						{
-							"Name": "minMagicalAttack_19_B7FFC20E493C01CDDDA24CB865989B2C",
-							"Direction": "Output",
-							"Category": "int",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": []
-						},
-						{
-							"Name": "maxMagicalAttack_24_C0C7731143A09315B418E7876A1F2F19",
+							"Name": "MagicalAttack_57_C0C7731143A09315B418E7876A1F2F19",
 							"Direction": "Output",
 							"Category": "int",
 							"SubCategory": "None",
@@ -2025,7 +1746,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_0.execute"
+								"K2Node_CallFunction_19.execute"
 							]
 						},
 						{
@@ -2040,18 +1761,18 @@
 						{
 							"Name": "TargetMap",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_VariableGet_2.playerUnits"
+								"K2Node_VariableGet_2.PlayerUnitDataID"
 							]
 						},
 						{
 							"Name": "Key",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -2105,15 +1826,15 @@
 				{
 					"Name": "K2Node_VariableGet_2",
 					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
-					"Title": "Get playerUnits",
+					"Title": "Get PlayerUnitDataID",
 					"Guid": "5D6566FF4254738FE301CCBE99DC7419",
 					"PosX": 2528,
 					"PosY": 656,
 					"Pins": [
 						{
-							"Name": "playerUnits",
+							"Name": "PlayerUnitDataID",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -2130,38 +1851,6 @@
 							"DefaultObject": "",
 							"LinkedTo": [
 								"K2Node_VariableGet_1.jRPGPlayerController"
-							]
-						}
-					]
-				},
-				{
-					"Name": "K2Node_VariableGet_20",
-					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
-					"Title": "Get deadPlayerUnits",
-					"Guid": "1266EBC2466212855ADEF8845E69452F",
-					"PosX": 1040,
-					"PosY": 521,
-					"Pins": [
-						{
-							"Name": "deadPlayerUnits",
-							"Direction": "Output",
-							"Category": "class",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_CallFunction_13.TargetMap"
-							]
-						},
-						{
-							"Name": "self",
-							"Direction": "Input",
-							"Category": "object",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_VariableGet_5.currentBattle"
 							]
 						}
 					]
@@ -2186,18 +1875,18 @@
 						{
 							"Name": "TargetMap",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_VariableGet_20.deadPlayerUnits"
+								"K2Node_VariableGet_30.DeadCharactersByID"
 							]
 						},
 						{
 							"Name": "Key",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -2269,18 +1958,18 @@
 						{
 							"Name": "TargetMap",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_VariableGet_9.deadPlayerUnits"
+								"K2Node_VariableGet_36.DeadCharactersByID"
 							]
 						},
 						{
 							"Name": "Key",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
@@ -2332,23 +2021,23 @@
 						{
 							"Name": "playerUnitClass",
 							"Direction": "Input",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
-							"DefaultValue": "",
+							"DefaultValue": "None",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_ClassDynamicCast_0.AsBP Player Unit Base"
+								"K2Node_Event_4.unitClass"
 							]
 						},
 						{
 							"Name": "Output_Get",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
-							"DefaultValue": "",
+							"DefaultValue": "None",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_11.playerUnit"
+								"K2Node_CallFunction_23.CharacterID"
 							]
 						},
 						{
@@ -2373,12 +2062,12 @@
 						{
 							"Name": "playerUnitClass",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
-							"DefaultValue": "",
+							"DefaultValue": "None",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_SpawnActorFromClass_1.Class"
+								"K2Node_SpawnActorFromClass_1.CharacterID"
 							]
 						},
 						{
@@ -2426,100 +2115,6 @@
 					]
 				},
 				{
-					"Name": "K2Node_CallFunction_11",
-					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
-					"Title": "Get Player Unit Stats from Data",
-					"Guid": "C7060178467B0C72D3333FA668D64469",
-					"PosX": 1264,
-					"PosY": 288,
-					"Pins": [
-						{
-							"Name": "execute",
-							"Direction": "Input",
-							"Category": "exec",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_CallFunction_12.then"
-							]
-						},
-						{
-							"Name": "then",
-							"Direction": "Output",
-							"Category": "exec",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_SpawnActorFromClass_1.execute"
-							]
-						},
-						{
-							"Name": "self",
-							"Direction": "Input",
-							"Category": "object",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "/Game/TurnBasedJRPGTemplate/Blueprints/Controllers/BP_JRPGFunctionLibrary.Default__BP_JRPGFunctionLibrary_C",
-							"LinkedTo": []
-						},
-						{
-							"Name": "playerUnit",
-							"Direction": "Input",
-							"Category": "class",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_VariableSet_2.Output_Get"
-							]
-						},
-						{
-							"Name": "playerUnitData",
-							"Direction": "Input",
-							"Category": "struct",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_CallFunction_43.Value"
-							]
-						},
-						{
-							"Name": "__WorldContext",
-							"Direction": "Input",
-							"Category": "object",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": []
-						},
-						{
-							"Name": "playerUnitStats",
-							"Direction": "Output",
-							"Category": "struct",
-							"SubCategory": "None",
-							"DefaultValue": "",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_Knot_5.InputPin"
-							]
-						},
-						{
-							"Name": "level",
-							"Direction": "Output",
-							"Category": "int",
-							"SubCategory": "None",
-							"DefaultValue": "0",
-							"DefaultObject": "",
-							"LinkedTo": [
-								"K2Node_SpawnActorFromClass_1.level"
-							]
-						}
-					]
-				},
-				{
 					"Name": "K2Node_VariableGet_22",
 					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
 					"Title": "Get playerUnitClass",
@@ -2530,9 +2125,9 @@
 						{
 							"Name": "playerUnitClass",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
-							"DefaultValue": "",
+							"DefaultValue": "None",
 							"DefaultObject": "",
 							"LinkedTo": [
 								"K2Node_CallFunction_13.Key"
@@ -2560,9 +2155,9 @@
 						{
 							"Name": "playerUnitClass",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
-							"DefaultValue": "",
+							"DefaultValue": "None",
 							"DefaultObject": "",
 							"LinkedTo": [
 								"K2Node_CallFunction_43.Key"
@@ -2628,7 +2223,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_11.playerUnitStats"
+								"K2Node_CallFunction_23.playerUnitStats"
 							]
 						},
 						{
@@ -2655,9 +2250,9 @@
 						{
 							"Name": "playerUnitClass",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
-							"DefaultValue": "",
+							"DefaultValue": "None",
 							"DefaultObject": "",
 							"LinkedTo": [
 								"K2Node_CallFunction_7.Key"
@@ -2685,9 +2280,9 @@
 						{
 							"Name": "playerUnitClass",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
-							"DefaultValue": "",
+							"DefaultValue": "None",
 							"DefaultObject": "",
 							"LinkedTo": [
 								"K2Node_CallFunction_4.Key"
@@ -2731,7 +2326,6 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_0.playerUnit",
 								"K2Node_Knot_10.InputPin",
 								"K2Node_CallDelegate_2.self"
 							]
@@ -2765,7 +2359,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_8.playerUnit",
+								"K2Node_CallFunction_19.playerUnit",
 								"K2Node_Knot_8.InputPin",
 								"K2Node_VariableGet_39.self"
 							]
@@ -2788,7 +2382,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_8.battleController"
+								"K2Node_CallFunction_19.battleController"
 							]
 						},
 						{
@@ -2813,9 +2407,9 @@
 						{
 							"Name": "playerUnitClass",
 							"Direction": "Output",
-							"Category": "class",
+							"Category": "name",
 							"SubCategory": "None",
-							"DefaultValue": "",
+							"DefaultValue": "None",
 							"DefaultObject": "",
 							"LinkedTo": [
 								"K2Node_CallFunction_10.Key"
@@ -3149,7 +2743,7 @@
 					"Class": "/Script/BlueprintGraph.K2Node_Knot",
 					"Title": "Reroute Node",
 					"Guid": "012EE3A541306AEC070F57A72DEFBB36",
-					"PosX": 864,
+					"PosX": 464,
 					"PosY": 176,
 					"Pins": [
 						{
@@ -3214,7 +2808,7 @@
 					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
 					"Title": "Get Socket Transform\nTarget is Scene Component",
 					"Guid": "7B290A6B4E23FA453144258A8581A559",
-					"PosX": 4800,
+					"PosX": 4544,
 					"PosY": 144,
 					"Pins": [
 						{
@@ -3264,7 +2858,7 @@
 					"Class": "/Script/BlueprintGraph.K2Node_SpawnActorFromClass",
 					"Title": "SpawnActor BP Revive Effect 1",
 					"Guid": "D4FCCDA447BE51A46B623B87485ACAB0",
-					"PosX": 4800,
+					"PosX": 4544,
 					"PosY": 288,
 					"Pins": [
 						{
@@ -3275,7 +2869,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_3.then"
+								"K2Node_CallFunction_17.then"
 							]
 						},
 						{
@@ -3286,7 +2880,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallDelegate_1.execute"
+								"K2Node_AddDelegate_0.execute"
 							]
 						},
 						{
@@ -3305,7 +2899,9 @@
 							"SubCategory": "None",
 							"DefaultValue": "",
 							"DefaultObject": "",
-							"LinkedTo": []
+							"LinkedTo": [
+								"K2Node_AddDelegate_0.self"
+							]
 						},
 						{
 							"Name": "SpawnTransform",
@@ -3374,7 +2970,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_3.execute"
+								"K2Node_SpawnActorFromClass_0.execute"
 							]
 						},
 						{
@@ -4149,8 +3745,8 @@
 					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
 					"Title": "Get Pixel2D",
 					"Guid": "C3948D2646B8FB95F7D8B9AC1973A7C5",
-					"PosX": 928,
-					"PosY": 208,
+					"PosX": 752,
+					"PosY": 224,
 					"Pins": [
 						{
 							"Name": "Pixel2D",
@@ -4203,7 +3799,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_11.execute"
+								"K2Node_CallFunction_23.execute"
 							]
 						},
 						{
@@ -4452,8 +4048,8 @@
 					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
 					"Title": "Get currentBattle",
 					"Guid": "7ABFF38249B78A440294F6B6493A322C",
-					"PosX": 5504,
-					"PosY": 352,
+					"PosX": 5280,
+					"PosY": 496,
 					"Pins": [
 						{
 							"Name": "currentBattle",
@@ -4495,7 +4091,7 @@
 							"DefaultValue": "",
 							"DefaultObject": "",
 							"LinkedTo": [
-								"K2Node_CallFunction_8.then"
+								"K2Node_CallFunction_19.then"
 							]
 						},
 						{
@@ -4649,6 +4245,444 @@
 							"DefaultObject": "",
 							"LinkedTo": [
 								"K2Node_VariableGet_35.currentBattle"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_23",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Player Unit Stats from ID",
+					"Guid": "05E32387484D73125766CA8DFCB0DE61",
+					"PosX": 1040,
+					"PosY": 288,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_12.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_1.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Game/TurnBasedJRPGTemplate/Blueprints/Controllers/BP_JRPGFunctionLibrary.Default__BP_JRPGFunctionLibrary_C",
+							"LinkedTo": []
+						},
+						{
+							"Name": "CharacterID",
+							"Direction": "Input",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "None",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableSet_2.Output_Get"
+							]
+						},
+						{
+							"Name": "playerUnitData",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_43.Value"
+							]
+						},
+						{
+							"Name": "__WorldContext",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "playerUnitStats",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_5.InputPin"
+							]
+						},
+						{
+							"Name": "level",
+							"Direction": "Output",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "0",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_SpawnActorFromClass_1.level"
+							]
+						},
+						{
+							"Name": "Found",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_IfThenElse_1.Condition"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_IfThenElse_1",
+					"Class": "/Script/BlueprintGraph.K2Node_IfThenElse",
+					"Title": "Branch",
+					"Guid": "76BDC8C34A4C707F91FAD0AC10AA68DB",
+					"PosX": 1392,
+					"PosY": 288,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_23.then"
+							]
+						},
+						{
+							"Name": "Condition",
+							"Direction": "Input",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "true",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_23.Found"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_SpawnActorFromClass_1.execute"
+							]
+						},
+						{
+							"Name": "else",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_30",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get DeadCharactersByID",
+					"Guid": "752AEF2745C78C602D2E20A419F6A7E5",
+					"PosX": 1008,
+					"PosY": 480,
+					"Pins": [
+						{
+							"Name": "DeadCharactersByID",
+							"Direction": "Output",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_13.TargetMap"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_5.currentBattle"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_Knot_20",
+					"Class": "/Script/BlueprintGraph.K2Node_Knot",
+					"Title": "Reroute Node",
+					"Guid": "243C248B432CD1DE4C0171B100D11613",
+					"PosX": 3552,
+					"PosY": 656,
+					"Pins": [
+						{
+							"Name": "InputPin",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_15.currentBattle"
+							]
+						},
+						{
+							"Name": "OutputPin",
+							"Direction": "Output",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_VariableGet_36.self"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_VariableGet_36",
+					"Class": "/Script/BlueprintGraph.K2Node_VariableGet",
+					"Title": "Get DeadCharactersByID",
+					"Guid": "C39DB2F24631A2EC747B5B834DE927C4",
+					"PosX": 3712,
+					"PosY": 624,
+					"Pins": [
+						{
+							"Name": "DeadCharactersByID",
+							"Direction": "Output",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_10.TargetMap"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Knot_20.OutputPin"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CallFunction_8",
+					"Class": "/Script/BlueprintGraph.K2Node_CallFunction",
+					"Title": "Get Player Unit Stats from ID",
+					"Guid": "E9DAB4264DB9C47FE91C2A9A1E068F91",
+					"PosX": 1008,
+					"PosY": 1152,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Event_0.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_SetFieldsInStruct_0.execute"
+							]
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "/Game/TurnBasedJRPGTemplate/Blueprints/Controllers/BP_JRPGFunctionLibrary.Default__BP_JRPGFunctionLibrary_C",
+							"LinkedTo": []
+						},
+						{
+							"Name": "CharacterID",
+							"Direction": "Input",
+							"Category": "name",
+							"SubCategory": "None",
+							"DefaultValue": "None",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_Event_0.playerUnit"
+							]
+						},
+						{
+							"Name": "playerUnitData",
+							"Direction": "Input",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallFunction_1.Value"
+							]
+						},
+						{
+							"Name": "__WorldContext",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "playerUnitStats",
+							"Direction": "Output",
+							"Category": "struct",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_BreakStruct_0.S_UnitStats"
+							]
+						},
+						{
+							"Name": "level",
+							"Direction": "Output",
+							"Category": "int",
+							"SubCategory": "None",
+							"DefaultValue": "0",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "Found",
+							"Direction": "Output",
+							"Category": "bool",
+							"SubCategory": "None",
+							"DefaultValue": "false",
+							"DefaultObject": "",
+							"LinkedTo": []
+						}
+					]
+				},
+				{
+					"Name": "K2Node_AddDelegate_0",
+					"Class": "/Script/BlueprintGraph.K2Node_AddDelegate",
+					"Title": "Bind Event to Particle Destroyed",
+					"Guid": "9BFB7CF2400CFC3D5E2CC98E942314A1",
+					"PosX": 4912,
+					"PosY": 288,
+					"Pins": [
+						{
+							"Name": "execute",
+							"Direction": "Input",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_SpawnActorFromClass_0.then"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": []
+						},
+						{
+							"Name": "self",
+							"Direction": "Input",
+							"Category": "object",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_SpawnActorFromClass_0.ReturnValue"
+							]
+						},
+						{
+							"Name": "Delegate",
+							"Direction": "Input",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CustomEvent_0.OutputDelegate"
+							]
+						}
+					]
+				},
+				{
+					"Name": "K2Node_CustomEvent_0",
+					"Class": "/Script/BlueprintGraph.K2Node_CustomEvent",
+					"Title": " ReviveFinished\nCustom Event",
+					"Guid": "FB96248A417DD0631C777FBD9469F9A1",
+					"PosX": 4912,
+					"PosY": 432,
+					"Pins": [
+						{
+							"Name": "OutputDelegate",
+							"Direction": "Output",
+							"Category": "delegate",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_AddDelegate_0.Delegate"
+							]
+						},
+						{
+							"Name": "then",
+							"Direction": "Output",
+							"Category": "exec",
+							"SubCategory": "None",
+							"DefaultValue": "",
+							"DefaultObject": "",
+							"LinkedTo": [
+								"K2Node_CallDelegate_1.execute"
 							]
 						}
 					]
