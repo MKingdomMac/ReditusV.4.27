@@ -108,18 +108,24 @@ enum class EReditusEnemyPhaseSkillMode : uint8
 USTRUCT(BlueprintType)
 struct CHAPTER1REDITUS_API FReditusEnemySkillEntry
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public:
+    // DT_Skills row ID. Named entries may use legacy or generic skill execution.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skill",
+        meta = (ToolTip = "DT_Skills row name. None is a normal attack only when LegacySkillClass is also empty."))
+    FName SkillID = NAME_None;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skill")
-	FName SkillID = NAME_None;
+    // Retained for older readers and existing serialized enemy rows.
+    // The new ID path takes its class from DT_Skills.LegacySkill.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skill",
+        meta = (ToolTip = "Compatibility class path. The new SkillID path uses LegacySkill from the selected DT_Skills row."))
+    FSoftClassPath LegacySkillClass;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skill")
-	FSoftClassPath LegacySkillClass;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skill", meta = (ClampMin = "0.0"))
-	float Weight = 1.0f;
+    // Relative weight, not a percentage. Non-positive weights are not selected.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skill",
+        meta = (ClampMin = "0.0", ToolTip = "Relative selection weight. The new selector excludes values at or below zero."))
+    float Weight = 1.0f;
 };
 
 USTRUCT(BlueprintType)
