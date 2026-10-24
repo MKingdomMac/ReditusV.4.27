@@ -393,4 +393,10 @@ public:
 		meta = (DisplayName = "Pixel2D Z Offset", Units = "cm",
 			ToolTip = "Vertical offset from the Pixel2D component's authored relative Z. Positive raises the visual; negative lowers it. Apply during enemy initialization."))
 	float Pixel2DZOffset = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Projectile Sockets")
+	FName ProjectileSocketName1 = NAME_None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Projectile Sockets")
+	FName ProjectileSocketName2 = NAME_None;
 };
