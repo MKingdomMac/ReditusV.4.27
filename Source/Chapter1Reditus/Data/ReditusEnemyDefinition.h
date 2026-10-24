@@ -3,8 +3,12 @@
 #include "CoreMinimal.h"
 #include "Engine/DataTable.h"
 #include "UObject/SoftObjectPath.h"
+#include "Templates/SubclassOf.h"
 #include "ReditusUnitStats.h"
 #include "ReditusEnemyDefinition.generated.h"
+
+class UPixel2DAnimInstance;
+class UPaperZDAnimInstance;
 
 /*
  * STATIC enemy definition data.
@@ -366,6 +370,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
 	FName AnimationProfileID = NAME_None;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
+	// Match the typed animation Class References in S_PartyMemberDefinitions.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation",
+		meta = (EditCondition = "AnimationSystem == EReditusAnimationSystem::Pixel2D",
+			EditConditionHides, AllowAbstract = "false"))
+	TSubclassOf<UPixel2DAnimInstance> Pixel2DAnimClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation",
+		meta = (EditCondition = "AnimationSystem == EReditusAnimationSystem::PaperZD",
+			EditConditionHides, AllowAbstract = "false"))
+	TSubclassOf<UPaperZDAnimInstance> PaperZDAnimClass;
+
+	// Keep the original name/type for saved-row and Blueprint compatibility.
+	// No EditAnywhere: the row editor uses the two typed fields above instead.
+	// The apply helper accepts this old value only if its animation type matches.
+	UPROPERTY(BlueprintReadWrite, Category = "Animation|Compatibility",
+		meta = (ToolTip = "Compatibility animation path retained from existing rows. Use Pixel2DAnimClass or PaperZDAnimClass for new edits."))
 	FSoftClassPath LegacyBattleAnimationBlueprintClass;
+
+	// Vertical visual offset applied to the Pixel2D component during initialization.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation",
+		meta = (DisplayName = "Pixel2D Z Offset", Units = "cm",
+			ToolTip = "Vertical offset from the Pixel2D component's authored relative Z. Positive raises the visual; negative lowers it. Apply during enemy initialization."))
+	float Pixel2DZOffset = 0.0f;
 };

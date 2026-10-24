@@ -1,0 +1,46 @@
+In ReditusEnemyDefinition.h:
+
+1. Add this include BEFORE ReditusEnemyDefinition.generated.h:
+
+#include "Templates/SubclassOf.h"
+
+2. Add these forward declarations AFTER ReditusEnemyDefinition.generated.h
+   and before the UENUM/USTRUCT declarations:
+
+class UPixel2DAnimInstance;
+class UPaperZDAnimInstance;
+
+3. Replace ONLY FReditusEnemyDefinition's ANIMATION section with:
+
+	// ============================================================
+	// ANIMATION
+	// ============================================================
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
+	EReditusAnimationSystem AnimationSystem = EReditusAnimationSystem::Existing;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
+	bool bUsingPaperZD = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
+	FName AnimationProfileID = NAME_None;
+
+	// Match the typed animation Class References in S_PartyMemberDefinitions.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation",
+		meta = (EditCondition = "AnimationSystem == EReditusAnimationSystem::Pixel2D",
+			EditConditionHides, AllowAbstract = "false"))
+	TSubclassOf<UPixel2DAnimInstance> Pixel2DAnimClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation",
+		meta = (EditCondition = "AnimationSystem == EReditusAnimationSystem::PaperZD",
+			EditConditionHides, AllowAbstract = "false"))
+	TSubclassOf<UPaperZDAnimInstance> PaperZDAnimClass;
+
+	// Keep the original name/type for saved-row and Blueprint compatibility.
+	// No EditAnywhere: the row editor uses the two typed fields above instead.
+	// The apply helper accepts this old value only if its animation type matches.
+	UPROPERTY(BlueprintReadWrite, Category = "Animation|Compatibility",
+		meta = (ToolTip = "Compatibility animation path retained from existing rows. Use Pixel2DAnimClass or PaperZDAnimClass for new edits."))
+	FSoftClassPath LegacyBattleAnimationBlueprintClass;
+
+Keep the struct's final closing }; after this section.
