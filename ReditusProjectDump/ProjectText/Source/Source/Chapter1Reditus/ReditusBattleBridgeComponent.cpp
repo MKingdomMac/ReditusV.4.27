@@ -110,7 +110,8 @@ FReditusDamageResult UReditusBattleBridgeComponent::CalculateDamage(
         return BattleSubsystem->CalculateDamage(Request);
     }
 
-    return FReditusDamageResult();
+    // Damage math is stateless and remains usable before subsystem availability.
+    return UReditusDamageCalculator::CalculateDamage(Request);
 }
 
 bool UReditusBattleBridgeComponent::DelayNextTurn(

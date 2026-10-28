@@ -32,11 +32,10 @@ namespace ReditusCombatTuning
 	// ATTACK RANDOMIZATION
 	// ============================================================
 
-	constexpr float PhysicalAttackRollMin = 0.90f;
-	constexpr float PhysicalAttackRollMax = 1.00f;
-
-	constexpr float MagicalAttackRollMin = 0.90f;
-	constexpr float MagicalAttackRollMax = 1.00f;
+	// Variance = Max(minimum, Round(base attack * percentage / 100)).
+	// Applies to Attack and MagicalAttack before skill power and defense.
+	constexpr int32 AttackRollVariancePercent = 10;
+	constexpr int32 MinimumAttackRollVariance = 5;
 
 	// ============================================================
 	// ELEMENTAL RESPONSE

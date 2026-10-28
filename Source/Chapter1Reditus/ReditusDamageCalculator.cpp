@@ -1,52 +1,15 @@
 #include "ReditusDamageCalculator.h"
+#include "ReditusCombatMath.h"
 #include "ReditusCombatTuning.h"
 
 int32 UReditusDamageCalculator::RollPhysicalAttack(int32 Attack)
 {
-	if (Attack <= 0)
-	{
-		return 0;
-	}
-
-	const float MinRoll = FMath::Min(
-		ReditusCombatTuning::PhysicalAttackRollMin,
-		ReditusCombatTuning::PhysicalAttackRollMax);
-
-	const float MaxRoll = FMath::Max(
-		ReditusCombatTuning::PhysicalAttackRollMin,
-		ReditusCombatTuning::PhysicalAttackRollMax);
-
-	return FMath::Max(
-		0,
-		FMath::RoundToInt(
-			static_cast<float>(Attack) *
-			FMath::FRandRange(MinRoll, MaxRoll)
-		)
-	);
+	return UReditusCombatMath::RollPhysicalAttack(Attack);
 }
 
 int32 UReditusDamageCalculator::RollMagicalAttack(int32 MagicalAttack)
 {
-	if (MagicalAttack <= 0)
-	{
-		return 0;
-	}
-
-	const float MinRoll = FMath::Min(
-		ReditusCombatTuning::MagicalAttackRollMin,
-		ReditusCombatTuning::MagicalAttackRollMax);
-
-	const float MaxRoll = FMath::Max(
-		ReditusCombatTuning::MagicalAttackRollMin,
-		ReditusCombatTuning::MagicalAttackRollMax);
-
-	return FMath::Max(
-		0,
-		FMath::RoundToInt(
-			static_cast<float>(MagicalAttack) *
-			FMath::FRandRange(MinRoll, MaxRoll)
-		)
-	);
+	return UReditusCombatMath::RollMagicalAttack(MagicalAttack);
 }
 
 EReditusElementResponse UReditusDamageCalculator::GetElementResponse(
