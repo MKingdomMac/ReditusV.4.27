@@ -363,6 +363,7 @@ UReditusBattleHUDWidget::FButtonView UReditusBattleHUDWidget::MakeButton(EReditu
         View.Detail = MakeText(FText::GetEmpty(),16);
         View.Detail->SetJustification(ETextJustify::Right);
         USizeBox* DetailSize = WidgetTree->ConstructWidget<USizeBox>();
+        View.DetailBox=DetailSize;
         DetailSize->SetMinDesiredWidth(28.f);
         DetailSize->AddChild(View.Detail);
         Contents->AddChildToHorizontalBox(DetailSize)->SetVerticalAlignment(VAlign_Center);
@@ -400,7 +401,35 @@ void UReditusBattleHUDWidget::BuildLayout()
     TargetName = MakeText(TargetLabel,25);
     UBorder* TargetFrame = MakeFrame(TargetName,FMargin(14.f,6.f));
     TargetFrame->SetVisibility(ESlateVisibility::HitTestInvisible);
-    Place(DesignCanvas,TargetFrame,16.f,16.f,600.f,55.f);
+    UCanvasPanelSlot* TargetPlacement=DesignCanvas->AddChildToCanvas(TargetFrame);
+    TargetPlacement->SetPosition(FVector2D(16.f,16.f));
+    TargetPlacement->SetAutoSize(true);
+
+    UHorizontalBox* ActionContent=WidgetTree->ConstructWidget<UHorizontalBox>();
+    ActionElement=WidgetTree->ConstructWidget<UImage>();
+    ActionElement->SetVisibility(ESlateVisibility::HitTestInvisible);
+    ActionElementBox=WidgetTree->ConstructWidget<USizeBox>();
+    ActionElementBox->SetWidthOverride(36.f);
+    ActionElementBox->SetHeightOverride(36.f);
+    UBorder* ActionIconFrame=WidgetTree->ConstructWidget<UBorder>();
+    ActionIconFrame->SetBrush(SilverFrameBrush);
+    ActionIconFrame->SetBrushColor(FLinearColor::White);
+    ActionIconFrame->SetPadding(FMargin(4.f));
+    ActionIconFrame->SetVisibility(ESlateVisibility::HitTestInvisible);
+    ActionIconFrame->AddChild(ActionElement);
+    ActionElementBox->AddChild(ActionIconFrame);
+    UHorizontalBoxSlot* ElementPlacement=ActionContent->AddChildToHorizontalBox(ActionElementBox);
+    ElementPlacement->SetVerticalAlignment(VAlign_Center);
+    ElementPlacement->SetPadding(FMargin(0.f,0.f,10.f,0.f));
+    ActionName=MakeText(FText::GetEmpty(),25);
+    ActionName->SetColorAndOpacity(FSlateColor(Gold));
+    ActionContent->AddChildToHorizontalBox(ActionName)->SetVerticalAlignment(VAlign_Center);
+    ActionFrame=MakeFrame(ActionContent,FMargin(14.f,6.f));
+    UCanvasPanelSlot* ActionPlacement=DesignCanvas->AddChildToCanvas(ActionFrame);
+    ActionPlacement->SetAnchors(FAnchors(0.5f,0.f));
+    ActionPlacement->SetAlignment(FVector2D(0.5f,0.f));
+    ActionPlacement->SetPosition(FVector2D(0.f,16.f));
+    ActionPlacement->SetAutoSize(true);
 
     FButtonView Speed = MakeButton(EReditusHUDCommand::CycleBattleSpeed,Text(TEXT("BATTLE SPEED 1x")));
     SpeedText = Speed.Label;
@@ -736,6 +765,22 @@ void UReditusBattleHUDWidget::SetTargetLabel(FText Label)
 
 void UReditusBattleHUDWidget::ClearTargetLabel() { SetTargetLabel(FText::GetEmpty()); }
 
+void UReditusBattleHUDWidget::SetActionAnnouncement(FText Label,const FSlateBrush& ElementIcon,bool bVisible)
+{
+    ActionLabel=Label;
+    ActionElementBrush=ElementIcon;
+    bActionVisible=bVisible && !Label.IsEmpty();
+    if (ActionName) ActionName->SetText(ActionLabel);
+    if (ActionElement) ActionElement->SetBrush(ActionElementBrush);
+    if (ActionElementBox) ActionElementBox->SetVisibility(ActionElementBrush.GetResourceObject() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+    if (ActionFrame) ActionFrame->SetVisibility(bActionVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+}
+
+void UReditusBattleHUDWidget::ClearActionAnnouncement()
+{
+    SetActionAnnouncement(FText::GetEmpty(),FSlateBrush(),false);
+}
+
 void UReditusBattleHUDWidget::SetDisplayedBattleSpeed(float Multiplier)
 {
     DisplayedSpeed = FMath::IsFinite(Multiplier) && Multiplier > 0.f ? Multiplier : 1.f;
@@ -915,6 +960,7 @@ bool UReditusBattleHUDWidget::RequestCommand(EReditusHUDCommand Command)
     }
     LastInputStatus=FString::Printf(TEXT("%s: %s (%s)"),Routed ? TEXT("Dispatched") : TEXT("No route"),*CommandLabel(Command).ToString(),*GetNameSafe(GetSelectedUnit()));
     if (bLogInput) UE_LOG(LogTemp,Log,TEXT("Battle HUD: %s"),*LastInputStatus);
+    if (Routed && Command==EReditusHUDCommand::Attack) PlayConfirmCue();
     return Routed;
 }
 
@@ -1019,6 +1065,14 @@ void UReditusBattleHUDWidget::PlayNavigationCue()
     if (NavigationSound) UGameplayStatics::PlaySound2D(this,NavigationSound,FMath::Clamp(NavigationSoundVolume,0.f,1.f));
 }
 
+void UReditusBattleHUDWidget::PlayConfirmCue()
+{
+    if (!bPlayConfirmSound || ConfirmSoundVolume<=0.f || bInputSuspended || !GetWorld() || !GetWorld()->IsGameWorld() ||
+        UGameplayStatics::IsGamePaused(this) || !GetOwningPlayer() || !GetOwningPlayer()->IsLocalController()) return;
+    if (!ConfirmSound) ConfirmSound=LoadObject<USoundBase>(nullptr,TEXT("/Game/Sounds/JrpgBlueprintSounds/CUE_Confirm.CUE_Confirm"));
+    if (ConfirmSound) UGameplayStatics::PlaySound2D(this,ConfirmSound,FMath::Clamp(ConfirmSoundVolume,0.f,1.f));
+}
+
 bool UReditusBattleHUDWidget::ChooseSelectedMenuEntry()
 {
     if (!CanChooseMenuEntry() || !MenuEntries.IsValidIndex(SelectedMenuIndex) || !MenuEntries[SelectedMenuIndex].bEnabled) return false;
@@ -1116,6 +1170,7 @@ void UReditusBattleHUDWidget::Refresh()
 {
     if (!DesignCanvas) return;
     SetTargetLabel(TargetLabel);
+    SetActionAnnouncement(ActionLabel,ActionElementBrush,bActionVisible);
     SetDisplayedBattleSpeed(DisplayedSpeed);
     for (int32 I=0; I<Cards.Num(); ++I)
     {
@@ -1226,6 +1281,7 @@ void UReditusBattleHUDWidget::RefreshMenu()
             View.Detail->SetText(Data.Detail);
             View.Detail->SetFont(bMatchLegacyListFonts && bHasLegacyListFonts ? LegacyListDetailFont : Font(ListTextSize));
         }
+        if (View.DetailBox) View.DetailBox->SetVisibility(Data.Detail.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
         if (View.Icon)
         {
             View.Icon->SetBrush(Data.Icon);

@@ -215,6 +215,18 @@ namespace
         return FText::GetEmpty();
     }
 
+    bool HasZeroMPCost(UDataTable* Table,FName ID)
+    {
+        if (!Table || !Table->GetRowStruct()) return false;
+        uint8* const* Row=Table->GetRowMap().Find(ID);
+        if (!Row) return false;
+        for (TFieldIterator<FProperty> It(Table->GetRowStruct()); It; ++It)
+            if (FIntProperty* Cost=CastField<FIntProperty>(*It))
+                if (Cost->GetName()==TEXT("MPCost") || Cost->GetName().StartsWith(TEXT("MPCost_")))
+                    return Cost->GetPropertyValue_InContainer(*Row)==0;
+        return false;
+    }
+
     bool ExecuteInputAction(AActor* Actor,FName Action,FKey Key)
     {
         if (!IsValid(Actor)) return false;
@@ -570,6 +582,7 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
         // Item quantity belongs to this row's item ID, never the inventory's entry count.
         Entry.Detail=Items ? FText::Format(NSLOCTEXT("ReditusHUD","ItemQuantity","x{0}"),
             FText::AsNumber(FMath::Max(0,static_cast<int32>(Number(Row,TEXT("amount")))))) : WidgetText(Row,TEXT("MPAmount"));
+        if (!Items && HasZeroMPCost(DisplayTable,DataID)) Entry.Detail=FText::GetEmpty();
         Entry.Description=TableText(DisplayTable,DataID,TEXT("ShortDescription"));
         if (UImage* RowIcon=Cast<UImage>(NamedWidget(Row,Items ? TEXT("ItemImage") : TEXT("SkillImage"))))
             Entry.Icon=RowIcon->Brush;
@@ -889,6 +902,21 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
         else HUD->ClearTargetLabel();
     }
     if (!bExplicitSpeed && IsValid(Player)) HUD->SetDisplayedBattleSpeed(static_cast<float>(Number(Player,TEXT("BattleSpeed"),1.0)));
+    if (bReadLegacyBattle && bMirrorLegacyActionAnnouncement)
+    {
+        UUserWidget* Announcement=ChildMenu(ObjectValue(Controller,TEXT("battleUI")),TEXT("BP_ShowAttackElement"));
+        if (IsValid(Announcement))
+        {
+            const ESlateVisibility SourceVisibility=Announcement->GetVisibility();
+            const bool Shown=SourceVisibility!=ESlateVisibility::Hidden && SourceVisibility!=ESlateVisibility::Collapsed;
+            FSlateBrush ElementIcon;
+            if (UImage* SourceIcon=Cast<UImage>(NamedWidget(Announcement,TEXT("SkillElement"))))
+                if (SourceIcon->GetVisibility()!=ESlateVisibility::Hidden && SourceIcon->GetVisibility()!=ESlateVisibility::Collapsed)
+                    ElementIcon=SourceIcon->Brush;
+            HUD->SetActionAnnouncement(WidgetText(Announcement,TEXT("SkillName")),ElementIcon,Shown);
+        }
+        else HUD->ClearActionAnnouncement();
+    }
     if (bHideLegacyActionsWidget)
     {
         if (UWidget* Old=Cast<UWidget>(ObjectValue(Controller,TEXT("BattleActionsUI"))))

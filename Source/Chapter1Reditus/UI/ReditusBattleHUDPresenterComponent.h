@@ -41,6 +41,8 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD") bool bSetGameAndUIInputMode = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD") bool bHideLegacyActionsWidget = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD") bool bSyncLegacyDeviceFlag = true;
+    /** Copy the old attack notice's text/icon/visibility out of its transparent backing root. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Legacy") bool bMirrorLegacyActionAnnouncement = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") bool bApplyCombatGamepadProfile = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Menus") bool bUseNativeCommandLists = true;
     /** Reuse the project's menu builder when its old visible HUD was removed. Runtime only. */

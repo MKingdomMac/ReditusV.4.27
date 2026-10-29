@@ -73,6 +73,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio") USoundBase* NavigationSound = nullptr;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio") bool bPlayNavigationSound = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio", meta=(ClampMin="0.0",ClampMax="1.0")) float NavigationSoundVolume = 0.6f;
+    /** Plays once when the root Attack command is accepted, through any input device. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio") USoundBase* ConfirmSound = nullptr;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio") bool bPlayConfirmSound = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio", meta=(ClampMin="0.0",ClampMax="1.0")) float ConfirmSoundVolume = 0.6f;
     /** Reuse existing input icon textures. Keys are the InputCore key names. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Style") TMap<FName,UTexture2D*> GlyphTextures;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") FReditusBattleHUDInputActions InputActions;
@@ -115,6 +119,9 @@ public:
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetTargetedEnemy(AActor* Enemy);
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetTargetLabel(FText Label);
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void ClearTargetLabel();
+    /** Presentation only; the existing skill/attack events own its timing. */
+    UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetActionAnnouncement(FText Label, const FSlateBrush& ElementIcon, bool bVisible = true);
+    UFUNCTION(BlueprintCallable, Category="Battle HUD") void ClearActionAnnouncement();
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetDisplayedBattleSpeed(float Multiplier);
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetInputDevice(EReditusHUDInputDevice Device);
     UFUNCTION(BlueprintPure, Category="Battle HUD") EReditusHUDInputDevice GetInputDevice() const { return InputDevice; }
@@ -188,6 +195,7 @@ private:
         UTextBlock* Key = nullptr;
         UTextBlock* Label = nullptr;
         UTextBlock* Detail = nullptr;
+        USizeBox* DetailBox = nullptr;
         UImage* Icon = nullptr;
         int32 Index = INDEX_NONE;
     };
@@ -202,6 +210,11 @@ private:
     UPROPERTY(Transient) UCanvasPanel* CommandCanvas = nullptr;
     UPROPERTY(Transient) UCanvasPanel* CommandRegion = nullptr;
     UPROPERTY(Transient) UTextBlock* TargetName = nullptr;
+    UPROPERTY(Transient) UBorder* ActionFrame = nullptr;
+    UPROPERTY(Transient) UTextBlock* ActionName = nullptr;
+    UPROPERTY(Transient) UImage* ActionElement = nullptr;
+    UPROPERTY(Transient) USizeBox* ActionElementBox = nullptr;
+    UPROPERTY(Transient) FSlateBrush ActionElementBrush;
     UPROPERTY(Transient) UTextBlock* MenuHeader = nullptr;
     UPROPERTY(Transient) UTextBlock* MenuDescription = nullptr;
     UPROPERTY(Transient) UTextBlock* SpeedText = nullptr;
@@ -236,8 +249,10 @@ private:
     bool bListOpen = false;
     bool bAlternateCommands = false;
     bool bHasLegacyListFonts = false;
+    bool bActionVisible = false;
     TSet<FKey> PressedKeys;
     FText TargetLabel;
+    FText ActionLabel;
     FText MenuTitle;
     FText MenuStatus;
     float DisplayedSpeed = 1.f;
@@ -257,6 +272,7 @@ private:
     bool ChooseSelectedMenuEntry();
     bool CycleReadyAlly();
     void PlayNavigationCue();
+    void PlayConfirmCue();
     bool RouteGameplayInput(FName Action, FKey Key);
     bool MatchesAction(FName Action, const FKey& Key) const;
     FKey KeyForAction(FName Action) const;
