@@ -63,6 +63,8 @@ struct CHAPTER1REDITUS_API FReditusBattleHUDUnit
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") bool bCanHack = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") int32 TotalAmp = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") int32 CommittedAmp = 0;
+    /** Live BP_UnitBase.CurrentStamina; the HUD does not spend or restore it. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") int32 CurrentStamina = 0;
 
     /** Cached KO cards may outlive their actor. A default snapshot is empty. */
     bool HasCharacter() const

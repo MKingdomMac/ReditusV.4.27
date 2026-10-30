@@ -64,6 +64,8 @@ public:
     /** Reads the existing AmpUIcon widget's first image brush. An explicit brush overrides it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Style") TSubclassOf<UUserWidget> AmpIconWidgetClass;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Style") FSlateBrush AmpImageBrush;
+    /** Optional custom stamina icon. Empty uses the built-in gold flexing figure. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Style") FSlateBrush StaminaImageBrush;
     /** Reuses each legacy row's SelectedImage brush unless explicitly assigned. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Style") FSlateBrush ListSelectionBrush;
     /** Match the live original item/skill text font and size. */
@@ -181,6 +183,8 @@ private:
         UTextBlock* ATB = nullptr;
         UTextBlock* OD = nullptr;
         UTextBlock* Amp = nullptr;
+        UImage* StaminaIcon = nullptr;
+        UTextBlock* Stamina = nullptr;
         UHorizontalBox* AmpIcons = nullptr;
         TArray<UImage*> AmpImages;
         UProgressBar* HPBar = nullptr;
@@ -229,6 +233,7 @@ private:
     UPROPERTY(Transient) FSlateBrush GaugeBackgroundBrush;
     UPROPERTY(Transient) FSlateBrush GaugeFillBrush;
     UPROPERTY(Transient) FSlateBrush ResolvedAmpBrush;
+    UPROPERTY(Transient) FSlateBrush ResolvedStaminaBrush;
     UPROPERTY(Transient) UCanvasPanel* ListCanvas = nullptr;
     UPROPERTY(Transient) UScrollBox* EntryScroll = nullptr;
     UPROPERTY(Transient) UVerticalBox* EntryRows = nullptr;

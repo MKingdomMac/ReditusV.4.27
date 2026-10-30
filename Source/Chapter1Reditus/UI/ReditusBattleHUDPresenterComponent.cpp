@@ -788,6 +788,7 @@ FReditusBattleHUDUnit UReditusBattleHUDPresenterComponent::ReadUnit(AActor* Unit
     Data.bCanHack=Data.CharacterID==HackCharacterID;
     Data.TotalAmp=static_cast<int32>(Number(Unit,TEXT("TotalAmpPoints")));
     Data.CommittedAmp=static_cast<int32>(Number(Unit,TEXT("CurrentAmpPointsInPlay")));
+    Data.CurrentStamina=static_cast<int32>(Number(Unit,TEXT("CurrentStamina")));
     Data.ATBPercent=ReditusHUDPolicy::Ratio(static_cast<float>(Number(Unit,TEXT("currentActionTime"))),
         static_cast<float>(Number(Unit,LegacyATBThresholdProperty)));
     Data.bReadyForCommands=Unit==CurrentActor && bCommandWindow;

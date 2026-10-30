@@ -244,6 +244,11 @@ void UReditusBattleHUDWidget::InitializeSkin()
     if (!ResolvedAmpBrush.GetResourceObject()) ResolvedAmpBrush=BuildBrush(ReditusHUDSkin::AmpPoint(),FMargin(0.f));
     ResolvedAmpBrush.DrawAs=ESlateBrushDrawType::Image;
     ResolvedAmpBrush.ImageSize=FVector2D(22.f,22.f);
+    ResolvedStaminaBrush=StaminaImageBrush;
+    if (!ResolvedStaminaBrush.GetResourceObject())
+        ResolvedStaminaBrush=BuildBrush(ReditusHUDSkin::StaminaFigure(),FMargin(0.f));
+    ResolvedStaminaBrush.DrawAs=ESlateBrushDrawType::Image;
+    ResolvedStaminaBrush.ImageSize=FVector2D(24.f,24.f);
 }
 
 void UReditusBattleHUDWidget::RefreshAmpImages(UHorizontalBox* IconHost,TArray<UImage*>& Images,int32 Total,int32 Committed)
@@ -619,6 +624,14 @@ void UReditusBattleHUDWidget::BuildCards()
             Values[J]->SetJustification(ETextJustify::Right);
             PlaceStretchX(Content,Values[J],X+39.f,40.f+J*31.f,8.f,20.f);
         }
+        // The portrait's existing footer stays separate from the AMP controls.
+        Card.StaminaIcon=WidgetTree->ConstructWidget<UImage>();
+        Card.StaminaIcon->SetBrush(ResolvedStaminaBrush);
+        Card.StaminaIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+        Place(Content,Card.StaminaIcon,8.f,167.f,24.f,24.f);
+        Card.Stamina=MakeText(FText::GetEmpty(),20);
+        Card.Stamina->SetClipping(EWidgetClipping::ClipToBounds);
+        Place(Content,Card.Stamina,38.f,166.f,48.f,26.f);
         Card.Amp = MakeText(FText::GetEmpty(),15);
         Place(Content,Card.Amp,94.f,169.f,82.f,23.f);
         Card.AmpIcons=WidgetTree->ConstructWidget<UHorizontalBox>();
@@ -1220,6 +1233,12 @@ void UReditusBattleHUDWidget::Refresh()
         Card.OD->SetText(Alive && Data.bOverdriveEntered ? Text(TEXT("OD READY")) :
             FText::AsPercent(ReditusHUDPolicy::Ratio(Data.Overdrive,Data.MaxOverdrive)));
         Card.OD->SetColorAndOpacity(FSlateColor(Alive && Data.bOverdriveEntered ? FLinearColor(1.f,0.16f,0.16f,1.f) : FLinearColor::White));
+        const int32 Stamina=FMath::Max(0,Data.CurrentStamina);
+        const FLinearColor StaminaTint=!Alive ? Dull : Stamina==0 ? FLinearColor(1.f,0.28f,0.20f,1.f) :
+            Stamina==1 ? FLinearColor(1.f,0.64f,0.28f,1.f) : FLinearColor::White;
+        Card.Stamina->SetText(FText::AsNumber(Stamina));
+        Card.Stamina->SetColorAndOpacity(FSlateColor(!Alive ? Dull : Stamina<=1 ? StaminaTint : Gold));
+        Card.StaminaIcon->SetColorAndOpacity(StaminaTint);
         Card.Amp->SetText(FText::Format(NSLOCTEXT("ReditusHUD","CardAmp","AMP {0}/{1}"),FText::AsNumber(Data.CommittedAmp),FText::AsNumber(Data.TotalAmp)));
         RefreshAmpImages(Card.AmpIcons,Card.AmpImages,Data.TotalAmp,Data.CommittedAmp);
     }

@@ -141,6 +141,48 @@ namespace ReditusHUDSkin
         }
         return Result;
     }
+    /** Small metallic figure with raised, flexed arms; no font glyph dependency. */
+    inline Image StaminaFigure()
+    {
+        Image Result(24,24);
+        const char* Shape[] = {
+            "........................",
+            "..........####..........",
+            ".........#hhhh#.........",
+            ".........#hggg#.........",
+            "..........#gg#..........",
+            "...###.....##.....###...",
+            "..#hhh#..........#hhh#..",
+            "..#hgg#...####...#ggh#..",
+            "..#hgg####hhhh####ggh#..",
+            "..#gggghhhhhhhhhhgggg#..",
+            "...#ggghhgggggghhggg#...",
+            "....###hggghhgggh###....",
+            ".......#ggghhggg#.......",
+            "........#gggggg#........",
+            "........#gghhgg#........",
+            "........#gggggg#........",
+            ".......#ggg##ggg#.......",
+            ".......#gg#..#gg#.......",
+            ".......#gg#..#gg#.......",
+            "......#ggg#..#ggg#......",
+            "......####....####......",
+            "........................",
+            "........................",
+            "........................"
+        };
+        for (int Y=0; Y<24; ++Y)
+        {
+            const char* Row=Shape[Y];
+            for (int X=0; Row[X]!='\0'; ++X)
+            {
+                if (Row[X]=='#') Put(Result,X,Y,Pixel(88,57,20));
+                else if (Row[X]=='h') Put(Result,X,Y,Pixel(255,239,173));
+                else if (Row[X]=='g') Put(Result,X,Y,Mix(Pixel(242,199,96),Pixel(175,121,36),Y/23.f));
+            }
+        }
+        return Result;
+    }
     inline Image AmpPoint()
     {
         Image Result(24,24);
