@@ -227,6 +227,47 @@ namespace
         return false;
     }
 
+    UObject* TableThumbnail(UDataTable* Table,FName ID)
+    {
+        if (!IsValid(Table) || !Table->GetRowStruct()) return nullptr;
+        uint8* const* Row=Table->GetRowMap().Find(ID);
+        if (!Row) return nullptr;
+        for (TFieldIterator<FProperty> It(Table->GetRowStruct()); It; ++It)
+        {
+            FStructProperty* ImageField=CastField<FStructProperty>(*It);
+            if (!ImageField || !ImageField->Struct ||
+                !(ImageField->GetName()==TEXT("Thumbnail") || ImageField->GetName().StartsWith(TEXT("Thumbnail_")))) continue;
+            const void* ImageData=ImageField->ContainerPtrToValuePtr<void>(*Row);
+            UObject* Texture=nullptr;
+            UObject* Sprite=nullptr;
+            for (TFieldIterator<FProperty> AssetIt(ImageField->Struct); AssetIt; ++AssetIt)
+            {
+                FObjectPropertyBase* Asset=CastField<FObjectPropertyBase>(*AssetIt);
+                if (!Asset) continue;
+                UObject* Resource=Asset->GetObjectPropertyValue_InContainer(ImageData);
+                if (!IsValid(Resource)) continue;
+                const FString FieldName=Asset->GetName();
+                if ((FieldName==TEXT("thumbnail") || FieldName.StartsWith(TEXT("thumbnail_"))) && Cast<UTexture2D>(Resource)) Texture=Resource;
+                else if ((FieldName==TEXT("Spritethumbnail") || FieldName.StartsWith(TEXT("Spritethumbnail_"))) && Cast<UPaperSprite>(Resource)) Sprite=Resource;
+            }
+            // Match the legacy skill-row preference: texture when supplied, then sprite.
+            return Texture ? Texture : Sprite;
+        }
+        return nullptr;
+    }
+
+    FSlateBrush ThumbnailBrush(UObject* Resource)
+    {
+        FSlateBrush Result;
+        if (IsValid(Resource))
+        {
+            Result.DrawAs=ESlateBrushDrawType::Image;
+            Result.ImageSize=FVector2D(26.f,26.f);
+            Result.SetResourceObject(Resource);
+        }
+        return Result;
+    }
+
     bool ExecuteInputAction(AActor* Actor,FName Action,FKey Key)
     {
         if (!IsValid(Actor)) return false;
@@ -584,7 +625,8 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
             FText::AsNumber(FMath::Max(0,static_cast<int32>(Number(Row,TEXT("amount")))))) : WidgetText(Row,TEXT("MPAmount"));
         if (!Items && HasZeroMPCost(DisplayTable,DataID)) Entry.Detail=FText::GetEmpty();
         Entry.Description=TableText(DisplayTable,DataID,TEXT("ShortDescription"));
-        if (UImage* RowIcon=Cast<UImage>(NamedWidget(Row,Items ? TEXT("ItemImage") : TEXT("SkillImage"))))
+        if (UObject* ConfiguredIcon=Items ? nullptr : TableThumbnail(DisplayTable,DataID)) Entry.Icon=ThumbnailBrush(ConfiguredIcon);
+        else if (UImage* RowIcon=Cast<UImage>(NamedWidget(Row,Items ? TEXT("ItemImage") : TEXT("SkillImage"))))
             Entry.Icon=RowIcon->Brush;
         if (!CopiedFonts)
         {
@@ -913,7 +955,24 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
             if (UImage* SourceIcon=Cast<UImage>(NamedWidget(Announcement,TEXT("SkillElement"))))
                 if (SourceIcon->GetVisibility()!=ESlateVisibility::Hidden && SourceIcon->GetVisibility()!=ESlateVisibility::Collapsed)
                     ElementIcon=SourceIcon->Brush;
-            HUD->SetActionAnnouncement(WidgetText(Announcement,TEXT("SkillName")),ElementIcon,Shown);
+            const FText AnnouncementLabel=WidgetText(Announcement,TEXT("SkillName"));
+            UObject* ActiveSkill=ObjectValue(Controller,TEXT("currentSkill"));
+            FName ActiveSkillID=NameValue(ActiveSkill,TEXT("SkillID"));
+            // Player selection already stores its row ID on the acting unit;
+            // legacy skill actors do not always receive their own SkillID.
+            if (ActiveSkillID.IsNone()) ActiveSkillID=NameValue(CurrentActor,TEXT("currentSkill"));
+            FTextProperty* SkillNameField=CastField<FTextProperty>(Property(ActiveSkill,TEXT("name")));
+            // Only override a notice belonging to this active skill. A regular-attack
+            // notice must retain its AttackElement-to-texture mapping.
+            if (Shown && IsValid(ActiveSkill) && !ActiveSkillID.IsNone() && SkillNameField &&
+                AnnouncementLabel.EqualTo(SkillNameField->GetPropertyValue_InContainer(ActiveSkill)))
+            {
+                if (!IsValid(SkillDescriptions) && GetWorld() && GetWorld()->IsGameWorld())
+                    SkillDescriptions=LoadObject<UDataTable>(nullptr,TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Skills.DT_Skills"));
+                if (UObject* ConfiguredIcon=TableThumbnail(SkillDescriptions,ActiveSkillID))
+                    ElementIcon=ThumbnailBrush(ConfiguredIcon);
+            }
+            HUD->SetActionAnnouncement(AnnouncementLabel,ElementIcon,Shown);
         }
         else HUD->ClearActionAnnouncement();
     }

@@ -174,6 +174,8 @@ private:
         UImage* Portrait = nullptr;
         UTextBlock* Name = nullptr;
         UTextBlock* ReadyLabel = nullptr;
+        /** Reserved for the future buff presenter; no legacy buff hookup yet. */
+        UHorizontalBox* StatusIconRow = nullptr;
         UTextBlock* HP = nullptr;
         UTextBlock* MP = nullptr;
         UTextBlock* ATB = nullptr;

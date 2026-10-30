@@ -592,6 +592,11 @@ void UReditusBattleHUDWidget::BuildCards()
         Card.ReadyLabel->SetJustification(ETextJustify::Right);
         Place(Content,Card.ReadyLabel,-106.f,2.f,94.f,25.f);
         CastChecked<UCanvasPanelSlot>(Card.ReadyLabel->Slot)->SetAnchors(FAnchors(1.f,0.f));
+        Card.StatusIconRow=WidgetTree->ConstructWidget<UHorizontalBox>();
+        Card.StatusIconRow->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+        Card.StatusIconRow->SetClipping(EWidgetClipping::ClipToBounds);
+        Place(Content,Card.StatusIconRow,-106.f,2.f,94.f,25.f);
+        CastChecked<UCanvasPanelSlot>(Card.StatusIconRow->Slot)->SetAnchors(FAnchors(1.f,0.f));
         const float X = 94.f;
         Card.HPBar = Bar(FLinearColor(0.f,0.85f,0.28f,1.f));
         Card.MPBar = Bar(FLinearColor(0.f,0.40f,0.95f,1.f));
@@ -1179,7 +1184,6 @@ void UReditusBattleHUDWidget::Refresh()
         const FReditusBattleHUDUnit& Data = Party[I];
         const bool Occupied=Data.HasCharacter();
         const bool Alive=Occupied && IsValid(Data.Unit) && Data.HP>0.f;
-        const bool IsReady=Alive && Data.bCanAct && Data.bReadyForCommands;
         const FLinearColor Dull(0.64f,0.64f,0.64f,1.f);
         Card.Content->SetVisibility(Occupied ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Hidden);
         Card.Select->SetIsEnabled(Alive);
@@ -1190,9 +1194,10 @@ void UReditusBattleHUDWidget::Refresh()
         if (!Occupied) continue;
         Card.Name->SetText(Data.DisplayName);
         Card.Name->SetColorAndOpacity(FSlateColor(Alive ? Gold : Dull));
-        Card.ReadyLabel->SetText(Alive ? ReadyUnitText : Text(TEXT("KO")));
+        Card.ReadyLabel->SetText(Text(TEXT("KO")));
         Card.ReadyLabel->SetColorAndOpacity(FSlateColor(Alive ? Gold : FLinearColor::White));
-        Card.ReadyLabel->SetVisibility(IsReady || !Alive ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
+        Card.ReadyLabel->SetVisibility(!Alive ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+        Card.StatusIconRow->SetVisibility(Alive ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
         FSlateBrush Portrait;
         Portrait.DrawAs = ESlateBrushDrawType::Image;
         Portrait.ImageSize = FVector2D(128.f,128.f);
