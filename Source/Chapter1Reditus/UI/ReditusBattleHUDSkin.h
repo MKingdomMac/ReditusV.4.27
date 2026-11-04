@@ -197,4 +197,57 @@ namespace ReditusHUDSkin
         }
         return Result;
     }
+
+    // Indices 0–16 match EReditusEnemyEffect. The final five are HUD markers.
+    inline Image EnemyBadgeGlyph(int Kind)
+    {
+        static const char* const Shapes[]={
+            "   #   "" # # # ""  ###  ""### ###""  ###  "" # # # ""   #   ",
+            "   #   ""  ###  ""  ###  "" ##### ""#######"" ##### ""  ###  ",
+            "    ## ""   ##  ""  ##   "" ##### ""   ##  ""  ##   "" ##    ",
+            "       "" ##### ""##   ##""#  #  #""##   ##"" ##### ""       ",
+            " ##### ""    #  ""   #   ""  #    "" #     ""#      "" ##### ",
+            " ##### ""##   ##""    ###""   ##  ""   #   ""       ""   #   ",
+            " ## ## ""#######""#######"" ##### ""  ###  ""   #   ""       ",
+            "  # #  "" ## ## ""### ###"" ##### ""  ###  "" ##### ""   #   ",
+            "   #   ""  ###  ""   #   ""   #   ""   #   ""       ""   #   ",
+            " ##### "" #   # ""  # #  ""   #   ""  # #  "" #   # "" ##### ",
+            " ##### ""##   ##""# # # #""#     #""# # # #""##   ##"" ##### ",
+            "  ###  ""  ###  ""#######""#######""#######""  ###  ""  ###  ",
+            "#######""#######""## # ##""## # ##"" ##### ""  ###  ""   #   ",
+            "#######""#     #""#     #""#     #"" #   # ""  # #  ""   #   ",
+            "  ###  "" #   # ""#  #  #""# ### #""#  #  #"" #   # ""  ###  ",
+            "   #   ""   #   ""  ###  ""#######""  ###  ""   #   ""   #   ",
+            "    ###""     ##""    # #""   #   ""  #    "" #     ""#      ",
+        };
+        Image Result(16,16);
+        if (Kind>=0 && Kind<17)
+        {
+            const Pixel Color=Kind==1 ? Pixel(204,103,255) : Kind>=11 ? Pixel(92,224,245) : Pixel(255,161,128);
+            for (int Y=0; Y<7; ++Y) for (int X=0; X<7; ++X)
+                if (Shapes[Kind][Y*7+X]=='#')
+                    for (int V=0; V<2; ++V) for (int U=0; U<2; ++U)
+                        Put(Result,1+X*2+U,Y*2+V,Mix(Color,Pixel(23,32,52),Y*.065f));
+            const int Tip=Kind>=11 ? 13 : 15;
+            const int Side=Kind>=11 ? 15 : 13;
+            Line(Result,5,Side,8,Tip,Color);
+            Line(Result,8,Tip,11,Side,Color);
+        }
+        else for (int Y=0; Y<16; ++Y) for (int X=0; X<16; ++X)
+        {
+            const int DX=std::abs(2*X-15), DY=std::abs(2*Y-15);
+            if (Kind==17 || Kind==18)
+            {
+                const int Radius=DX*DX+DY*DY;
+                if (Radius<=182)
+                    Put(Result,X,Y,Kind==18 ? (Radius>=121 ? Pixel(91,104,123) : Pixel(13,24,39)) :
+                        (Radius>=130 ? Pixel(174,113,32) : Mix(Pixel(255,242,144),Pixel(222,155,35),Y/15.f)));
+            }
+            else if (Kind==19 && DX+DY<=16)
+                Put(Result,X,Y,DX+DY>=10 ? Pixel(255,207,84) : DX+DY<=4 ? Pixel(255,235,155) : Pixel(49,33,19));
+            else if ((Kind==20 || Kind==21) && Y<=9 && DX<=15-Y*1.5f)
+                Put(Result,X,Y,DX>=11-Y*1.5f ? (Kind==20 ? Pixel(238,179,62) : Pixel(145,160,178)) : Pixel(13,23,39));
+        }
+        return Result;
+    }
 }

@@ -11,6 +11,8 @@ class APlayerController;
 class UUserWidget;
 class UWidget;
 class UDataTable;
+class UTexture2D;
+class USceneComponent;
 class UReditusBattleHUDWidget;
 
 USTRUCT()
@@ -43,8 +45,13 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD") bool bSyncLegacyDeviceFlag = true;
     /** Copy the old attack notice's text/icon/visibility out of its transparent backing root. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Legacy") bool bMirrorLegacyActionAnnouncement = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Enemies") bool bShowEnemyStatusBadges = true;
+    /** Apply battle-specific keyboard and gamepad mappings, then restore them when the HUD closes. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") bool bApplyCombatGamepadProfile = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Menus") bool bUseNativeCommandLists = true;
+    /** Slows enemy ATB fill and preparation in battle subwindows and target selection. 50 = half speed, 100 = pause. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Menus", meta=(ClampMin="50.0", ClampMax="100.0", UIMin="50.0", UIMax="100.0"))
+    float EnemyMenuSlowdownPercent = 50.f;
     /** Reuse the project's menu builder when its old visible HUD was removed. Runtime only. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Menus") bool bCreateMissingMenuSource = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Menus") UDataTable* SkillDescriptions = nullptr;
@@ -96,6 +103,11 @@ private:
     UPROPERTY(Transient) TArray<UUserWidget*> NativeMenuRows;
     UPROPERTY(Transient) TArray<FName> NativeMenuIDs;
     UPROPERTY(Transient) TArray<FName> NativeMenuDataIDs;
+    UPROPERTY(Transient) UDataTable* PartyMemberSkillDefinitions = nullptr;
+    UPROPERTY(Transient) UDataTable* EquipmentSkillDefinitions = nullptr;
+    UPROPERTY(Transient) TMap<int32,UTexture2D*> ActionElementTextures;
+    TMap<TWeakObjectPtr<USceneComponent>,bool> HiddenLegacyEnemyComponents;
+    TWeakObjectPtr<AActor> ExplicitEnemyTarget;
     UPROPERTY(Transient) TArray<UWidget*> SuppressedMenuWidgets;
     UPROPERTY(Transient) TArray<ESlateVisibility> SuppressedMenuVisibility;
     UPROPERTY(Transient) TArray<float> SuppressedMenuOpacity;
@@ -116,10 +128,20 @@ private:
     TArray<FInputOverride> InputOverrides;
     EReditusHUDCommand NativeMenuCommand = EReditusHUDCommand::Tech;
     EReditusHUDCommand PendingMenuCommand = EReditusHUDCommand::Tech;
+    TWeakObjectPtr<AActor> DraftOwner;
+    TArray<TWeakObjectPtr<AActor>> DraftIcons;
+    FName DraftActionID;
+    EReditusHUDCommand DraftCommand = EReditusHUDCommand::Tech;
+    int32 DraftCycle = INDEX_NONE;
+    bool bDraftActive = false;
+    bool bDraftGroup = false;
+    TSet<TWeakObjectPtr<AActor>> MenuSlowedEnemies;
+    TSet<TWeakObjectPtr<UUserWidget>> OpenLegacyMenuWindows;
     bool bAwaitingNativeMenu = false;
     int32 PendingOriginalSelection = -1;
     double PendingMenuDeadline = 0.0;
     TWeakObjectPtr<AActor> PreviousLegacyUnit;
+    TMap<TWeakObjectPtr<AActor>,int32> LastTurnCueCycles;
     bool bExplicitParty = false;
     bool bExplicitCommandWindow = false;
     bool bCommandWindowEnabled = false;
@@ -128,6 +150,7 @@ private:
     bool bRefreshing = false;
     bool bRouting = false;
     bool bWarnedPartyOverflow = false;
+    bool bShowingEnemyATBAnnouncement = false;
 
     FReditusBattleHUDUnit ReadUnit(AActor* Unit, AActor* CurrentActor, bool bCommandWindow) const;
     void UpdateDisplaySlots(UObject* Battle, AActor* CurrentActor, bool bCommandWindow);
@@ -140,7 +163,17 @@ private:
     void RecoverMenuPreparation(AActor* Unit, EReditusHUDCommand Command);
     void TryCaptureNativeMenu();
     void RefreshNativeMenuEntries(bool bOpen);
+    bool IsBattleMoveUnlocked(AActor* Unit,FName MoveID,bool bOverdrive) const;
     void ClearNativeMenu();
+    bool BeginATBListTargeting(AActor* Unit,FName ID,EReditusHUDCommand Command);
+    bool RouteATBListTargetInput(FName ActionName);
+    AActor* FindTimedAttackOwner() const;
+    void ClearATBListTargeting();
+    void UpdateEnemyMenuSlowdown(UObject* Battle,AActor* CommandUnit);
+    void ClearEnemyMenuSlowdown();
+    bool ShowExecutingEnemyAction(UObject* Battle);
+    void UpdateEnemyBadges(UObject* Battle,AActor* Target,bool bGroup);
+    void RestoreLegacyEnemyComponents();
     UFUNCTION() void HandleNativeMenuChosen(AActor* Unit, FName EntryID);
     UFUNCTION() void HandleNativeMenuCancelled(AActor* Unit);
     bool HandleCommand(AActor* Unit, EReditusHUDCommand Command);

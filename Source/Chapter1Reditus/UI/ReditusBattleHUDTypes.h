@@ -6,6 +6,37 @@
 #include "ReditusBattleHUDTypes.generated.h"
 
 class AActor;
+class UPrimitiveComponent;
+class USceneComponent;
+
+enum class EReditusEnemyEffect : uint8
+{
+    Staggered, Poison, Stun, Blind, Sleep, Confusion, Charm, Berserk, Taunt, Exhausted, Swallowed,
+    Regen, GuardUp, Protected, AccuracyUp, CriticalUp, Counter, Count
+};
+
+USTRUCT()
+struct FReditusEnemyHUDEffect
+{
+    GENERATED_BODY()
+    UPROPERTY() uint8 Kind = 0;
+    /** INDEX_NONE means the combat data did not supply a remaining turn count. */
+    UPROPERTY() int32 Turns = INDEX_NONE;
+    bool operator==(const FReditusEnemyHUDEffect& Other) const { return Kind==Other.Kind && Turns==Other.Turns; }
+};
+
+USTRUCT()
+struct FReditusEnemyHUDView
+{
+    GENERATED_BODY()
+    UPROPERTY() AActor* Unit = nullptr;
+    UPROPERTY() UPrimitiveComponent* Sprite = nullptr;
+    UPROPERTY() USceneComponent* FallbackAnchor = nullptr;
+    UPROPERTY() int32 Stamina = 0;
+    UPROPERTY() int32 MaxStamina = 0;
+    UPROPERTY() bool bTargeted = false;
+    UPROPERTY() TArray<FReditusEnemyHUDEffect> Effects;
+};
 
 UENUM(BlueprintType)
 enum class EReditusHUDCommand : uint8
@@ -22,7 +53,7 @@ enum class EReditusHUDInputDevice : uint8
     KeyboardMouse, Xbox
 };
 
-/** Combat-only controller profile. Existing keyboard action mappings remain. */
+/** Controller keys used while the battle HUD owns input. */
 USTRUCT(BlueprintType)
 struct CHAPTER1REDITUS_API FReditusBattleHUDGamepadKeys
 {
@@ -94,6 +125,7 @@ struct CHAPTER1REDITUS_API FReditusBattleHUDInputActions
     GENERATED_BODY()
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") FName Block = TEXT("Block");
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") FName TimedAttack = TEXT("TimedAttack");
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") FName IncreaseAmp = TEXT("IncreaseAmp");
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") FName DecreaseAmp = TEXT("DecreaseAmp");
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") FName ChangeParty = TEXT("SwapPartyMember");

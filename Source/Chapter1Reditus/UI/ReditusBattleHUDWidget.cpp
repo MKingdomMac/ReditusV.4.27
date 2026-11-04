@@ -3,6 +3,7 @@
 #include "ReditusBattleHUDInputPolicy.h"
 #include "ReditusBattleHUDSkin.h"
 #include "Blueprint/WidgetTree.h"
+#include "Blueprint/WidgetLayoutLibrary.h"
 #include "Components/Border.h"
 #include "Components/ButtonSlot.h"
 #include "Components/CanvasPanel.h"
@@ -13,6 +14,7 @@
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
 #include "Components/ProgressBar.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/ScaleBox.h"
 #include "Components/ScaleBoxSlot.h"
 #include "Components/SizeBox.h"
@@ -79,13 +81,15 @@ namespace
             if (!Event.IsRepeat()) HUD->ObserveKey(Event.GetKey());
             if (HUD->bCaptureBattleInput && HUD->HasGameInputFocus())
                 return HUD->HandleBattleKeyDown(Event.GetKey(),Event.IsRepeat());
+            if (HUD->bCaptureBattleInput && HUD->HasGameInputFocus(true))
+                return HUD->HandleTimedAttackKeyDown(Event.GetKey(),Event.IsRepeat());
             return false;
         }
         virtual bool HandleKeyUpEvent(FSlateApplication&, const FKeyEvent& Event) override
         {
             if (!CanObserve(Event.GetUserIndex())) return false;
             const bool Owned=HUD->HandleBattleKeyUp(Event.GetKey());
-            return Owned && HUD->bCaptureBattleInput && HUD->HasGameInputFocus();
+            return Owned && HUD->bCaptureBattleInput && HUD->HasGameInputFocus(true);
         }
         virtual bool HandleAnalogInputEvent(FSlateApplication&, const FAnalogInputEvent& Event) override
         {
@@ -249,6 +253,13 @@ void UReditusBattleHUDWidget::InitializeSkin()
         ResolvedStaminaBrush=BuildBrush(ReditusHUDSkin::StaminaFigure(),FMargin(0.f));
     ResolvedStaminaBrush.DrawAs=ESlateBrushDrawType::Image;
     ResolvedStaminaBrush.ImageSize=FVector2D(24.f,24.f);
+    static_assert(static_cast<int32>(EReditusEnemyEffect::Count)==17,"Enemy status artwork order changed");
+    for (int32 Kind=0; Kind<22; ++Kind)
+    {
+        FSlateBrush Glyph=BuildBrush(ReditusHUDSkin::EnemyBadgeGlyph(Kind),FMargin(0.f));
+        Glyph.DrawAs=ESlateBrushDrawType::Image;
+        EnemyGlyphBrushes.Add(Glyph);
+    }
 }
 
 void UReditusBattleHUDWidget::RefreshAmpImages(UHorizontalBox* IconHost,TArray<UImage*>& Images,int32 Total,int32 Committed)
@@ -403,8 +414,21 @@ void UReditusBattleHUDWidget::BuildLayout()
     DesignCanvas->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
     WidgetTree->RootWidget = DesignCanvas;
 
-    TargetName = MakeText(TargetLabel,25);
-    UBorder* TargetFrame = MakeFrame(TargetName,FMargin(14.f,6.f));
+    EnemyBadges.Reset();
+    DisplayedEnemyDetails.Reset();
+    EnemyBadgeCanvas=WidgetTree->ConstructWidget<UCanvasPanel>();
+    EnemyBadgeCanvas->SetVisibility(ESlateVisibility::HitTestInvisible);
+    UCanvasPanelSlot* EnemyLayer=DesignCanvas->AddChildToCanvas(EnemyBadgeCanvas);
+    EnemyLayer->SetAnchors(FAnchors(0.f,0.f,1.f,1.f));
+    EnemyLayer->SetOffsets(FMargin(0.f));
+
+    UVerticalBox* TargetContent=WidgetTree->ConstructWidget<UVerticalBox>();
+    TargetName=MakeText(TargetLabel,24);
+    TargetName->SetColorAndOpacity(FSlateColor(Gold));
+    TargetContent->AddChildToVerticalBox(TargetName);
+    TargetDetails=WidgetTree->ConstructWidget<UVerticalBox>();
+    TargetContent->AddChildToVerticalBox(TargetDetails);
+    TargetFrame=MakeFrame(TargetContent,FMargin(14.f,8.f));
     TargetFrame->SetVisibility(ESlateVisibility::HitTestInvisible);
     UCanvasPanelSlot* TargetPlacement=DesignCanvas->AddChildToCanvas(TargetFrame);
     TargetPlacement->SetPosition(FVector2D(16.f,16.f));
@@ -472,7 +496,7 @@ void UReditusBattleHUDWidget::BuildLayout()
     CastChecked<UCanvasPanelSlot>(Overdrive.Button->Slot)->SetAnchors(FAnchors(1.f,0.f));
 
     CommandCanvas = WidgetTree->ConstructWidget<UCanvasPanel>();
-    CommandCanvas->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+    CommandCanvas->SetVisibility(ESlateVisibility::Collapsed);
     PlaceStretchX(CommandRegion,CommandCanvas,0.f,38.f,0.f,174.f);
     for (int32 I=0; I<8; ++I)
     {
@@ -754,6 +778,7 @@ void UReditusBattleHUDWidget::SetTargetSelectionActive(bool bEnabled)
         SetAlternateCommands(false);
         SelectedCommand=0;
     }
+    else { TargetLabel=FText::GetEmpty(); TargetEnemy.Reset(); }
     Refresh();
 }
 
@@ -765,23 +790,211 @@ void UReditusBattleHUDWidget::SetTargetedEnemy(AActor* Enemy)
         if (const FTextProperty* Property = FindFProperty<FTextProperty>(Enemy->GetClass(),TEXT("title")))
             Name = Property->GetPropertyValue_InContainer(Enemy);
     }
-    SetTargetLabel(Name);
+    TargetEnemy=Enemy;
+    TargetLabel=Name;
+    RefreshTargetDisplay();
 }
 
 void UReditusBattleHUDWidget::SetTargetLabel(FText Label)
 {
     TargetLabel = Label;
-    if (TargetName)
-    {
-        TargetName->SetText(Label);
-        if (UWidget* Parent = TargetName->GetParent())
-        {
-            if (UWidget* Frame = Parent->GetParent()) Frame->SetVisibility(Label.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
-        }
-    }
+    TargetEnemy.Reset();
+    RefreshTargetDisplay();
 }
 
 void UReditusBattleHUDWidget::ClearTargetLabel() { SetTargetLabel(FText::GetEmpty()); }
+
+UImage* UReditusBattleHUDWidget::MakeEnemyGlyph(int32 Glyph,float Size)
+{
+    UImage* Image=WidgetTree->ConstructWidget<UImage>();
+    if (EnemyGlyphBrushes.IsValidIndex(Glyph))
+    {
+        FSlateBrush Brush=EnemyGlyphBrushes[Glyph];
+        Brush.ImageSize=FVector2D(Size,Size);
+        Image->SetBrush(Brush);
+    }
+    return Image;
+}
+
+void UReditusBattleHUDWidget::SetEnemyStatusViews(const TArray<FReditusEnemyHUDView>& Views)
+{
+    EnemyStatusViews=Views;
+    if (!EnemyBadgeCanvas) return;
+    for (auto It=EnemyBadges.CreateIterator(); It; ++It)
+        if (!It.Key().IsValid() || !Views.ContainsByPredicate([&It](const FReditusEnemyHUDView& View){return View.Unit==It.Key().Get();}))
+        {
+            It.Value().Stack->RemoveFromParent();
+            It.RemoveCurrent();
+        }
+    for (const FReditusEnemyHUDView& View:Views)
+    {
+        if (!IsValid(View.Unit)) continue;
+        FEnemyBadge& Badge=EnemyBadges.FindOrAdd(TWeakObjectPtr<AActor>(View.Unit));
+        if (!Badge.Stack)
+        {
+            Badge.Stack=WidgetTree->ConstructWidget<UVerticalBox>();
+            Badge.Stack->SetVisibility(ESlateVisibility::Collapsed);
+            Badge.Diamond=MakeEnemyGlyph(19,23.f);
+            Badge.Stack->AddChildToVerticalBox(Badge.Diamond)->SetHorizontalAlignment(HAlign_Center);
+            Badge.Strip=WidgetTree->ConstructWidget<UHorizontalBox>();
+            Badge.Frame=MakeFrame(Badge.Strip,FMargin(6.f,3.f));
+            Badge.Stack->AddChildToVerticalBox(Badge.Frame);
+            Badge.Notch=MakeEnemyGlyph(21,15.f);
+            UVerticalBoxSlot* Notch=Badge.Stack->AddChildToVerticalBox(Badge.Notch);
+            Notch->SetHorizontalAlignment(HAlign_Center);
+            Notch->SetPadding(FMargin(0.f,-3.f,0.f,-6.f));
+            UCanvasPanelSlot* BadgeSlot=EnemyBadgeCanvas->AddChildToCanvas(Badge.Stack);
+            BadgeSlot->SetAutoSize(true);
+            BadgeSlot->SetAlignment(FVector2D(.5f,1.f));
+        }
+        const bool bSelected=View.bTargeted;
+        const bool bHasStrip=View.MaxStamina>0 || View.Effects.Num()>0;
+        Badge.Diamond->SetVisibility(bSelected ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+        Badge.Frame->SetVisibility(bHasStrip ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+        Badge.Notch->SetVisibility(bHasStrip ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+        Badge.Frame->SetBrush(bSelected ? GoldFrameBrush : SilverFrameBrush);
+        CastChecked<UCanvasPanelSlot>(Badge.Stack->Slot)->SetZOrder(bSelected ? 1 : 0);
+        if (EnemyGlyphBrushes.IsValidIndex(21))
+        {
+            FSlateBrush Notch=EnemyGlyphBrushes[bSelected ? 20 : 21];
+            Notch.ImageSize=FVector2D(15.f,15.f);
+            Badge.Notch->SetBrush(Notch);
+        }
+
+        TArray<uint8> Icons;
+        for (const auto& Effect:View.Effects) Icons.Add(Effect.Kind);
+        if (Badge.Stamina==View.Stamina && Badge.MaxStamina==View.MaxStamina && Badge.Icons==Icons) continue;
+        Badge.Stamina=View.Stamina;
+        Badge.MaxStamina=View.MaxStamina;
+        Badge.Icons=MoveTemp(Icons);
+        Badge.Strip->ClearChildren();
+        const auto Add=[&Badge](UWidget* Child,float Right=2.f)
+        {
+            auto* EntrySlot=Badge.Strip->AddChildToHorizontalBox(Child);
+            EntrySlot->SetVerticalAlignment(VAlign_Center);
+            EntrySlot->SetPadding(FMargin(0.f,0.f,Right,0.f));
+        };
+        if (View.MaxStamina>6)
+        {
+            UProgressBar* Gauge=WidgetTree->ConstructWidget<UProgressBar>();
+            FProgressBarStyle Style;
+            Style.BackgroundImage=GaugeBackgroundBrush;
+            Style.FillImage=GaugeFillBrush;
+            Gauge->WidgetStyle=Style;
+            Gauge->SetFillColorAndOpacity(Gold);
+            Gauge->SetPercent(static_cast<float>(View.Stamina)/View.MaxStamina);
+            USizeBox* Box=WidgetTree->ConstructWidget<USizeBox>();
+            Box->SetWidthOverride(34.f); Box->SetHeightOverride(8.f); Box->AddChild(Gauge);
+            Add(Box,4.f);
+            Add(MakeText(FText::FromString(FString::Printf(TEXT("%d/%d"),View.Stamina,View.MaxStamina)),12));
+        }
+        else for (int32 Pip=0; Pip<View.MaxStamina; ++Pip)
+            Add(MakeEnemyGlyph(Pip<View.Stamina ? 17 : 18,14.f));
+        if (View.Effects.Num()>0 && View.MaxStamina>0)
+        {
+            UImage* Divider=WidgetTree->ConstructWidget<UImage>();
+            FSlateColorBrush Brush(FLinearColor(.46f,.36f,.20f,1.f));
+            Brush.ImageSize=FVector2D(1.f,12.f);
+            Divider->SetBrush(Brush);
+            Add(Divider,5.f);
+        }
+        for (int32 I=0; I<FMath::Min(3,View.Effects.Num()); ++I)
+            Add(MakeEnemyGlyph(View.Effects[I].Kind,16.f));
+        if (View.Effects.Num()>3)
+            Add(MakeText(FText::FromString(FString::Printf(TEXT("+%d"),View.Effects.Num()-3)),12),0.f);
+    }
+    RefreshTargetDisplay();
+}
+
+void UReditusBattleHUDWidget::RefreshTargetDisplay()
+{
+    if (!TargetFrame || !TargetName || !TargetDetails) return;
+    const bool bShow=bTargetSelectionActive && !IsMenuOpen() && !TargetLabel.IsEmpty();
+    TargetFrame->SetVisibility(bShow ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+    if (!bShow) return;
+    TargetName->SetText(TargetLabel);
+    const auto* View=EnemyStatusViews.FindByPredicate([this](const FReditusEnemyHUDView& Data){return Data.Unit==TargetEnemy.Get();});
+    if (!View)
+    {
+        DisplayedEnemyDetails.Reset();
+        TargetDetails->ClearChildren();
+        return;
+    }
+    if (DisplayedEnemyDetails.Get()==View->Unit && DisplayedEnemyStamina==View->Stamina &&
+        DisplayedEnemyMaxStamina==View->MaxStamina && DisplayedEnemyEffects==View->Effects) return;
+    DisplayedEnemyDetails=View->Unit;
+    DisplayedEnemyStamina=View->Stamina;
+    DisplayedEnemyMaxStamina=View->MaxStamina;
+    DisplayedEnemyEffects=View->Effects;
+    TargetDetails->ClearChildren();
+    UImage* Rule=WidgetTree->ConstructWidget<UImage>();
+    FSlateColorBrush GoldRule(FLinearColor(.7f,.48f,.20f,1.f));
+    GoldRule.ImageSize=FVector2D(1.f,1.f);
+    Rule->SetBrush(GoldRule);
+    TargetDetails->AddChildToVerticalBox(Rule)->SetPadding(FMargin(0.f,5.f,0.f,6.f));
+    if (View->MaxStamina>0)
+        TargetDetails->AddChildToVerticalBox(MakeText(FText::Format(NSLOCTEXT("ReditusHUD","EnemyStamina","STAMINA   {0} / {1}"),
+            FText::AsNumber(View->Stamina),FText::AsNumber(View->MaxStamina)),17));
+    static const TCHAR* Labels[]={TEXT("STAGGERED"),TEXT("POISON"),TEXT("STUN"),TEXT("BLIND"),TEXT("SLEEP"),
+        TEXT("CONFUSION"),TEXT("CHARMED"),TEXT("BERSERK"),TEXT("TAUNTED"),TEXT("EXHAUSTED"),TEXT("SWALLOWED"),
+        TEXT("REGEN"),TEXT("GUARD UP"),TEXT("PROTECTED"),TEXT("ACCURACY UP"),TEXT("CRITICAL UP"),TEXT("COUNTER")};
+    for (const auto& Effect:View->Effects)
+    {
+        if (Effect.Kind>=UE_ARRAY_COUNT(Labels)) continue;
+        UHorizontalBox* Row=WidgetTree->ConstructWidget<UHorizontalBox>();
+        auto* Icon=Row->AddChildToHorizontalBox(MakeEnemyGlyph(Effect.Kind,16.f));
+        Icon->SetPadding(FMargin(0.f,0.f,7.f,0.f));
+        Icon->SetVerticalAlignment(VAlign_Center);
+        FText Name=FText::FromString(Labels[Effect.Kind]);
+        if (Effect.Turns>0)
+            Name=FText::Format(Effect.Turns==1 ? NSLOCTEXT("ReditusHUD","EnemyEffectTurn","{0}   {1} TURN") :
+                NSLOCTEXT("ReditusHUD","EnemyEffectTurns","{0}   {1} TURNS"),Name,FText::AsNumber(Effect.Turns));
+        Row->AddChildToHorizontalBox(MakeText(Name,17))->SetVerticalAlignment(VAlign_Center);
+        TargetDetails->AddChildToVerticalBox(Row)->SetPadding(FMargin(0.f,3.f,0.f,0.f));
+    }
+}
+
+void UReditusBattleHUDWidget::UpdateEnemyBadgePositions(const FGeometry& Geometry)
+{
+    if (!GetOwningPlayer() || EnemyBadges.Num()==0) return;
+    const FVector2D Size=Geometry.GetLocalSize();
+    const auto Project=[this](const FVector& World,FVector2D& Point)
+    {
+        return UWidgetLayoutLibrary::ProjectWorldLocationToWidgetPosition(GetOwningPlayer(),World,Point,true) &&
+            FMath::IsFinite(Point.X) && FMath::IsFinite(Point.Y);
+    };
+    for (const auto& View:EnemyStatusViews)
+    {
+        FEnemyBadge* Badge=EnemyBadges.Find(TWeakObjectPtr<AActor>(View.Unit));
+        if (!Badge) continue;
+        FVector2D Point=FVector2D::ZeroVector;
+        bool bProjected=false;
+        if (IsValid(View.Unit) && !View.Unit->IsHidden())
+        {
+            const FBox Bounds=IsValid(View.Sprite) ? View.Sprite->Bounds.GetBox() : FBox(ForceInit);
+            if (Bounds.IsValid)
+            {
+                bProjected=Project(Bounds.GetCenter(),Point);
+                // A sprite crossing the camera plane has no reliable screen edge.
+                for (int32 Corner=0; bProjected && Corner<8; ++Corner)
+                {
+                    const FVector World(Corner&1 ? Bounds.Max.X : Bounds.Min.X,
+                        Corner&2 ? Bounds.Max.Y : Bounds.Min.Y, Corner&4 ? Bounds.Max.Z : Bounds.Min.Z);
+                    FVector2D Edge;
+                    bProjected=Project(World,Edge);
+                    if (bProjected) Point.Y=FMath::Min(Point.Y,Edge.Y);
+                }
+            }
+            else if (IsValid(View.FallbackAnchor))
+                bProjected=Project(View.FallbackAnchor->GetComponentLocation()+FVector(0.f,0.f,28.f),Point);
+        }
+        Point.Y-=FMath::Max(0.f,EnemyBadgeGap);
+        const float Headroom=FMath::Max(24.f,Badge->Stack->GetDesiredSize().Y);
+        const bool bOnScreen=bProjected && Point.X>0.f && Point.X<Size.X && Point.Y>=Headroom && Point.Y<Size.Y;
+        Badge->Stack->SetVisibility(bOnScreen ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+        if (bOnScreen) CastChecked<UCanvasPanelSlot>(Badge->Stack->Slot)->SetPosition(Point);
+    }
+}
 
 void UReditusBattleHUDWidget::SetActionAnnouncement(FText Label,const FSlateBrush& ElementIcon,bool bVisible)
 {
@@ -865,7 +1078,7 @@ FKey UReditusBattleHUDWidget::KeyForCommand(EReditusHUDCommand Command) const
 {
     const bool Gamepad=InputDevice==EReditusHUDInputDevice::Xbox;
     if (bTargetSelectionActive && Command==EReditusHUDCommand::Attack)
-        return Gamepad ? GamepadKeys.Bottom : KeyForAction(TEXT("MenuConfirm"));
+        return Gamepad ? GamepadKeys.Bottom : KeyboardConfirmKey;
     if (Gamepad)
     {
         for (int32 I=0; I<8; ++I) if (CommandOrder[I]==Command)
@@ -883,11 +1096,11 @@ FKey UReditusBattleHUDWidget::KeyForCommand(EReditusHUDCommand Command) const
     {
     case EReditusHUDCommand::IncreaseAmp: return Gamepad ? GamepadKeys.IncreaseAmp : KeyForAction(InputActions.IncreaseAmp);
     case EReditusHUDCommand::DecreaseAmp: return Gamepad ? GamepadKeys.DecreaseAmp : KeyForAction(InputActions.DecreaseAmp);
-    case EReditusHUDCommand::Block: return Gamepad ? GamepadKeys.Block : KeyForAction(InputActions.Block);
+    case EReditusHUDCommand::Block: return Gamepad ? GamepadKeys.Block : KeyboardBlockKey;
     case EReditusHUDCommand::CycleBattleSpeed: return KeyForAction(InputActions.Speed);
     case EReditusHUDCommand::Cancel: return Gamepad ? GamepadBackKey : KeyboardBackKey;
     case EReditusHUDCommand::ToggleAlternate: return Gamepad ? GamepadKeys.More : KeyboardMoreKey;
-    case EReditusHUDCommand::SelectMenuEntry: return Gamepad ? GamepadKeys.Bottom : EKeys::Enter;
+    case EReditusHUDCommand::SelectMenuEntry: return Gamepad ? GamepadKeys.Bottom : KeyboardConfirmKey;
     case EReditusHUDCommand::Overdrive:
         if (Gamepad) return GamepadKeys.Overdrive;
         break;
@@ -910,7 +1123,7 @@ bool UReditusBattleHUDWidget::CanExecuteCommand(EReditusHUDCommand Command) cons
     if (bInputSuspended || UGameplayStatics::IsGamePaused(this)) return false;
     if (Command==EReditusHUDCommand::CycleBattleSpeed) return true;
     if (Command==EReditusHUDCommand::Block) return IsValid(GetOwningPlayer());
-    if (Command==EReditusHUDCommand::Cancel) return IsMenuOpen() || IsValid(GetSelectedUnit());
+    if (Command==EReditusHUDCommand::Cancel) return IsMenuOpen() || (bTargetSelectionActive && IsValid(GetSelectedUnit()));
     if (Command==EReditusHUDCommand::ToggleAlternate) return bCommandsEnabled && !IsMenuOpen();
     const FReditusBattleHUDUnit* Data=Selected();
     if (bTargetSelectionActive && !IsMenuOpen())
@@ -1083,6 +1296,18 @@ void UReditusBattleHUDWidget::PlayNavigationCue()
     if (NavigationSound) UGameplayStatics::PlaySound2D(this,NavigationSound,FMath::Clamp(NavigationSoundVolume,0.f,1.f));
 }
 
+void UReditusBattleHUDWidget::PlayTurnReadyCue()
+{
+    if (!bPlayTurnReadySound || TurnReadySoundVolume<=0.f || bInputSuspended || !GetWorld() || !GetWorld()->IsGameWorld() ||
+        UGameplayStatics::IsGamePaused(this) || !GetOwningPlayer() || !GetOwningPlayer()->IsLocalController()) return;
+    if (!TurnReadySound)
+    {
+        if (!NavigationSound) NavigationSound=LoadObject<USoundBase>(nullptr,TEXT("/Game/Sounds/JrpgBlueprintSounds/CUE_MenuNavigation.CUE_MenuNavigation"));
+        TurnReadySound=NavigationSound;
+    }
+    if (TurnReadySound) UGameplayStatics::PlaySound2D(this,TurnReadySound,FMath::Clamp(TurnReadySoundVolume,0.f,1.f));
+}
+
 void UReditusBattleHUDWidget::PlayConfirmCue()
 {
     if (!bPlayConfirmSound || ConfirmSoundVolume<=0.f || bInputSuspended || !GetWorld() || !GetWorld()->IsGameWorld() ||
@@ -1187,7 +1412,7 @@ void UReditusBattleHUDWidget::FocusCommands()
 void UReditusBattleHUDWidget::Refresh()
 {
     if (!DesignCanvas) return;
-    SetTargetLabel(TargetLabel);
+    RefreshTargetDisplay();
     SetActionAnnouncement(ActionLabel,ActionElementBrush,bActionVisible);
     SetDisplayedBattleSpeed(DisplayedSpeed);
     for (int32 I=0; I<Cards.Num(); ++I)
@@ -1244,13 +1469,15 @@ void UReditusBattleHUDWidget::Refresh()
     }
     const FReditusBattleHUDUnit* Data = Selected();
     const bool MenuVisible=IsMenuOpen();
+    const bool ShowCommands=!MenuVisible && CanExecuteCommand(EReditusHUDCommand::Attack);
     const int32 Offset=bAlternateCommands ? 4 : 0;
     if (bCommandsEnabled && !IsMenuOpen() && Buttons.IsValidIndex(SelectedCommand) && !CanExecuteCommand(Buttons[SelectedCommand].Command))
         for (int32 I=Offset; I<Offset+4; ++I) if (CanExecuteCommand(Buttons[I].Command)) { SelectedCommand=I; break; }
     for (int32 I=0; I<Buttons.Num(); ++I)
     {
         FButtonView& View=Buttons[I];
-        const bool Visible=(I>=4)==bAlternateCommands && (View.Command!=EReditusHUDCommand::Hack || (Data && Data->bCanHack));
+        const bool Visible=bTargetSelectionActive ? View.Command==EReditusHUDCommand::Attack :
+            (I>=4)==bAlternateCommands && (View.Command!=EReditusHUDCommand::Hack || (Data && Data->bCanHack));
         View.Button->SetVisibility(Visible ? ESlateVisibility::Visible : ESlateVisibility::Hidden);
         View.Button->SetIsEnabled(CanExecuteCommand(View.Command));
         if (View.Command==EReditusHUDCommand::Attack)
@@ -1263,7 +1490,7 @@ void UReditusBattleHUDWidget::Refresh()
     for (FButtonView& View : UtilityButtons)
     {
         if (View.Command!=EReditusHUDCommand::CycleBattleSpeed)
-            View.Button->SetVisibility(MenuVisible ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+            View.Button->SetVisibility(ShowCommands && !bTargetSelectionActive ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
         View.Button->SetIsEnabled(CanExecuteCommand(View.Command));
         if (View.Command==EReditusHUDCommand::Overdrive)
         {
@@ -1277,7 +1504,7 @@ void UReditusBattleHUDWidget::Refresh()
         if (View.Command==EReditusHUDCommand::ToggleAlternate)
             View.Label->SetText(Text(InputDevice==EReditusHUDInputDevice::Xbox ? (bAlternateCommands ? TEXT("RELEASE\nMAIN") : TEXT("HOLD\nMORE")) : (bAlternateCommands ? TEXT("MAIN") : TEXT("MORE"))));
     }
-    CommandCanvas->SetVisibility(MenuVisible ? ESlateVisibility::Collapsed : ESlateVisibility::SelfHitTestInvisible);
+    CommandCanvas->SetVisibility(ShowCommands ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
     MenuHost->SetVisibility(MenuVisible ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
     ListCanvas->SetVisibility(bListOpen ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
     RefreshMenu();
@@ -1395,7 +1622,7 @@ void UReditusBattleHUDWidget::RefreshGlyphs()
 }
 
 
-bool UReditusBattleHUDWidget::HasGameInputFocus() const
+bool UReditusBattleHUDWidget::HasGameInputFocus(bool bAllowFocusHandoff) const
 {
     if (bInputSuspended || !IsInViewport() || !GetOwningPlayer() || UGameplayStatics::IsGamePaused(this) || !FSlateApplication::IsInitialized()) return false;
     const ULocalPlayer* Local=GetOwningLocalPlayer();
@@ -1405,10 +1632,17 @@ bool UReditusBattleHUDWidget::HasGameInputFocus() const
     if (!ViewportWidget.IsValid() || Slate.GetActiveModalWindow().IsValid()) return false;
     const int32 User=FMath::Max(0,Local->GetControllerId());
     const TSharedPtr<SWidget> Focused=Slate.GetUserFocusedWidget(User);
-    if (!Focused.IsValid()) return false;
     FWidgetPath Path;
-    if (!Slate.GeneratePathToWidgetUnchecked(Focused.ToSharedRef(),Path,EVisibility::All)) return false;
     const TSharedPtr<SWindow> Active=Slate.GetActiveTopLevelWindow();
+    if (!Focused.IsValid() || !Slate.GeneratePathToWidgetUnchecked(Focused.ToSharedRef(),Path,EVisibility::All))
+    {
+        // The ready ally's menu can briefly leave Slate without a focused
+        // widget. Allow only the timed input in the active game viewport.
+        if (!bAllowFocusHandoff || !Active.IsValid()) return false;
+        FWidgetPath ViewportPath;
+        return Slate.GeneratePathToWidgetUnchecked(ViewportWidget.ToSharedRef(),ViewportPath,EVisibility::All) &&
+            Active==ViewportPath.TopLevelWindow;
+    }
     if (Active.IsValid() && Path.TopLevelWindow.IsValid() && Active!=Path.TopLevelWindow) return false;
     const TSharedPtr<SWidget> CachedHUDWidget=GetCachedWidget();
     bool GamePath=Path.ContainsWidget(ViewportWidget.ToSharedRef()) ||
@@ -1425,12 +1659,22 @@ bool UReditusBattleHUDWidget::HasGameInputFocus() const
 void UReditusBattleHUDWidget::NativeTick(const FGeometry& Geometry,float DeltaTime)
 {
     Super::NativeTick(Geometry,DeltaTime);
+    UpdateEnemyBadgePositions(Geometry);
     if ((PressedKeys.Num()>0 || bAlternateCommands) && !HasGameInputFocus()) { PressedKeys.Reset(); SetAlternateCommands(false); }
     const FReditusBattleHUDUnit* Data=Selected();
     const bool Ready=Data && Data->HP>0.f && Data->bCanOverdrive && Data->bOverdriveEntered;
     const float Pulse=Ready && GetWorld() ? 0.80f+0.20f*FMath::Sin(GetWorld()->GetRealTimeSeconds()*5.f) : 1.f;
     for (FButtonView& View : UtilityButtons)
         if (View.Command==EReditusHUDCommand::Overdrive) View.Button->SetRenderOpacity(Pulse);
+}
+
+bool UReditusBattleHUDWidget::HandleTimedAttackKeyDown(FKey Key,bool bRepeat)
+{
+    if (Key!=(Key.IsGamepadKey() ? GamepadKeys.Block : KeyboardBlockKey)) return false;
+    if (bRepeat || PressedKeys.Contains(Key)) return PressedKeys.Contains(Key);
+    if (!GameplayInputRouter.IsBound() || !GameplayInputRouter.Execute(InputActions.TimedAttack,Key)) return false;
+    PressedKeys.Add(Key);
+    return true;
 }
 
 bool UReditusBattleHUDWidget::HandleBattleKeyDown(FKey Key,bool bRepeat)
@@ -1449,10 +1693,24 @@ bool UReditusBattleHUDWidget::HandleBattleKeyDown(FKey Key,bool bRepeat)
     if (!ReditusHUDInputPolicy::ShouldDispatchPress(PressedKeys.Contains(Key),bRepeat,bIsNavigationKey)) return true;
     const auto Owned=[this,Key]() { PressedKeys.Add(Key); return true; };
     const bool Gamepad=Key.IsGamepadKey();
-    const bool Block=Gamepad ? Key==GamepadKeys.Block : bReactionWindow && MatchesAction(InputActions.Block,Key);
-    if (Block && (bReactionWindow || bCommandsEnabled || bListOpen))
+    const bool BlockKey=Gamepad ? Key==GamepadKeys.Block : Key==KeyboardBlockKey;
+    if (HandleTimedAttackKeyDown(Key,bRepeat)) return true;
+    if (BlockKey && bReactionWindow)
     {
         if (!bRepeat) RequestCommand(EReditusHUDCommand::Block);
+        return Owned();
+    }
+    const bool BackKey=Gamepad ? Key==GamepadBackKey : Key==KeyboardBackKey;
+    if (BackKey && (IsMenuOpen() || bTargetSelectionActive))
+    {
+        if (!bRepeat) RequestCommand(EReditusHUDCommand::Cancel);
+        return Owned();
+    }
+    if (BlockKey && (!Gamepad || bCommandsEnabled || bListOpen))
+    {
+        // Reserve Space in battle so Slate can't also use it to click a
+        // focused menu button when there is no active combat timing window.
+        if (Gamepad && !bRepeat) RequestCommand(EReditusHUDCommand::Block);
         return Owned();
     }
     const bool Increase=Gamepad ? Key==GamepadKeys.IncreaseAmp : MatchesAction(InputActions.IncreaseAmp,Key);
@@ -1473,11 +1731,10 @@ bool UReditusBattleHUDWidget::HandleBattleKeyDown(FKey Key,bool bRepeat)
         const int32 Target=Gamepad ? ReditusHUDInputPolicy::FaceTarget(ReditusHUDInputPolicy::Surface::Target,Face,false) : ReditusHUDInputPolicy::Pass;
         const FKey* AttackShortcut=KeyboardShortcuts.Find(EReditusHUDCommand::Attack);
         const bool ConfirmKey=Gamepad ? Target==ReditusHUDInputPolicy::Confirm :
-            Key==EKeys::Enter || MatchesAction(TEXT("MenuConfirm"),Key) || (AttackShortcut && Key==*AttackShortcut);
-        const bool BackKey=Gamepad ? Key==GamepadBackKey : Key==KeyboardBackKey;
-        if (BackKey || ConfirmKey)
+            IsKeyboardConfirmKey(Key) || (AttackShortcut && Key==*AttackShortcut);
+        if (ConfirmKey)
         {
-            if (!bRepeat) RequestCommand(BackKey ? EReditusHUDCommand::Cancel : EReditusHUDCommand::Attack);
+            if (!bRepeat) RequestCommand(EReditusHUDCommand::Attack);
             return Owned();
         }
         FName TargetAction;
@@ -1498,23 +1755,16 @@ bool UReditusBattleHUDWidget::HandleBattleKeyDown(FKey Key,bool bRepeat)
     }
     if (Gamepad)
     {
-        if (bListOpen && Key==GamepadBackKey)
-        {
-            if (!bRepeat) RequestCommand(EReditusHUDCommand::Cancel);
-            return Owned();
-        }
         const FKey Faces[] = {GamepadKeys.Bottom,GamepadKeys.Left,GamepadKeys.Right,GamepadKeys.Top};
         int32 Face=INDEX_NONE;
         for (int32 I=0; I<4; ++I) if (Key==Faces[I]) Face=I;
         const auto Surface=bListOpen ? ReditusHUDInputPolicy::Surface::List : Root ? ReditusHUDInputPolicy::Surface::Commands : ReditusHUDInputPolicy::Surface::Inactive;
-        int32 Target=ReditusHUDInputPolicy::FaceTarget(Surface,Face,bAlternateCommands);
-        if (bListOpen && Target==ReditusHUDInputPolicy::Back && Key!=GamepadBackKey) Target=ReditusHUDInputPolicy::Pass;
-        if (Target!=ReditusHUDInputPolicy::Pass)
+        const int32 Target=ReditusHUDInputPolicy::FaceTarget(Surface,Face,bAlternateCommands);
+        if (Target!=ReditusHUDInputPolicy::Pass && Target!=ReditusHUDInputPolicy::Back)
         {
             if (!bRepeat)
             {
-                if (Target==ReditusHUDInputPolicy::Back) RequestCommand(EReditusHUDCommand::Cancel);
-                else if (Target==ReditusHUDInputPolicy::Confirm) ChooseSelectedMenuEntry();
+                if (Target==ReditusHUDInputPolicy::Confirm) ChooseSelectedMenuEntry();
                 else RequestCommand(CommandOrder[Target]);
             }
             return Owned();
@@ -1524,11 +1774,6 @@ bool UReditusBattleHUDWidget::HandleBattleKeyDown(FKey Key,bool bRepeat)
             if (!bRepeat) RequestCommand(EReditusHUDCommand::Overdrive);
             return Owned();
         }
-    }
-    if (bListOpen && !Gamepad && Key==KeyboardBackKey)
-    {
-        if (!bRepeat) RequestCommand(EReditusHUDCommand::Cancel);
-        return Owned();
     }
     if (!Root && !bListOpen) return false; // Existing target/dialogue input remains authoritative.
     const int32 V=(Key==EKeys::Up || Key==EKeys::W || Key==EKeys::Gamepad_DPad_Up || Key==EKeys::Gamepad_LeftStick_Up) ? -1 :
@@ -1545,7 +1790,7 @@ bool UReditusBattleHUDWidget::HandleBattleKeyDown(FKey Key,bool bRepeat)
         ChangeMenuPage(Key==EKeys::PageUp ? -1 : 1);
         return Owned();
     }
-    if (Key==EKeys::Enter || (!Gamepad && MatchesAction(TEXT("MenuConfirm"),Key)))
+    if (!Gamepad && IsKeyboardConfirmKey(Key))
     {
         if (!bRepeat)
         {
@@ -1556,7 +1801,7 @@ bool UReditusBattleHUDWidget::HandleBattleKeyDown(FKey Key,bool bRepeat)
     }
     if (Root && !Gamepad)
     {
-        if (Key==KeyboardBackKey) { if (!bRepeat) RequestCommand(EReditusHUDCommand::Cancel); return Owned(); }
+        if (BackKey) return Owned(); // No legacy cancel while the main commands are open.
         for (int32 I=0; I<4; ++I)
             if (const FKey* Shortcut=KeyboardShortcuts.Find(CommandOrder[I]))
                 if (*Shortcut==Key)

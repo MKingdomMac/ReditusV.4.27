@@ -66,6 +66,9 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Style") FSlateBrush AmpImageBrush;
     /** Optional custom stamina icon. Empty uses the built-in gold flexing figure. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Style") FSlateBrush StaminaImageBrush;
+    /** Gap between the projected sprite and the lower edge of its status badge, in HUD units. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Enemies", meta=(ClampMin="0.0"))
+    float EnemyBadgeGap = 9.f;
     /** Reuses each legacy row's SelectedImage brush unless explicitly assigned. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Style") FSlateBrush ListSelectionBrush;
     /** Match the live original item/skill text font and size. */
@@ -75,6 +78,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio") USoundBase* NavigationSound = nullptr;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio") bool bPlayNavigationSound = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio", meta=(ClampMin="0.0",ClampMax="1.0")) float NavigationSoundVolume = 0.6f;
+    /** Optional replacement for the cue when the active ATB character can choose a command. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio") USoundBase* TurnReadySound = nullptr;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio") bool bPlayTurnReadySound = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio", meta=(ClampMin="0.0",ClampMax="1.0")) float TurnReadySoundVolume = 0.85f;
     /** Plays once when the root Attack command is accepted, through any input device. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio") USoundBase* ConfirmSound = nullptr;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Audio") bool bPlayConfirmSound = true;
@@ -83,6 +90,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Style") TMap<FName,UTexture2D*> GlyphTextures;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") FReditusBattleHUDInputActions InputActions;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") FReditusBattleHUDGamepadKeys GamepadKeys;
+    /** The same keyboard key serves Block and the regular-attack timing window. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") FKey KeyboardBlockKey = EKeys::SpaceBar;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") FKey KeyboardConfirmKey = EKeys::E;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") FKey KeyboardAlternateConfirmKey = EKeys::Enter;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") FKey KeyboardMoreKey = EKeys::LeftShift;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") bool bCaptureBattleInput = true;
     /** A pause or unrelated modal can suspend the battle input owner explicitly. */
@@ -121,6 +132,7 @@ public:
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetTargetedEnemy(AActor* Enemy);
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetTargetLabel(FText Label);
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void ClearTargetLabel();
+    void SetEnemyStatusViews(const TArray<FReditusEnemyHUDView>& Views);
     /** Presentation only; the existing skill/attack events own its timing. */
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetActionAnnouncement(FText Label, const FSlateBrush& ElementIcon, bool bVisible = true);
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void ClearActionAnnouncement();
@@ -152,7 +164,9 @@ public:
     void HandleHover(EReditusHUDCommand Command, int32 Index);
     void ObserveKey(const FKey& Key);
     void ObserveMouseMovement(float DistanceSquared);
-    bool HasGameInputFocus() const;
+    bool HasGameInputFocus(bool bAllowFocusHandoff = false) const;
+    bool HandleTimedAttackKeyDown(FKey Key, bool bRepeat);
+    void PlayTurnReadyCue();
     bool HandleBattleKeyDown(FKey Key, bool bRepeat);
     bool HandleBattleKeyUp(FKey Key);
     bool HandleBattleAnalog(FKey Key, float Previous, float Current);
@@ -167,6 +181,17 @@ protected:
     virtual FReply NativeOnMouseWheel(const FGeometry& Geometry, const FPointerEvent& Event) override;
 
 private:
+    struct FEnemyBadge
+    {
+        UVerticalBox* Stack = nullptr;
+        UBorder* Frame = nullptr;
+        UImage* Diamond = nullptr;
+        UImage* Notch = nullptr;
+        UHorizontalBox* Strip = nullptr;
+        int32 Stamina = INDEX_NONE;
+        int32 MaxStamina = INDEX_NONE;
+        TArray<uint8> Icons;
+    };
     struct FCard
     {
         UBorder* Frame = nullptr;
@@ -216,6 +241,17 @@ private:
     UPROPERTY(Transient) UCanvasPanel* CommandCanvas = nullptr;
     UPROPERTY(Transient) UCanvasPanel* CommandRegion = nullptr;
     UPROPERTY(Transient) UTextBlock* TargetName = nullptr;
+    UPROPERTY(Transient) UBorder* TargetFrame = nullptr;
+    UPROPERTY(Transient) UVerticalBox* TargetDetails = nullptr;
+    UPROPERTY(Transient) UCanvasPanel* EnemyBadgeCanvas = nullptr;
+    UPROPERTY(Transient) TArray<FReditusEnemyHUDView> EnemyStatusViews;
+    UPROPERTY(Transient) TArray<FSlateBrush> EnemyGlyphBrushes;
+    TMap<TWeakObjectPtr<AActor>,FEnemyBadge> EnemyBadges;
+    TWeakObjectPtr<AActor> TargetEnemy;
+    TWeakObjectPtr<AActor> DisplayedEnemyDetails;
+    TArray<FReditusEnemyHUDEffect> DisplayedEnemyEffects;
+    int32 DisplayedEnemyStamina = INDEX_NONE;
+    int32 DisplayedEnemyMaxStamina = INDEX_NONE;
     UPROPERTY(Transient) UBorder* ActionFrame = nullptr;
     UPROPERTY(Transient) UTextBlock* ActionName = nullptr;
     UPROPERTY(Transient) UImage* ActionElement = nullptr;
@@ -265,6 +301,9 @@ private:
     float DisplayedSpeed = 1.f;
 
     void BuildLayout();
+    void RefreshTargetDisplay();
+    void UpdateEnemyBadgePositions(const FGeometry& Geometry);
+    UImage* MakeEnemyGlyph(int32 Glyph,float Size);
     void InitializeSkin();
     void RefreshAmpImages(UHorizontalBox* IconHost, TArray<UImage*>& Images, int32 Total, int32 Committed);
     void BuildCards();
@@ -283,6 +322,7 @@ private:
     bool RouteGameplayInput(FName Action, FKey Key);
     bool MatchesAction(FName Action, const FKey& Key) const;
     FKey KeyForAction(FName Action) const;
+    bool IsKeyboardConfirmKey(const FKey& Key) const { return Key==KeyboardConfirmKey || Key==KeyboardAlternateConfirmKey; }
     FKey KeyForCommand(EReditusHUDCommand Command) const;
     const FReditusBattleHUDUnit* Selected() const;
     bool CanChooseMenuEntry() const;

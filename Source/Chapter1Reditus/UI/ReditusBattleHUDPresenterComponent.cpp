@@ -2,10 +2,19 @@
 #include "ReditusBattleHUDWidget.h"
 #include "ReditusBattleHUDPolicy.h"
 #include "ReditusBattleHUDInputPolicy.h"
+#if __has_include("../ATB/ReditusATBComponent.h")
+#include "../ATB/ReditusATBComponent.h"
+#define REDITUS_HUD_HAS_ATB 1
+#else
+#define REDITUS_HUD_HAS_ATB 0
+#endif
+#include "Animation/WidgetAnimation.h"
 #include "Components/InputComponent.h"
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Components/Image.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/SceneComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Blueprint/WidgetTree.h"
 #include "Engine/DataTable.h"
@@ -30,6 +39,30 @@ namespace
     {
         FObjectPropertyBase* Field=CastField<FObjectPropertyBase>(Property(Object,Name));
         return Field ? Field->GetObjectPropertyValue_InContainer(Object) : nullptr;
+    }
+
+#if REDITUS_HUD_HAS_ATB
+    const FName MenuSlowdownSource(TEXT("Reditus.HUD.EnemyMenuSlowdown"));
+
+    UReditusATBComponent* RunningATB(AActor* Controller)
+    {
+        auto* ATB=IsValid(Controller) ? Controller->FindComponentByClass<UReditusATBComponent>() : nullptr;
+        return ATB && ATB->IsATBRunning() ? ATB : nullptr;
+    }
+#endif
+
+    AActor* CommandOwner(AActor* Controller, bool* bUsingATB = nullptr)
+    {
+        if (bUsingATB) *bUsingATB=false;
+#if REDITUS_HUD_HAS_ATB
+        if (const auto* ATB=RunningATB(Controller))
+        {
+            if (bUsingATB) *bUsingATB=true;
+            AActor* Unit=Cast<AActor>(ObjectValue(Controller,TEXT("ATBCommandUnit")));
+            return IsValid(Unit) && ATB->GetUnitState(Unit).Phase==EReditusATBPhase::Ready ? Unit : nullptr;
+        }
+#endif
+        return Cast<AActor>(ObjectValue(Controller,TEXT("currentAttackingUnit")));
     }
 
     bool SetObjectValue(UObject* Object,FName Name,UObject* Value)
@@ -103,6 +136,76 @@ namespace
         return Result;
     }
 
+    void ReadEnemyEffects(AActor* Unit,TArray<FReditusEnemyHUDEffect>& Effects)
+    {
+        using E=EReditusEnemyEffect;
+        constexpr int32 Count=static_cast<int32>(E::Count);
+        bool Active[Count]={};
+        int32 Turns[Count];
+        for (int32& Value:Turns) Value=INDEX_NONE;
+        const auto Record=[&](E Kind,int32 Remaining=INDEX_NONE)
+        {
+            const int32 Index=static_cast<int32>(Kind);
+            Active[Index]=true;
+            if (Remaining>0) Turns[Index]=FMath::Max(Turns[Index],Remaining);
+        };
+        struct FFlag { const TCHAR* PropertyName; E Kind; };
+        static const FFlag Flags[]={
+            {TEXT("Staggered"),E::Staggered},{TEXT("Is DOT"),E::Poison},{TEXT("isStun"),E::Stun},
+            {TEXT("Is Blind?"),E::Blind},{TEXT("IsSleeping"),E::Sleep},{TEXT("Is Confused"),E::Confusion},
+            {TEXT("NewConfused"),E::Confusion},{TEXT("IsCharmed??"),E::Charm},{TEXT("IsBerserk??"),E::Berserk},
+            {TEXT("IsTaunted"),E::Taunt},{TEXT("IsExhausted"),E::Exhausted},{TEXT("Swallowed"),E::Swallowed},
+            {TEXT("IsRegen"),E::Regen},{TEXT("IsDefending"),E::GuardUp},{TEXT("IsProtected"),E::Protected},
+            {TEXT("HitIncrease"),E::AccuracyUp}
+        };
+        for (const auto& Flag:Flags) if (Boolean(Unit,Flag.PropertyName)) Record(Flag.Kind);
+
+        auto* Map=CastField<FMapProperty>(Property(Unit,TEXT("activeBuffs")));
+        auto* Key=Map ? CastField<FClassProperty>(Map->KeyProp) : nullptr;
+        auto* Value=Map ? CastField<FObjectPropertyBase>(Map->ValueProp) : nullptr;
+        if (Key && Value)
+        {
+            FScriptMapHelper Buffs(Map,Map->ContainerPtrToValuePtr<void>(Unit));
+            for (int32 I=0; I<Buffs.GetMaxIndex(); ++I)
+            {
+                if (!Buffs.IsValidIndex(I)) continue;
+                UObject* Instance=Value->GetObjectPropertyValue(Buffs.GetValuePtr(I));
+                if (!IsValid(Instance) || Instance->IsA(UClass::StaticClass())) continue;
+                UClass* Class=Cast<UClass>(Key->GetObjectPropertyValue(Buffs.GetKeyPtr(I)));
+                if (!IsValid(Class)) continue;
+                const FString Name=Class->GetName();
+                E Kind=E::Count;
+                if (Name.Contains(TEXT("Stagger"))) Kind=E::Staggered;
+                else if (Name.Contains(TEXT("Poison"))) Kind=E::Poison;
+                else if (Name.Contains(TEXT("Stun"))) Kind=E::Stun;
+                else if (Name.Contains(TEXT("Blind"))) Kind=E::Blind;
+                else if (Name.Contains(TEXT("Sleep"))) Kind=E::Sleep;
+                else if (Name.Contains(TEXT("Confus"))) Kind=E::Confusion;
+                else if (Name.Contains(TEXT("Charm"))) Kind=E::Charm;
+                else if (Name.Contains(TEXT("Berserk"))) Kind=E::Berserk;
+                else if (Name.Contains(TEXT("Taunt"))) Kind=E::Taunt;
+                else if (Name.Contains(TEXT("Exhaust"))) Kind=E::Exhausted;
+                else if (Name.Contains(TEXT("Swallow"))) Kind=E::Swallowed;
+                else if (Name.Contains(TEXT("Regen"))) Kind=E::Regen;
+                else if (Name.Contains(TEXT("DefenseIncrease"))) Kind=E::GuardUp;
+                else if (Name.Contains(TEXT("Protect"))) Kind=E::Protected;
+                else if (Name.Contains(TEXT("HitIncrease"))) Kind=E::AccuracyUp;
+                else if (Name.Contains(TEXT("CritIncrease"))) Kind=E::CriticalUp;
+                else if (Name.Contains(TEXT("HitCounter"))) Kind=E::Counter;
+                if (Kind!=E::Count)
+                    Record(Kind,Boolean(Instance,TEXT("Permenant State")) ? INDEX_NONE :
+                        static_cast<int32>(Number(Instance,TEXT("turnLeft"),INDEX_NONE)));
+            }
+        }
+        for (int32 Index=0; Index<Count; ++Index)
+            if (Active[Index])
+            {
+                FReditusEnemyHUDEffect& Effect=Effects.AddDefaulted_GetRef();
+                Effect.Kind=static_cast<uint8>(Index);
+                Effect.Turns=Turns[Index];
+            }
+    }
+
     TSet<FName> DeadCharacterIDs(UObject* Battle)
     {
         TSet<FName> Result;
@@ -171,6 +274,34 @@ namespace
         return true;
     }
 
+    void SetBoolValue(UObject* Object,FName Name,bool Value)
+    {
+        if (FBoolProperty* Field=CastField<FBoolProperty>(Property(Object,Name)))
+            Field->SetPropertyValue_InContainer(Object,Value);
+    }
+
+    void SetTargetIcon(AActor* Unit,bool Visible)
+    {
+        UFunction* Function=IsValid(Unit) ? Unit->FindFunction(TEXT("SetTargetIconVisibility")) : nullptr;
+        if (!Function || Function->NumParms!=1) return;
+        FBoolProperty* Field=FindFProperty<FBoolProperty>(Function,TEXT("visibility"));
+        if (!Field || !Field->HasAnyPropertyFlags(CPF_Parm) || Field->HasAnyPropertyFlags(CPF_OutParm|CPF_ReturnParm)) return;
+        TArray<uint8> Parameters;
+        Parameters.SetNumZeroed(Function->ParmsSize);
+        Field->SetPropertyValue_InContainer(Parameters.GetData(),Visible);
+        Unit->ProcessEvent(Function,Parameters.GetData());
+    }
+
+    void RestoreATBListCommands(AActor* Unit)
+    {
+        SetSelectionValue(Unit,3); // E_SelectType::ActionsUI
+        SetBoolValue(Unit,TEXT("Confirmed"),false);
+        SetBoolValue(Unit,TEXT("TargetSet"),false);
+        SetBoolValue(Unit,TEXT("isInputBlocked"),false);
+        CallNoArgumentEvent(Unit,TEXT("Reset Input"));
+        if (auto* FX=Cast<USceneComponent>(ObjectValue(Unit,TEXT("PS_GPS_Selection_02")))) FX->SetVisibility(true);
+    }
+
     TArray<UUserWidget*> WidgetArray(UObject* Object,FName Name)
     {
         TArray<UUserWidget*> Result;
@@ -227,6 +358,204 @@ namespace
         return false;
     }
 
+    // UE4 user-defined structs append a generated suffix to field names.
+    FProperty* GeneratedStructField(const UStruct* Struct,const TCHAR* Name)
+    {
+        if (!Struct) return nullptr;
+        const FString Prefix=FString(Name)+TEXT("_");
+        const FName FieldName(Name);
+        for (TFieldIterator<FProperty> It(Struct); It; ++It)
+            if (It->GetFName()==FieldName || It->GetName().StartsWith(Prefix)) return *It;
+        return nullptr;
+    }
+
+    struct FHUDTableRow
+    {
+        UDataTable* Table;
+        const uint8* Data;
+        FHUDTableRow(UDataTable* InTable,FName ID) : Table(InTable), Data(nullptr)
+        {
+            if (IsValid(Table))
+                if (uint8* const* Row=Table->GetRowMap().Find(ID)) Data=*Row;
+        }
+        FProperty* Find(const TCHAR* Name) const
+        {
+            return Data ? GeneratedStructField(Table->GetRowStruct(),Name) : nullptr;
+        }
+        int32 Int(const TCHAR* Name,int32 Default=INDEX_NONE) const
+        {
+            FProperty* Field=Find(Name);
+            if (auto* Enum=CastField<FEnumProperty>(Field))
+                return static_cast<int32>(Enum->GetUnderlyingProperty()->GetSignedIntPropertyValue(Enum->ContainerPtrToValuePtr<void>(Data)));
+            if (auto* Byte=CastField<FByteProperty>(Field)) return Byte->GetPropertyValue_InContainer(Data);
+            if (auto* Integer=CastField<FIntProperty>(Field)) return Integer->GetPropertyValue_InContainer(Data);
+            return Default;
+        }
+        UClass* Class(const TCHAR* Name) const
+        {
+            if (auto* Field=CastField<FClassProperty>(Find(Name)))
+                return Cast<UClass>(Field->GetObjectPropertyValue_InContainer(Data));
+            return nullptr;
+        }
+    };
+
+    struct FHUDSkillAccess
+    {
+        TMap<FName,int32> Requirements;
+        TSet<FName> EquippedMoves;
+        int32 Level=INDEX_NONE;
+
+        bool Allows(FName MoveID) const
+        {
+            if (MoveID.IsNone() || Level<0) return false;
+            if (const int32* Required=Requirements.Find(MoveID)) return Level>=*Required;
+            return EquippedMoves.Contains(MoveID);
+        }
+    };
+
+    FHUDSkillAccess ReadSkillAccess(AActor* Unit,UObject* RosterOwner,UDataTable* PartyTable,UDataTable* EquipmentTable,bool bOverdrive)
+    {
+        FHUDSkillAccess Access;
+        const FName CharacterID=NameValue(Unit,TEXT("CharacterID"));
+        const auto* Level=CastField<FIntProperty>(Property(Unit,TEXT("level")));
+        if (!Level || CharacterID.IsNone()) return Access;
+
+        const FHUDTableRow Character(PartyTable,CharacterID);
+        auto* Unlocks=CastField<FMapProperty>(Character.Find(bOverdrive ? TEXT("Overdriveskills") : TEXT("Battleskills")));
+        const auto* SkillKey=Unlocks ? CastField<FNameProperty>(Unlocks->KeyProp) : nullptr;
+        const auto* RequiredLevel=Unlocks ? CastField<FIntProperty>(Unlocks->ValueProp) : nullptr;
+        if (!SkillKey || !RequiredLevel) return Access;
+        Access.Level=Level->GetPropertyValue_InContainer(Unit);
+        FScriptMapHelper Learnset(Unlocks,Unlocks->ContainerPtrToValuePtr<void>(Character.Data));
+        for (int32 Index=0; Index<Learnset.GetMaxIndex(); ++Index)
+            if (Learnset.IsValidIndex(Index))
+                Access.Requirements.Add(SkillKey->GetPropertyValue(Learnset.GetKeyPtr(Index)),
+                    RequiredLevel->GetPropertyValue(Learnset.GetValuePtr(Index)));
+
+        // Only current equipment can grant a move absent from this character's learnset.
+        auto* Roster=CastField<FMapProperty>(Property(RosterOwner,TEXT("PlayerUnitDataID")));
+        const auto* CharacterKey=Roster ? CastField<FNameProperty>(Roster->KeyProp) : nullptr;
+        auto* UnitData=Roster ? CastField<FStructProperty>(Roster->ValueProp) : nullptr;
+        if (!CharacterKey || !UnitData || !UnitData->Struct) return Access;
+        FScriptMapHelper RosterRows(Roster,Roster->ContainerPtrToValuePtr<void>(RosterOwner));
+        for (int32 Index=0; Index<RosterRows.GetMaxIndex(); ++Index)
+        {
+            if (!RosterRows.IsValidIndex(Index) || CharacterKey->GetPropertyValue(RosterRows.GetKeyPtr(Index))!=CharacterID) continue;
+            const void* Data=RosterRows.GetValuePtr(Index);
+            static const TCHAR* Slots[]={TEXT("Weapon"),TEXT("Armor"),TEXT("Accessory"),TEXT("Helm"),TEXT("Boots"),TEXT("Accessory1")};
+            for (const TCHAR* Slot:Slots)
+            {
+                const auto* ItemID=CastField<FNameProperty>(GeneratedStructField(UnitData->Struct,Slot));
+                if (!ItemID) continue;
+                const FName EquippedID=ItemID->GetPropertyValue_InContainer(Data);
+                if (EquippedID.IsNone()) continue;
+                const FHUDTableRow Equipment(EquipmentTable,EquippedID);
+                auto* Skills=CastField<FArrayProperty>(Equipment.Find(bOverdrive ? TEXT("OverDriveSkillIDs") : TEXT("BattleSkillIDs")));
+                const auto* SkillName=Skills ? CastField<FNameProperty>(Skills->Inner) : nullptr;
+                if (!SkillName) continue;
+                FScriptArrayHelper Grants(Skills,Skills->ContainerPtrToValuePtr<void>(Equipment.Data));
+                for (int32 I=0; I<Grants.Num(); ++I)
+                    Access.EquippedMoves.Add(SkillName->GetPropertyValue(Grants.GetRawPtr(I)));
+            }
+            break;
+        }
+        return Access;
+    }
+
+#if REDITUS_HUD_HAS_ATB
+    struct FHUDActionTargets
+    {
+        TArray<AActor*> Units;
+        bool bGroup=false;
+    };
+
+    FHUDActionTargets ListTargets(AActor* Controller,AActor* Owner,EReditusHUDCommand Command,const FHUDTableRow& Row,
+        const TArray<FReditusBattleHUDUnit>& Cards)
+    {
+        FHUDActionTargets Result;
+        UObject* Battle=ObjectValue(Controller,TEXT("currentBattle"));
+        TArray<AActor*> Allies=Actors(Battle,TEXT("playerUnits"));
+        const TArray<AActor*> Enemies=Actors(Battle,TEXT("enemyUnits"));
+        for (const auto& Card:Cards) if (IsValid(Card.Unit)) Allies.AddUnique(Card.Unit);
+        const bool bItem=Command==EReditusHUDCommand::Items;
+        // Enum values from E_UnitFilter, E_TargetScope, and E_SkillType in the project dump.
+        int32 Scope=Row.Int(TEXT("TargetScope"));
+        int32 Filter=Row.Int(TEXT("UnitFilter"));
+        int32 SkillType=Row.Int(TEXT("SkillType"));
+        if (bItem)
+        {
+            UClass* ItemClass=Row.Class(TEXT("UsableItemLegacyLaunch"));
+            if (!ItemClass) return Result; // The Blueprint executor needs a usable item class.
+            UObject* Defaults=ItemClass->GetDefaultObject();
+            const int32 LegacyFilter=static_cast<int32>(Number(Defaults,TEXT("unitFilter"),INDEX_NONE));
+            // The existing executor checks the legacy filter on the spawned item.
+            if (LegacyFilter==2 || Scope<=0) Filter=LegacyFilter;
+            SkillType=static_cast<int32>(Number(Defaults,TEXT("skillType"),INDEX_NONE));
+            if (Filter==2 && Scope<=0) Scope=3; // Revive picks a KO ally.
+        }
+        if (!bItem || Scope<=0)
+        {
+            switch (SkillType)
+            {
+            case 0: Scope=2; break;
+            case 1: Scope=3; break;
+            case 2: Scope=1; break;
+            case 3: Scope=4; break;
+            case 4: Scope=5; break;
+            default: return Result;
+            }
+            if (bItem && Filter==3 && Scope!=1 && Scope!=2) Scope=2;
+        }
+        Result.bGroup=Scope==1 || Scope==4 || Scope==5;
+        const auto Append=[&](const TArray<AActor*>& Units,bool bEnemies)
+        {
+            for (AActor* Unit:Units)
+            {
+                if (!IsValid(Unit) || !Property(Unit,TEXT("currentHP"))) continue;
+                const bool bDead=Number(Unit,TEXT("currentHP"))<=0.0 || Boolean(Unit,TEXT("IsDead?"));
+                if (!bItem && bDead) continue;
+                if (bItem && (Filter==2 ? (bEnemies || !bDead) : (bDead && (bEnemies || Filter!=0)))) continue;
+                Result.Units.AddUnique(Unit);
+            }
+        };
+        if (Scope==1 || Scope==2 || Scope==5) Append(Enemies,true);
+        if (Scope==3 || Scope==4 || Scope==5)
+        {
+            // Also works when only the ready player's actor is available in the HUD.
+            Allies.AddUnique(Owner);
+            Append(Allies,false);
+        }
+        return Result;
+    }
+
+    bool CanUseATBListEntry(AActor* Unit,EReditusHUDCommand Command,const FHUDTableRow& Row)
+    {
+        if (!Row.Data) return false;
+        if (Command==EReditusHUDCommand::Items)
+        {
+            const FBoolProperty* ExploreOnly=CastField<FBoolProperty>(Row.Find(TEXT("ExploreOnly")));
+            return !ExploreOnly || !ExploreOnly->GetPropertyValue_InContainer(Row.Data);
+        }
+        if (Command==EReditusHUDCommand::Overdrive &&
+            (!Boolean(Unit,TEXT("CanEnterOverdrive")) || !Boolean(Unit,TEXT("OverdriveEntered")))) return false;
+        const int32 Cost=Row.Int(TEXT("MPCost"));
+        return Cost>=0 && Number(Unit,TEXT("currentMP"),-1)>=Cost;
+    }
+
+    int32 LiveItemCount(UObject* PlayerController,FName ID,int32 Fallback)
+    {
+        FMapProperty* Map=CastField<FMapProperty>(Property(PlayerController,TEXT("usableItems")));
+        const auto* Key=Map ? CastField<FNameProperty>(Map->KeyProp) : nullptr;
+        const auto* Quantity=Map ? CastField<FIntProperty>(Map->ValueProp) : nullptr;
+        if (!Key || !Quantity) return Fallback;
+        FScriptMapHelper Items(Map,Map->ContainerPtrToValuePtr<void>(PlayerController));
+        for (int32 Index=0; Index<Items.GetMaxIndex(); ++Index)
+            if (Items.IsValidIndex(Index) && Key->GetPropertyValue(Items.GetKeyPtr(Index))==ID)
+                return FMath::Max(0,Quantity->GetPropertyValue(Items.GetValuePtr(Index)));
+        return 0;
+    }
+#endif
+
     UObject* TableThumbnail(UDataTable* Table,FName ID)
     {
         if (!IsValid(Table) || !Table->GetRowStruct()) return nullptr;
@@ -268,11 +597,19 @@ namespace
         return Result;
     }
 
-    bool ExecuteInputAction(AActor* Actor,FName Action,FKey Key)
+    bool ExecuteInputAction(AActor* Actor,FName Action,FKey Key,bool bSingleBinding=false)
     {
         if (!IsValid(Actor)) return false;
         TArray<UInputComponent*> Components;
         Actor->GetComponents<UInputComponent>(Components);
+        // The attacker's own binding stays usable after another actor takes
+        // the player-controller input stack. Prefer it for a single press.
+        if (bSingleBinding)
+            if (auto* Primary=Cast<UInputComponent>(ObjectValue(Actor,TEXT("InputComponent"))))
+            {
+                Components.Remove(Primary);
+                Components.Insert(Primary,0);
+            }
         // Copy delegates first: a Blueprint callback can change input components.
         TArray<FInputActionUnifiedDelegate> Delegates;
         for (UInputComponent* Input : Components)
@@ -282,8 +619,12 @@ namespace
             {
                 const FInputActionBinding& Binding=Input->GetActionBinding(I);
                 if (Binding.GetActionName()==Action && Binding.KeyEvent==IE_Pressed && Binding.ActionDelegate.IsBound())
+                {
                     Delegates.Add(Binding.ActionDelegate);
+                    if (bSingleBinding) break;
+                }
             }
+            if (bSingleBinding && Delegates.Num()>0) break;
         }
         for (FInputActionUnifiedDelegate& Delegate : Delegates) Delegate.Execute(Key);
         return Delegates.Num()>0;
@@ -334,6 +675,12 @@ UReditusBattleHUDWidget* UReditusBattleHUDPresenterComponent::CreateBattleHUD(AP
 void UReditusBattleHUDPresenterComponent::DestroyBattleHUD()
 {
     RestoreCombatInputProfile();
+    ClearATBListTargeting();
+    ClearEnemyMenuSlowdown();
+    OpenLegacyMenuWindows.Reset();
+    RestoreLegacyEnemyComponents();
+    ExplicitEnemyTarget.Reset();
+    bShowingEnemyATBAnnouncement=false;
     ClearNativeMenu();
     for (int32 I=0; I<SuppressedMenuWidgets.Num(); ++I)
         if (IsValid(SuppressedMenuWidgets[I]) && SuppressedMenuVisibility.IsValidIndex(I))
@@ -354,6 +701,7 @@ void UReditusBattleHUDPresenterComponent::DestroyBattleHUD()
     HUD=nullptr;
     DisplaySlots.Reset();
     PreviousLegacyUnit.Reset();
+    LastTurnCueCycles.Reset();
     for (int32 I=0; I<HiddenLegacyWidgets.Num(); ++I)
         if (IsValid(HiddenLegacyWidgets[I]) && PreviousLegacyVisibility.IsValidIndex(I))
             HiddenLegacyWidgets[I]->SetVisibility(PreviousLegacyVisibility[I]);
@@ -365,7 +713,7 @@ void UReditusBattleHUDPresenterComponent::ApplyCombatInputProfile()
 {
     if (!bApplyCombatGamepadProfile || !HUD || !Player || !Player->PlayerInput || InputOverrides.Num()>0) return;
     UPlayerInput* Input=Player->PlayerInput;
-    const auto Override=[this,Input](FName Action,FKey Key,bool AllDevices=false,FKey Keyboard=FKey()) {
+    const auto Override=[this,Input](FName Action,FKey Key,bool AllDevices=false,FKey Keyboard=FKey(),FKey AlternateKeyboard=FKey()) {
         if (Action.IsNone()) return;
         FInputOverride Saved;
         Saved.Action=Action;
@@ -374,16 +722,18 @@ void UReditusBattleHUDPresenterComponent::ApplyCombatInputProfile()
         Saved.Applied.RemoveAll([AllDevices](const FInputActionKeyMapping& Mapping) { return AllDevices || Mapping.Key.IsGamepadKey(); });
         if (Key.IsValid()) Saved.Applied.AddUnique(FInputActionKeyMapping(Action,Key));
         if (Keyboard.IsValid()) Saved.Applied.AddUnique(FInputActionKeyMapping(Action,Keyboard));
+        if (AlternateKeyboard.IsValid()) Saved.Applied.AddUnique(FInputActionKeyMapping(Action,AlternateKeyboard));
         for (const auto& Mapping : Saved.Before) Input->RemoveActionMapping(Mapping);
         for (const auto& Mapping : Saved.Applied) Input->AddActionMapping(Mapping);
         InputOverrides.Add(Saved);
     };
-    Override(HUD->InputActions.Block,HUD->GamepadKeys.Block);
+    Override(HUD->InputActions.Block,HUD->GamepadKeys.Block,true,HUD->KeyboardBlockKey);
+    Override(HUD->InputActions.TimedAttack,HUD->GamepadKeys.Block,true,HUD->KeyboardBlockKey);
     Override(HUD->InputActions.DecreaseAmp,HUD->GamepadKeys.DecreaseAmp);
     Override(HUD->InputActions.IncreaseAmp,HUD->GamepadKeys.IncreaseAmp);
     // Chords are owned by the HUD. Remove the old unmodified Y party action.
     Override(HUD->InputActions.ChangeParty,FKey());
-    Override(TEXT("MenuConfirm"),HUD->GamepadKeys.Bottom);
+    Override(TEXT("MenuConfirm"),HUD->GamepadKeys.Bottom,true,HUD->KeyboardConfirmKey,HUD->KeyboardAlternateConfirmKey);
     Override(TEXT("MenuCancel"),HUD->GamepadBackKey,true,HUD->KeyboardBackKey);
     Input->ForceRebuildingKeyMaps(false);
 }
@@ -496,11 +846,11 @@ void UReditusBattleHUDPresenterComponent::RecoverMenuPreparation(AActor* Unit,ER
             UUserWidget* Prepared=FindLegacyMenu(Unit,Command);
             const int32 PreparedSelection=static_cast<int32>(Number(Unit,TEXT("SelectType"),-1.0));
             if (IsValid(Prepared) && ObjectValue(Prepared,TEXT("Player Unit Base"))==Unit &&
-                ObjectValue(GetOwner(),TEXT("currentAttackingUnit"))==Unit && !Boolean(Unit,TEXT("isInputBlocked")) &&
+                CommandOwner(GetOwner())==Unit && !Boolean(Unit,TEXT("isInputBlocked")) &&
                 (PreparedSelection==0 || PreparedSelection==3))
             {
                 SetSelectionValue(Unit,0);
-                CallNoArgumentEvent(Unit,TEXT("ResetInput"));
+                CallNoArgumentEvent(Unit,TEXT("Reset Input"));
             }
         }
     }
@@ -530,6 +880,13 @@ void UReditusBattleHUDPresenterComponent::BeginNativeMenu(AActor* Unit,EReditusH
         if (!DescriptionTable)
             UE_LOG(LogReditusBattleHUD,Warning,TEXT("HUD description table unavailable: %s. The list will keep its existing labels and command continuation."),DescriptionTablePath);
     }
+    if (Command!=EReditusHUDCommand::Items)
+    {
+        if (!IsValid(PartyMemberSkillDefinitions))
+            PartyMemberSkillDefinitions=LoadObject<UDataTable>(nullptr,TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_PartyMembers.DT_PartyMembers"));
+        if (!IsValid(EquipmentSkillDefinitions))
+            EquipmentSkillDefinitions=LoadObject<UDataTable>(nullptr,TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Equipment.DT_Equipment"));
+    }
     PendingMenuDeadline=BattleWorld->GetRealTimeSeconds()+1.0;
 }
 
@@ -537,7 +894,7 @@ void UReditusBattleHUDPresenterComponent::TryCaptureNativeMenu()
 {
     if (!bAwaitingNativeMenu || !HUD) return;
     if (!IsValid(PendingMenuOwner)) { ClearNativeMenu(); HUD->CloseListMenu(); return; }
-    if (ObjectValue(GetOwner(),TEXT("currentAttackingUnit"))!=PendingMenuOwner || Number(PendingMenuOwner,TEXT("currentHP"))<=0.0)
+    if (CommandOwner(GetOwner())!=PendingMenuOwner || Number(PendingMenuOwner,TEXT("currentHP"))<=0.0)
     {
         ClearNativeMenu();
         HUD->CloseListMenu();
@@ -590,6 +947,12 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
 {
     if (!NativeMenuSource || !HUD) return;
     const bool Items=NativeMenuCommand==EReditusHUDCommand::Items;
+    const bool Overdrive=NativeMenuCommand==EReditusHUDCommand::Overdrive;
+    const FHUDSkillAccess SkillAccess=Items ? FHUDSkillAccess{} :
+        ReadSkillAccess(NativeMenuOwner,Player,PartyMemberSkillDefinitions,EquipmentSkillDefinitions,Overdrive);
+#if REDITUS_HUD_HAS_ATB
+    const bool bUsingATB=RunningATB(GetOwner())!=nullptr;
+#endif
     NativeMenuRows=WidgetArray(NativeMenuSource,Items ? TEXT("itemUIs") : TEXT("skillUIs"));
     NativeMenuIDs.Init(NAME_None,NativeMenuRows.Num());
     NativeMenuDataIDs.Init(NAME_None,NativeMenuRows.Num());
@@ -609,7 +972,7 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
                     HUD->ListSelectionBrush.TintColor=FSlateColor(FLinearColor::White);
                 }
         const FName DataID=NameValue(Row,Items ? TEXT("item") : TEXT("skill"));
-        if (DataID.IsNone()) continue;
+        if (DataID.IsNone() || (!Items && !SkillAccess.Allows(DataID))) continue;
         FReditusBattleHUDMenuEntry Entry;
         Entry.ID=DataID;
         if (Used.Contains(Entry.ID)) Entry.ID=FName(*FString::Printf(TEXT("HUDRow_%d"),I));
@@ -621,8 +984,12 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
         if (Entry.Label.IsEmpty()) Entry.Label=TableText(DisplayTable,DataID,TEXT("DisplayName"));
         if (Entry.Label.IsEmpty()) Entry.Label=FText::FromName(DataID);
         // Item quantity belongs to this row's item ID, never the inventory's entry count.
+        int32 Quantity=Items ? FMath::Max(0,static_cast<int32>(Number(Row,TEXT("amount")))) : 0;
+#if REDITUS_HUD_HAS_ATB
+        if (bUsingATB && Items) Quantity=LiveItemCount(Player,DataID,Quantity);
+#endif
         Entry.Detail=Items ? FText::Format(NSLOCTEXT("ReditusHUD","ItemQuantity","x{0}"),
-            FText::AsNumber(FMath::Max(0,static_cast<int32>(Number(Row,TEXT("amount")))))) : WidgetText(Row,TEXT("MPAmount"));
+            FText::AsNumber(Quantity)) : WidgetText(Row,TEXT("MPAmount"));
         if (!Items && HasZeroMPCost(DisplayTable,DataID)) Entry.Detail=FText::GetEmpty();
         Entry.Description=TableText(DisplayTable,DataID,TEXT("ShortDescription"));
         if (UObject* ConfiguredIcon=Items ? nullptr : TableThumbnail(DisplayTable,DataID)) Entry.Icon=ThumbnailBrush(ConfiguredIcon);
@@ -638,9 +1005,13 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
                 CopiedFonts=true;
             }
         }
-        Entry.bEnabled=Row->GetIsEnabled() && (!Items || Number(Row,TEXT("amount"))>0.0);
+        Entry.bEnabled=Row->GetIsEnabled() && (!Items || Quantity>0);
         if (UWidget* Inner=Cast<UWidget>(ObjectValue(Row,Items ? TEXT("ItemButton") : TEXT("SkillButton"))))
             Entry.bEnabled=Entry.bEnabled && Inner->GetIsEnabled();
+#if REDITUS_HUD_HAS_ATB
+        if (bUsingATB)
+            Entry.bEnabled=Entry.bEnabled && CanUseATBListEntry(NativeMenuOwner,NativeMenuCommand,FHUDTableRow(DisplayTable,DataID));
+#endif
         Entries.Add(Entry);
     }
     NativeMenuSource->SetVisibility(ESlateVisibility::HitTestInvisible);
@@ -656,6 +1027,11 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
     else HUD->UpdateListEntries(Entries);
 }
 
+bool UReditusBattleHUDPresenterComponent::IsBattleMoveUnlocked(AActor* Unit,FName MoveID,bool bOverdrive) const
+{
+    return ReadSkillAccess(Unit,Player,PartyMemberSkillDefinitions,EquipmentSkillDefinitions,bOverdrive).Allows(MoveID);
+}
+
 void UReditusBattleHUDPresenterComponent::ClearNativeMenu()
 {
     NativeMenuSource=nullptr;
@@ -668,10 +1044,153 @@ void UReditusBattleHUDPresenterComponent::ClearNativeMenu()
     PendingOriginalSelection=-1;
 }
 
+void UReditusBattleHUDPresenterComponent::ClearATBListTargeting()
+{
+    TArray<TWeakObjectPtr<AActor>> Icons=MoveTemp(DraftIcons);
+    DraftIcons.Reset();
+    DraftOwner.Reset();
+    DraftActionID=NAME_None;
+    DraftCycle=INDEX_NONE;
+    bDraftActive=false;
+    bDraftGroup=false;
+    for (const auto& Icon:Icons) SetTargetIcon(Icon.Get(),false);
+}
+
+bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FName ID,EReditusHUDCommand Command)
+{
+#if REDITUS_HUD_HAS_ATB
+    const auto* ATB=RunningATB(GetOwner());
+    if (!ATB || CommandOwner(GetOwner())!=Unit || Boolean(Unit,TEXT("isInputBlocked"))) return false;
+    const FHUDTableRow Row(Command==EReditusHUDCommand::Items ? ItemDescriptions : SkillDescriptions,ID);
+    if (!CanUseATBListEntry(Unit,Command,Row)) return false;
+    const auto Targets=ListTargets(GetOwner(),Unit,Command,Row,DisplaySlots);
+    if (Targets.Units.Num()==0 || !SetObjectValue(Unit,TEXT("currentTarget"),Targets.Units[0]) ||
+        !SetSelectionValue(Unit,1))
+    {
+        if (bLogCommandRouting) UE_LOG(LogReditusBattleHUD,Log,TEXT("No valid battle targets for %s"),*ID.ToString());
+        return false;
+    }
+
+    ClearATBListTargeting();
+    bDraftActive=true;
+    bDraftGroup=Targets.bGroup;
+    bExplicitTarget=false;
+    DraftOwner=Unit;
+    DraftCommand=Command;
+    DraftActionID=ID;
+    DraftCycle=ATB->GetUnitState(Unit).CycleToken;
+    SetBoolValue(Unit,TEXT("TargetSet"),true);
+    const int32 IconCount=Targets.bGroup ? Targets.Units.Num() : 1;
+    for (int32 Index=0; Index<IconCount; ++Index)
+    {
+        DraftIcons.Emplace(Targets.Units[Index]);
+        SetTargetIcon(Targets.Units[Index],true);
+    }
+    ClearNativeMenu();
+    HUD->CloseListMenu();
+    RefreshBattleHUD();
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool UReditusBattleHUDPresenterComponent::RouteATBListTargetInput(FName ActionName)
+{
+#if REDITUS_HUD_HAS_ATB
+    if (!bDraftActive) return false;
+    const bool bCancel=ActionName==TEXT("MenuCancel");
+    const bool bConfirm=ActionName==TEXT("MenuConfirm");
+    const bool bBackward=ActionName==TEXT("MenuLeft") || ActionName==TEXT("MenuUp");
+    const bool bForward=ActionName==TEXT("MenuRight") || ActionName==TEXT("MenuDown");
+    if (!bCancel && !bConfirm && !bBackward && !bForward) return false;
+
+    AActor* Unit=DraftOwner.Get();
+    auto* ATB=RunningATB(GetOwner());
+    if (!ATB || !Unit || CommandOwner(GetOwner())!=Unit || ATB->GetUnitState(Unit).CycleToken!=DraftCycle)
+    {
+        ClearATBListTargeting();
+        return true;
+    }
+    if (bCancel)
+    {
+        ClearATBListTargeting();
+        SetObjectValue(Unit,TEXT("currentTarget"),nullptr);
+        RestoreATBListCommands(Unit);
+        return true;
+    }
+    if (Boolean(Unit,TEXT("isInputBlocked"))) return true;
+
+    const bool bItem=DraftCommand==EReditusHUDCommand::Items;
+    const FHUDTableRow Row(bItem ? ItemDescriptions : SkillDescriptions,DraftActionID);
+    const auto Targets=ListTargets(GetOwner(),Unit,DraftCommand,Row,DisplaySlots);
+    if (Targets.Units.Num()==0)
+    {
+        ClearATBListTargeting();
+        SetObjectValue(Unit,TEXT("currentTarget"),nullptr);
+        RestoreATBListCommands(Unit);
+        return true;
+    }
+    AActor* Target=Cast<AActor>(ObjectValue(Unit,TEXT("currentTarget")));
+    const int32 OldIndex=Targets.Units.IndexOfByKey(Target);
+    if (!Targets.bGroup && (!bConfirm || OldIndex==INDEX_NONE))
+    {
+        const int32 Next=OldIndex==INDEX_NONE ? 0 :
+            (OldIndex+Targets.Units.Num()+(bBackward ? -1 : 1)) % Targets.Units.Num();
+        AActor* NewTarget=Targets.Units[Next];
+        if (DraftIcons.Num()!=1 || DraftIcons[0].Get()!=NewTarget)
+        {
+            for (const auto& Icon:DraftIcons) SetTargetIcon(Icon.Get(),false);
+            DraftIcons.Reset();
+            DraftIcons.Emplace(NewTarget);
+            SetTargetIcon(NewTarget,true);
+        }
+        SetObjectValue(Unit,TEXT("currentTarget"),NewTarget);
+        return true;
+    }
+    if (!bConfirm) return true;
+    if (!CanUseATBListEntry(Unit,DraftCommand,Row) || (bItem && LiveItemCount(Player,DraftActionID,1)<=0) ||
+        (!bItem && !IsBattleMoveUnlocked(Unit,DraftActionID,DraftCommand==EReditusHUDCommand::Overdrive)))
+    {
+        ClearATBListTargeting();
+        SetObjectValue(Unit,TEXT("currentTarget"),nullptr);
+        RestoreATBListCommands(Unit);
+        return true;
+    }
+    FReditusATBAction Action;
+    Action.Unit=Unit;
+    Action.ActionID=DraftActionID;
+    Action.Kind=bItem ? EReditusATBActionKind::Item :
+        DraftCommand==EReditusHUDCommand::Overdrive ? EReditusATBActionKind::Overdrive : EReditusATBActionKind::Skill;
+    Action.LegacyClass=Row.Class(bItem ? TEXT("UsableItemLegacyLaunch") : TEXT("LegacySkill"));
+    if (Targets.bGroup) Action.Targets=Targets.Units;
+    else Action.Targets.Add(Target);
+    Action.AmpCommitted=FMath::Max(0,static_cast<int32>(Number(Unit,TEXT("CurrentAmpPointsInPlay"))));
+    int32 ActionToken=INDEX_NONE;
+    if (ATB->SubmitAction(Action,ActionToken))
+    {
+        ClearATBListTargeting();
+        SetSelectionValue(Unit,0);
+        SetBoolValue(Unit,TEXT("Confirmed"),true);
+        SetBoolValue(Unit,TEXT("TargetSet"),false);
+        if (auto* FX=Cast<USceneComponent>(ObjectValue(Unit,TEXT("PS_GPS_Selection_02")))) FX->SetVisibility(false);
+        CallNoArgumentEvent(GetOwner(),TEXT("PickNextATBCommandUnit"));
+        if (bLogCommandRouting) UE_LOG(LogReditusBattleHUD,Log,TEXT("Queued %s for %s (token %d)"),
+            *Action.ActionID.ToString(),*GetNameSafe(Unit),ActionToken);
+    }
+    else
+        UE_LOG(LogReditusBattleHUD,Warning,TEXT("ATB rejected %s for %s before queueing"),
+            *Action.ActionID.ToString(),*GetNameSafe(Unit));
+    return true;
+#else
+    return false;
+#endif
+}
+
 void UReditusBattleHUDPresenterComponent::HandleNativeMenuChosen(AActor* Unit,FName EntryID)
 {
     if (!NativeMenuSource || !HUD || Unit!=NativeMenuOwner || !IsValid(Unit) || Number(Unit,TEXT("currentHP"))<=0.0 ||
-        ObjectValue(GetOwner(),TEXT("currentAttackingUnit"))!=Unit) return;
+        CommandOwner(GetOwner())!=Unit) return;
     const int32 Index=NativeMenuIDs.IndexOfByKey(EntryID);
     if (!NativeMenuRows.IsValidIndex(Index) || !IsValid(NativeMenuRows[Index]) || !NativeMenuRows[Index]->GetIsEnabled()) return;
     const bool Items=NativeMenuCommand==EReditusHUDCommand::Items;
@@ -680,11 +1199,20 @@ void UReditusBattleHUDPresenterComponent::HandleNativeMenuChosen(AActor* Unit,FN
     UUserWidget* Row=NativeMenuRows[Index];
     if (CurrentIndex==INDEX_NONE || !NativeMenuDataIDs.IsValidIndex(Index) ||
         NameValue(Row,Items ? TEXT("item") : TEXT("skill"))!=NativeMenuDataIDs[Index] ||
-        (Items && Number(Row,TEXT("amount"))<=0.0))
+        (Items && Number(Row,TEXT("amount"))<=0.0) ||
+        (!Items && !IsBattleMoveUnlocked(Unit,NativeMenuDataIDs[Index],NativeMenuCommand==EReditusHUDCommand::Overdrive)))
     {
         RefreshNativeMenuEntries(false);
         return;
     }
+#if REDITUS_HUD_HAS_ATB
+    if (RunningATB(GetOwner()))
+    {
+        if (!Items || LiveItemCount(Player,NativeMenuDataIDs[Index],1)>0)
+            BeginATBListTargeting(Unit,NativeMenuDataIDs[Index],NativeMenuCommand);
+        return;
+    }
+#endif
     FIntProperty* Selection=CastField<FIntProperty>(Property(NativeMenuSource,Items ? TEXT("selectedItemIndex") : TEXT("selectedSkillIndex")));
     if (!Selection) return;
     Selection->SetPropertyValue_InContainer(NativeMenuSource,CurrentIndex);
@@ -703,10 +1231,21 @@ void UReditusBattleHUDPresenterComponent::HandleNativeMenuChosen(AActor* Unit,FN
 void UReditusBattleHUDPresenterComponent::HandleNativeMenuCancelled(AActor* Unit)
 {
     if (!HUD) return;
+#if REDITUS_HUD_HAS_ATB
+    if (RunningATB(GetOwner()))
+    {
+        if (!Unit || (Unit!=NativeMenuOwner && Unit!=PendingMenuOwner)) return;
+        const bool bRestore=CommandOwner(GetOwner())==Unit && Number(Unit,TEXT("currentHP"))>0.0;
+        ClearNativeMenu();
+        if (bRestore) RestoreATBListCommands(Unit);
+        RefreshBattleHUD();
+        return;
+    }
+#endif
     if (!NativeMenuSource)
     {
         if (!PendingMenuOwner || Unit!=PendingMenuOwner) return;
-        const bool CanRestore=ReditusHUDInputPolicy::CanRollbackPendingMenu(ObjectValue(GetOwner(),TEXT("currentAttackingUnit"))==Unit,
+        const bool CanRestore=ReditusHUDInputPolicy::CanRollbackPendingMenu(CommandOwner(GetOwner())==Unit,
             Number(Unit,TEXT("currentHP"))>0.0,Boolean(Unit,TEXT("isInputBlocked")),PendingOriginalSelection,
             static_cast<int32>(Number(Unit,TEXT("SelectType"),-1.0)));
         const int32 PreviousSelection=PendingOriginalSelection;
@@ -721,7 +1260,7 @@ void UReditusBattleHUDPresenterComponent::HandleNativeMenuCancelled(AActor* Unit
     }
     if (Unit!=NativeMenuOwner) return;
     UUserWidget* Source=NativeMenuSource;
-    const bool CanCancel=ReditusHUDInputPolicy::CanCancelOwnedMenu(ObjectValue(GetOwner(),TEXT("currentAttackingUnit"))==Unit,
+    const bool CanCancel=ReditusHUDInputPolicy::CanCancelOwnedMenu(CommandOwner(GetOwner())==Unit,
         IsValid(Unit) && Number(Unit,TEXT("currentHP"))>0.0,Boolean(Unit,TEXT("isInputBlocked")));
     ClearNativeMenu();
     if (CanCancel) CallNoArgumentEvent(Source,TEXT("Cancel"));
@@ -731,7 +1270,94 @@ void UReditusBattleHUDPresenterComponent::HandleNativeMenuCancelled(AActor* Unit
 void UReditusBattleHUDPresenterComponent::TickComponent(float DeltaTime,ELevelTick TickType,FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime,TickType,ThisTickFunction);
-    if (IsValid(HUD) && bReadLegacyBattle) RefreshBattleHUD();
+    if (!IsValid(HUD))
+    {
+        ClearEnemyMenuSlowdown();
+        OpenLegacyMenuWindows.Reset();
+        return;
+    }
+    bool bRefresh=bReadLegacyBattle;
+#if REDITUS_HUD_HAS_ATB
+    bRefresh=bRefresh || RunningATB(GetOwner())!=nullptr;
+#endif
+    if (bRefresh) RefreshBattleHUD();
+}
+
+void UReditusBattleHUDPresenterComponent::ClearEnemyMenuSlowdown()
+{
+#if REDITUS_HUD_HAS_ATB
+    if (MenuSlowedEnemies.Num()==0) return;
+    if (auto* ATB=RunningATB(GetOwner()))
+        for (const auto& Enemy:MenuSlowedEnemies)
+            if (AActor* Unit=Enemy.Get()) ATB->RemoveTimingEffect(Unit,MenuSlowdownSource);
+    MenuSlowedEnemies.Reset();
+#endif
+}
+
+void UReditusBattleHUDPresenterComponent::UpdateEnemyMenuSlowdown(UObject* Battle,AActor* CommandUnit)
+{
+#if REDITUS_HUD_HAS_ATB
+    auto* ATB=RunningATB(GetOwner());
+    if (!ATB || !IsValid(HUD))
+    {
+        ClearEnemyMenuSlowdown();
+        OpenLegacyMenuWindows.Reset();
+        return;
+    }
+
+    // Legacy menus animate their content and can stay attached even after closing.
+    // The native list's transparent backing widget never counts as a second window.
+    UObject* Roots[]={ObjectValue(GetOwner(),TEXT("battleUI")),ObjectValue(CommandUnit,TEXT("battleUI"))};
+    static const FName AnimatedMenus[]={TEXT("BP_SkillUseDialogue"),TEXT("BP_ItemUseDialogue"),
+        TEXT("BP_OverdriveDialogue"),TEXT("BP_ChangeMemberDialogue")};
+    TSet<TWeakObjectPtr<UUserWidget>> VisibleMenus;
+    for (const FName MenuName:AnimatedMenus)
+        for (UObject* Root:Roots)
+        {
+            UUserWidget* Menu=ChildMenu(Root,MenuName);
+            if (!IsValid(Menu) || !Menu->IsVisible() || Menu->GetRenderOpacity()<=0.f) continue;
+            auto* Animation=Cast<UWidgetAnimation>(ObjectValue(Menu,MenuName==TEXT("BP_ItemUseDialogue") ?
+                TEXT("ShowItemInventory") : TEXT("ShowSkillsAnim")));
+            const TWeakObjectPtr<UUserWidget> Key(Menu);
+            const bool bOpen=Animation && Menu->IsAnimationPlaying(Animation) ?
+                Menu->IsAnimationPlayingForward(Animation) : OpenLegacyMenuWindows.Contains(Key);
+            if (bOpen) VisibleMenus.Add(Key);
+        }
+    OpenLegacyMenuWindows=MoveTemp(VisibleMenus);
+
+    auto* FleeConfirmation=Cast<UUserWidget>(ObjectValue(CommandUnit,TEXT("BP_YesNoForBattle")));
+    const bool bFleeConfirmationOpen=IsValid(FleeConfirmation) && FleeConfirmation->IsInViewport() && FleeConfirmation->IsVisible();
+    // The list closes before targeting begins. Keep the same modifier through both states.
+    if (!HUD->IsMenuOpen() && !HUD->IsTargetSelectionActive() &&
+        OpenLegacyMenuWindows.Num()==0 && !bFleeConfirmationOpen)
+    {
+        ClearEnemyMenuSlowdown();
+        return;
+    }
+
+    const float Percent=FMath::IsFinite(EnemyMenuSlowdownPercent) ?
+        FMath::Clamp(EnemyMenuSlowdownPercent,50.f,100.f) : 50.f;
+    const float Rate=1.f-Percent/100.f;
+    FReditusATBTimingEffect Slowdown;
+    Slowdown.SourceID=MenuSlowdownSource;
+    Slowdown.GaugeMultiplier=Rate;
+    Slowdown.PreparationMultiplier=Rate;
+    TSet<TWeakObjectPtr<AActor>> Active;
+    for (AActor* Enemy:Actors(Battle,TEXT("enemyUnits")))
+    {
+        if (ATB->GetUnitState(Enemy).Phase==EReditusATBPhase::Inactive) continue;
+        const bool bAlreadyApplied=ATB->GetTimingEffects(Enemy).ContainsByPredicate([Rate](const FReditusATBTimingEffect& Effect)
+        {
+            return Effect.SourceID==MenuSlowdownSource && Effect.GaugeMultiplier==Rate && Effect.PreparationMultiplier==Rate;
+        });
+        if (bAlreadyApplied || ATB->AddOrUpdateTimingEffect(Enemy,Slowdown))
+            Active.Add(TWeakObjectPtr<AActor>(Enemy));
+    }
+    for (const auto& Previous:MenuSlowedEnemies)
+        if (!Active.Contains(Previous))
+            if (AActor* Unit=Previous.Get()) ATB->RemoveTimingEffect(Unit,MenuSlowdownSource);
+    MenuSlowedEnemies=MoveTemp(Active);
+#endif
 }
 
 void UReditusBattleHUDPresenterComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -789,6 +1415,18 @@ FReditusBattleHUDUnit UReditusBattleHUDPresenterComponent::ReadUnit(AActor* Unit
     Data.TotalAmp=static_cast<int32>(Number(Unit,TEXT("TotalAmpPoints")));
     Data.CommittedAmp=static_cast<int32>(Number(Unit,TEXT("CurrentAmpPointsInPlay")));
     Data.CurrentStamina=static_cast<int32>(Number(Unit,TEXT("CurrentStamina")));
+#if REDITUS_HUD_HAS_ATB
+    if (const auto* ATB=RunningATB(GetOwner()))
+    {
+        const FReditusATBUnitView State=ATB->GetUnitState(Unit);
+        Data.ATBPercent=ReditusHUDPolicy::Ratio(State.Gauge,1.f);
+        Data.bCanAct=Data.HP>0.f && State.Phase!=EReditusATBPhase::Inactive;
+        Data.bReadyForCommands=Data.bCanAct && State.Phase==EReditusATBPhase::Ready &&
+            Unit==CurrentActor && bCommandWindow;
+        Data.bQueued=State.Phase==EReditusATBPhase::Preparing || State.Phase==EReditusATBPhase::Queued;
+        return Data;
+    }
+#endif
     Data.ATBPercent=ReditusHUDPolicy::Ratio(static_cast<float>(Number(Unit,TEXT("currentActionTime"))),
         static_cast<float>(Number(Unit,LegacyATBThresholdProperty)));
     Data.bReadyForCommands=Unit==CurrentActor && bCommandWindow;
@@ -865,6 +1503,128 @@ void UReditusBattleHUDPresenterComponent::UpdateDisplaySlots(UObject* Battle,AAc
     }
 }
 
+void UReditusBattleHUDPresenterComponent::RestoreLegacyEnemyComponents()
+{
+    for (const auto& Entry:HiddenLegacyEnemyComponents)
+        if (USceneComponent* Component=Entry.Key.Get()) Component->SetHiddenInGame(Entry.Value);
+    HiddenLegacyEnemyComponents.Reset();
+}
+
+void UReditusBattleHUDPresenterComponent::UpdateEnemyBadges(UObject* Battle,AActor* Target,bool bGroup)
+{
+    TArray<FReditusEnemyHUDView> Views;
+    if (!bShowEnemyStatusBadges || !IsValid(Battle))
+    {
+        RestoreLegacyEnemyComponents();
+        HUD->SetEnemyStatusViews(Views);
+        return;
+    }
+    for (auto It=HiddenLegacyEnemyComponents.CreateIterator(); It; ++It)
+        if (!It.Key().IsValid()) It.RemoveCurrent();
+    for (AActor* Enemy:Actors(Battle,TEXT("enemyUnits")))
+    {
+        // Keep the old Blueprint widgets and selection events alive, but replace their visuals.
+        static const FName LegacyFields[]={TEXT("EnemyUnitWidget"),TEXT("TargetIconWidget"),TEXT("ParticleSystem")};
+        for (FName Field:LegacyFields)
+            if (auto* Component=Cast<USceneComponent>(ObjectValue(Enemy,Field)))
+            {
+                const TWeakObjectPtr<USceneComponent> Key(Component);
+                const bool bHidden=Boolean(Component,TEXT("bHiddenInGame"));
+                if (!HiddenLegacyEnemyComponents.Contains(Key))
+                    HiddenLegacyEnemyComponents.Add(Key,bHidden);
+                if (!bHidden) Component->SetHiddenInGame(true);
+            }
+        if (Number(Enemy,TEXT("currentHP"))<=0 || Boolean(Enemy,TEXT("IsDead?"))) continue;
+        FReditusEnemyHUDView& View=Views.AddDefaulted_GetRef();
+        View.Unit=Enemy;
+        View.Sprite=Cast<UPrimitiveComponent>(ObjectValue(Enemy,TEXT("Pixel2D")));
+        const auto IsRenderVisible=[](UPrimitiveComponent* Component)
+        {
+            return IsValid(Component) && Component->IsVisible() && !Boolean(Component,TEXT("bHiddenInGame"));
+        };
+        if (!IsRenderVisible(View.Sprite))
+            View.Sprite=Cast<UPrimitiveComponent>(ObjectValue(Enemy,TEXT("SkeletalMesh")));
+        if (!IsRenderVisible(View.Sprite)) View.Sprite=nullptr;
+        View.FallbackAnchor=Cast<USceneComponent>(ObjectValue(Enemy,TEXT("EnemyUnitWidget")));
+        View.MaxStamina=FMath::Max(0,static_cast<int32>(Number(Enemy,TEXT("MaxStamina"))));
+        View.Stamina=FMath::Clamp(static_cast<int32>(Number(Enemy,TEXT("CurrentStamina"))),0,View.MaxStamina);
+        View.bTargeted=Enemy==Target || (bGroup && DraftIcons.Contains(TWeakObjectPtr<AActor>(Enemy)));
+        ReadEnemyEffects(Enemy,View.Effects);
+    }
+    HUD->SetEnemyStatusViews(Views);
+}
+
+bool UReditusBattleHUDPresenterComponent::ShowExecutingEnemyAction(UObject* Battle)
+{
+#if REDITUS_HUD_HAS_ATB
+    const auto* ATB=RunningATB(GetOwner());
+    if (!ATB || !IsValid(HUD) || !IsValid(Battle)) return false;
+
+    FReditusATBAction Action;
+    AActor* Enemy=nullptr;
+    for (AActor* Unit:Actors(Battle,TEXT("enemyUnits")))
+    {
+        if (ATB->GetUnitState(Unit).Phase!=EReditusATBPhase::Executing || !ATB->GetPendingAction(Unit,Action)) continue;
+        Enemy=Unit;
+        break;
+    }
+    if (!Enemy || (Action.Kind!=EReditusATBActionKind::Attack && Action.Kind!=EReditusATBActionKind::Skill)) return false;
+
+    FText Label;
+    UObject* Icon=nullptr;
+    int32 Element=INDEX_NONE;
+    if (Action.Kind==EReditusATBActionKind::Attack)
+    {
+        Label=NSLOCTEXT("ReditusHUD","EnemyRegularAttack","Attack");
+        Element=static_cast<int32>(Number(Enemy,TEXT("AttackElement"),INDEX_NONE));
+    }
+    else
+    {
+        if (!Action.ActionID.IsNone())
+        {
+            if (!IsValid(SkillDescriptions) && GetWorld() && GetWorld()->IsGameWorld())
+                SkillDescriptions=LoadObject<UDataTable>(nullptr,TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Skills.DT_Skills"));
+            Label=TableText(SkillDescriptions,Action.ActionID,TEXT("DisplayName"));
+            Icon=TableThumbnail(SkillDescriptions,Action.ActionID);
+            Element=FHUDTableRow(SkillDescriptions,Action.ActionID).Int(TEXT("AttackElement"));
+        }
+        if (UClass* SkillClass=Action.LegacyClass.Get())
+        {
+            UObject* Defaults=SkillClass->GetDefaultObject();
+            if (Label.IsEmpty())
+                if (const auto* Name=CastField<FTextProperty>(Property(Defaults,TEXT("name"))))
+                    Label=Name->GetPropertyValue_InContainer(Defaults);
+            if (Element==INDEX_NONE)
+                Element=static_cast<int32>(Number(Defaults,TEXT("Attack Element"),INDEX_NONE));
+        }
+        if (Label.IsEmpty())
+            Label=Action.ActionID.IsNone() ? NSLOCTEXT("ReditusHUD","EnemySkill","Skill") : FText::FromName(Action.ActionID);
+    }
+
+    // EReditusElementAffinity order and the original BP_ShowAttackElement textures.
+    // "All" has no dedicated icon in the legacy HUD.
+    if (!Icon && Element>=0 && Element<9)
+    {
+        static const TCHAR* ElementNames[]={TEXT("Phys"),TEXT("Water"),TEXT("Earth"),TEXT("Fire"),
+            TEXT("Wind"),TEXT("Dark"),TEXT("Holy"),TEXT("Spirit"),TEXT("Lightning")};
+        if (UTexture2D* const* Cached=ActionElementTextures.Find(Element)) Icon=*Cached;
+        else
+        {
+            const FString Path=Element==0 ? TEXT("/Game/TurnBasedJRPGTemplate/Textures/T_PhysicalAttack.T_PhysicalAttack") :
+                FString::Printf(TEXT("/Game/MapSpriteAssets/UI_ICONS/ElementalIcons/T_ElementalIcons_%s.T_ElementalIcons_%s"),
+                    ElementNames[Element],ElementNames[Element]);
+            UTexture2D* Texture=LoadObject<UTexture2D>(nullptr,*Path);
+            ActionElementTextures.Add(Element,Texture);
+            Icon=Texture;
+        }
+    }
+    HUD->SetActionAnnouncement(Label,ThumbnailBrush(Icon),true);
+    return true;
+#else
+    return false;
+#endif
+}
+
 void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
 {
     if (!IsValid(HUD) || bRefreshing) return;
@@ -890,14 +1650,40 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
     }
     else bWarnedPartyOverflow=false;
     for (auto It=Readiness.CreateIterator(); It; ++It) if (!IsValid(It.Key())) It.RemoveCurrent();
-    AActor* CurrentActor=Cast<AActor>(ObjectValue(Controller,TEXT("currentAttackingUnit")));
+    AActor* ExecutingActor=Cast<AActor>(ObjectValue(Controller,TEXT("currentAttackingUnit")));
+    bool bUsingATB=false;
+    AActor* CurrentActor=CommandOwner(Controller,&bUsingATB);
+#if REDITUS_HUD_HAS_ATB
+    if (bDraftActive && (!bUsingATB || !IsValid(CurrentActor) || CurrentActor!=DraftOwner.Get() ||
+        Number(CurrentActor,TEXT("currentHP"))<=0.0 ||
+        RunningATB(Controller)->GetUnitState(CurrentActor).CycleToken!=DraftCycle))
+        ClearATBListTargeting();
+    // A ready ally can predate the previous owner's submission. Recover the
+    // vacant slot through the same Blueprint that resets input and shows FX.
+    if (bUsingATB && !PartyUnits.Contains(CurrentActor))
+    {
+        if (const auto* ATB=RunningATB(Controller))
+        {
+            const bool bHasReadyAlly=PartyUnits.ContainsByPredicate([ATB](AActor* Unit)
+            {
+                return IsValid(Unit) && Number(Unit,TEXT("currentHP"))>0.0 &&
+                    ATB->GetUnitState(Unit).Phase==EReditusATBPhase::Ready;
+            });
+            if (bHasReadyAlly && CallNoArgumentEvent(Controller,TEXT("PickNextATBCommandUnit")))
+            {
+                if (!IsValid(HUD) || !IsValid(Controller)) return;
+                CurrentActor=CommandOwner(Controller,&bUsingATB);
+            }
+        }
+    }
+#endif
     const bool IsPartyActor=PartyUnits.Contains(CurrentActor);
-    const bool OwnsLegacyCommand=!Property(Controller,TEXT("CurrentCommandUnit")) || ObjectValue(Controller,TEXT("CurrentCommandUnit"))==CurrentActor;
+    const bool OwnsLegacyCommand=bUsingATB || !Property(Controller,TEXT("CurrentCommandUnit")) || ObjectValue(Controller,TEXT("CurrentCommandUnit"))==CurrentActor;
     const int32 LegacySelection=static_cast<int32>(Number(CurrentActor,TEXT("SelectType"),-1.0));
     const int32 BattleMode=static_cast<int32>(Number(Controller,TEXT("BattleInputMode"),-1.0));
     // Use the unit's finer selection state as well as the controller mode.
     // The legacy graph can remain in CommandMenu while selecting a target.
-    HUD->SetReactionWindow(IsValid(CurrentActor) && !IsPartyActor);
+    HUD->SetReactionWindow(IsValid(ExecutingActor) && !PartyUnits.Contains(ExecutingActor));
     TryCaptureNativeMenu();
     if (NativeMenuSource && (!IsValid(NativeMenuOwner) || CurrentActor!=NativeMenuOwner || Number(NativeMenuOwner,TEXT("currentHP"))<=0.0))
     {
@@ -907,7 +1693,11 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
         HUD->CloseListMenu();
     }
     bool CommandWindow=false;
-    if (bExplicitCommandWindow) CommandWindow=bCommandWindowEnabled;
+    if (bUsingATB)
+        CommandWindow=IsPartyActor && Number(CurrentActor,TEXT("currentHP"))>0.0 &&
+            !Boolean(CurrentActor,TEXT("isInputBlocked")) &&
+            ReditusHUDInputPolicy::LegacyCommandSurface(true,LegacySelection);
+    else if (bExplicitCommandWindow) CommandWindow=bCommandWindowEnabled;
     else
     {
         UObject* OldActions=ObjectValue(Controller,TEXT("BattleActionsUI"));
@@ -925,27 +1715,56 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
     if (NativeMenuSource && IsValid(NativeMenuOwner) && CurrentActor==NativeMenuOwner) CommandWindow=true;
     if (IsValid(PendingMenuOwner) && CurrentActor==PendingMenuOwner && HUD->IsNativeListOpen()) CommandWindow=true;
     if (bRouteLegacyCommands && !OwnsLegacyCommand) CommandWindow=false;
-    const bool TargetWindow=(bRouteLegacyCommands || !bExplicitCommandWindow) && !NativeMenuSource && !PendingMenuOwner &&
+    const bool TargetWindow=(bUsingATB || bRouteLegacyCommands || !bExplicitCommandWindow) && !NativeMenuSource && !PendingMenuOwner && !HUD->IsMenuOpen() &&
         ReditusHUDInputPolicy::LegacyTargetSurface(IsPartyActor && OwnsLegacyCommand,Number(CurrentActor,TEXT("currentHP"))>0.0,
             Boolean(CurrentActor,TEXT("isInputBlocked")),LegacySelection,BattleMode);
     if (TargetWindow) CommandWindow=false;
+    if (HUD->IsTargetSelectionActive() && !TargetWindow) { bExplicitTarget=false; ExplicitEnemyTarget.Reset(); }
     HUD->SetTargetSelectionActive(TargetWindow);
     UpdateDisplaySlots(Battle,CurrentActor,CommandWindow);
     HUD->SetPartySnapshot(DisplaySlots);
-    if (bFollowLegacyTurnSelection)
+    if (bUsingATB || bFollowLegacyTurnSelection)
         ReditusHUDPolicy::FollowChangedTurn(TWeakObjectPtr<AActor>(CurrentActor),PreviousLegacyUnit,IsPartyActor,
             [this](TWeakObjectPtr<AActor> Candidate) { return HUD->SelectReadyUnit(Candidate.Get()); });
     else PreviousLegacyUnit.Reset();
     HUD->SetCommandsEnabled(CommandWindow);
+#if REDITUS_HUD_HAS_ATB
+    // Play when this unit actually owns command input, not when another
+    // character becomes ready in the background or the player backs out of a list.
+    if (bUsingATB && CommandWindow && IsPartyActor && IsValid(HUD) && !HUD->IsMenuOpen() &&
+        !HUD->bInputSuspended && !UGameplayStatics::IsGamePaused(this) && HUD->GetSelectedUnit()==CurrentActor)
+        if (const auto* ATB=RunningATB(Controller))
+        {
+            const FReditusATBUnitView State=ATB->GetUnitState(CurrentActor);
+            if (State.Phase==EReditusATBPhase::Ready)
+            {
+                const TWeakObjectPtr<AActor> UnitKey(CurrentActor);
+                const int32* LastCycle=LastTurnCueCycles.Find(UnitKey);
+                if (!LastCycle || *LastCycle!=State.CycleToken)
+                {
+                    LastTurnCueCycles.Add(UnitKey,State.CycleToken);
+                    HUD->PlayTurnReadyCue();
+                }
+            }
+        }
+#endif
     if (NativeMenuSource) RefreshNativeMenuEntries(false);
+    UpdateEnemyMenuSlowdown(Battle,CurrentActor);
+    AActor* Target=TargetWindow ? (bExplicitTarget ? ExplicitEnemyTarget.Get() :
+        Cast<AActor>(ObjectValue(CurrentActor,TEXT("currentTarget")))) : nullptr;
+    const bool bGroup=TargetWindow && bDraftActive && bDraftGroup;
+    UpdateEnemyBadges(Battle,Target,bGroup);
     if (!bExplicitTarget)
     {
-        AActor* Target=Cast<AActor>(ObjectValue(HUD->GetSelectedUnit(),TEXT("currentTarget")));
-        if (IsPartyActor && IsValid(Target) && !PartyUnits.Contains(Target)) HUD->SetTargetedEnemy(Target);
+        if (bGroup)
+            HUD->SetTargetLabel(NSLOCTEXT("ReditusHUD","GroupTarget","ALL TARGETS"));
+        else if (IsValid(Target)) HUD->SetTargetedEnemy(Target);
         else HUD->ClearTargetLabel();
     }
     if (!bExplicitSpeed && IsValid(Player)) HUD->SetDisplayedBattleSpeed(static_cast<float>(Number(Player,TEXT("BattleSpeed"),1.0)));
-    if (bReadLegacyBattle && bMirrorLegacyActionAnnouncement)
+    const bool bWasShowingEnemyATBAnnouncement=bShowingEnemyATBAnnouncement;
+    bShowingEnemyATBAnnouncement=ShowExecutingEnemyAction(Battle);
+    if (!bShowingEnemyATBAnnouncement && bReadLegacyBattle && bMirrorLegacyActionAnnouncement)
     {
         UUserWidget* Announcement=ChildMenu(ObjectValue(Controller,TEXT("battleUI")),TEXT("BP_ShowAttackElement"));
         if (IsValid(Announcement))
@@ -961,7 +1780,7 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
             FName ActiveSkillID=NameValue(ActiveSkill,TEXT("SkillID"));
             // Player selection already stores its row ID on the acting unit;
             // legacy skill actors do not always receive their own SkillID.
-            if (ActiveSkillID.IsNone()) ActiveSkillID=NameValue(CurrentActor,TEXT("currentSkill"));
+            if (ActiveSkillID.IsNone()) ActiveSkillID=NameValue(ExecutingActor,TEXT("currentSkill"));
             FTextProperty* SkillNameField=CastField<FTextProperty>(Property(ActiveSkill,TEXT("name")));
             // Only override a notice belonging to this active skill. A regular-attack
             // notice must retain its AttackElement-to-texture mapping.
@@ -977,6 +1796,8 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
         }
         else HUD->ClearActionAnnouncement();
     }
+    else if (!bShowingEnemyATBAnnouncement && bWasShowingEnemyATBAnnouncement)
+        HUD->ClearActionAnnouncement();
     if (bHideLegacyActionsWidget)
     {
         if (UWidget* Old=Cast<UWidget>(ObjectValue(Controller,TEXT("BattleActionsUI"))))
@@ -998,14 +1819,16 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
 void UReditusBattleHUDPresenterComponent::SetTargetedEnemy(AActor* Enemy)
 {
     bExplicitTarget=true;
+    ExplicitEnemyTarget=Enemy;
     if (HUD) HUD->SetTargetedEnemy(Enemy);
 }
 void UReditusBattleHUDPresenterComponent::SetTargetGroupLabel(FText Label)
 {
     bExplicitTarget=true;
+    ExplicitEnemyTarget.Reset();
     if (HUD) HUD->SetTargetLabel(Label);
 }
-void UReditusBattleHUDPresenterComponent::FollowLegacyTarget() { bExplicitTarget=false; RefreshBattleHUD(); }
+void UReditusBattleHUDPresenterComponent::FollowLegacyTarget() { bExplicitTarget=false; ExplicitEnemyTarget.Reset(); RefreshBattleHUD(); }
 void UReditusBattleHUDPresenterComponent::SetDisplayedBattleSpeed(float Multiplier)
 {
     bExplicitSpeed=true;
@@ -1048,7 +1871,7 @@ bool UReditusBattleHUDPresenterComponent::ExecuteLegacyCommand(AActor* Unit,ERed
     if (!IsValid(Unit) || bRouting) return false;
     // Never promote a future ready entry by writing currentAttackingUnit.
     // Legacy commands are permitted only for the unit the existing controller owns.
-    AActor* CurrentActor=Cast<AActor>(ObjectValue(GetOwner(),TEXT("currentAttackingUnit")));
+    AActor* CurrentActor=CommandOwner(GetOwner());
     if (CurrentActor!=Unit)
     {
         LastRouteStatus=FString::Printf(TEXT("Command owner mismatch: selected=%s current=%s"),*GetNameSafe(Unit),*GetNameSafe(CurrentActor));
@@ -1089,10 +1912,57 @@ bool UReditusBattleHUDPresenterComponent::ExecuteLegacyCommand(AActor* Unit,ERed
     return Success;
 }
 
+AActor* UReditusBattleHUDPresenterComponent::FindTimedAttackOwner() const
+{
+    const auto HasOpenWindow=[this](AActor* Unit)
+    {
+        // E_SelectType::RegularAttack is 5 in both timed-attack Blueprints.
+        return IsValid(Unit) && PartyUnits.Contains(Unit) && Number(Unit,TEXT("currentHP"))>0.0 &&
+            Number(Unit,TEXT("SelectType"),-1.0)==5.0 && Boolean(Unit,TEXT("TimedAttackOpportunity"));
+    };
+#if REDITUS_HUD_HAS_ATB
+    if (const auto* ATB=RunningATB(GetOwner()))
+    {
+        AActor* EndingAttack=nullptr;
+        for (const FReditusATBUnitView& State:ATB->GetUnitStates())
+        {
+            // The unit waiting for menu input can differ from the actor
+            // whose action owns the execution lane.
+            const bool bExecuting=State.Phase==EReditusATBPhase::Executing;
+            if (!bExecuting && State.Phase!=EReditusATBPhase::CycleEnd) continue;
+            FReditusATBAction Action;
+            const bool bOwnsWindow=HasOpenWindow(State.Unit) && ATB->GetPendingAction(State.Unit,Action) &&
+                Action.Kind==EReditusATBActionKind::Attack;
+            if (bExecuting) return bOwnsWindow ? State.Unit : nullptr;
+            if (bOwnsWindow) EndingAttack=State.Unit;
+        }
+        // Some legacy attacks acknowledge their main hit before the animation
+        // closes the bonus window. CycleEnd still owns the lane until acknowledged.
+        return EndingAttack;
+    }
+#endif
+    AActor* LegacyAttacker=Cast<AActor>(ObjectValue(GetOwner(),TEXT("currentAttackingUnit")));
+    return HasOpenWindow(LegacyAttacker) ? LegacyAttacker : nullptr;
+}
+
 bool UReditusBattleHUDPresenterComponent::ForwardGameplayInput(FName ActionName,FKey Key)
 {
     if (!IsValid(HUD) || bRouting) return false;
     TGuardValue<bool> Guard(bRouting,true);
+    if (!ActionName.IsNone() && ActionName==HUD->InputActions.TimedAttack)
+    {
+        AActor* Attacker=FindTimedAttackOwner();
+        const bool bForwarded=ExecuteInputAction(Attacker,ActionName,Key,true);
+        if (bLogCommandRouting)
+            UE_LOG(LogReditusBattleHUD,Log,TEXT("Timed attack input on %s: %s"),*GetNameSafe(Attacker),
+                bForwarded ? TEXT("forwarded") : Attacker ? TEXT("no bound input action") : TEXT("no open attack window"));
+        return bForwarded;
+    }
+    if (RouteATBListTargetInput(ActionName))
+    {
+        RefreshBattleHUD();
+        return true;
+    }
     bool Routed=false;
     AActor* InputOwner=nullptr;
     if (ActionName==HUD->InputActions.Block || ActionName==HUD->InputActions.Speed)
@@ -1103,8 +1973,8 @@ bool UReditusBattleHUDPresenterComponent::ForwardGameplayInput(FName ActionName,
     else
     {
         AActor* Unit=HUD->GetSelectedUnit();
-        AActor* Current=Cast<AActor>(ObjectValue(GetOwner(),TEXT("currentAttackingUnit")));
-        if (Unit==Current) { Routed=ExecuteInputAction(Unit,ActionName,Key); if (Routed) InputOwner=Unit; }
+        AActor* Current=CommandOwner(GetOwner());
+        if (IsValid(Unit) && Unit==Current) { Routed=ExecuteInputAction(Unit,ActionName,Key); if (Routed) InputOwner=Unit; }
         if (!Routed) { Routed=ExecuteInputAction(Player,ActionName,Key); if (Routed) InputOwner=Player; }
     }
     if (!Routed && OnUnroutedGameplayInput.IsBound())
@@ -1116,7 +1986,7 @@ bool UReditusBattleHUDPresenterComponent::ForwardGameplayInput(FName ActionName,
     AActor* SelectedActor=IsValid(HUD) ? HUD->GetSelectedUnit() : nullptr;
     LastRouteStatus=FString::Printf(TEXT("%s input %s; receiver=%s; selected=%s; current=%s; command owner=%s; SelectType=%d; input blocked=%d; target set=%d"),Routed ? TEXT("Forwarded") : TEXT("Unrouted"),
         *ActionName.ToString(),*GetNameSafe(InputOwner),*GetNameSafe(SelectedActor),*GetNameSafe(ObjectValue(GetOwner(),TEXT("currentAttackingUnit"))),
-        *GetNameSafe(ObjectValue(GetOwner(),TEXT("CurrentCommandUnit"))),static_cast<int32>(Number(SelectedActor,TEXT("SelectType"),-1.0)),
+        *GetNameSafe(CommandOwner(GetOwner())),static_cast<int32>(Number(SelectedActor,TEXT("SelectType"),-1.0)),
         Boolean(SelectedActor,TEXT("isInputBlocked")),Boolean(SelectedActor,TEXT("TargetSet")));
     if (bLogCommandRouting || (!Routed && ActionName==TEXT("MenuConfirm"))) UE_LOG(LogReditusBattleHUD,Log,TEXT("%s"),*LastRouteStatus);
     RefreshBattleHUD();
