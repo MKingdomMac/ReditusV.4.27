@@ -81,12 +81,16 @@ struct CHAPTER1REDITUS_API FReditusBattleHUDUnit
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") UObject* Portrait = nullptr;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") float HP = 0.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") float MaxHP = 0.f;
+    /** Negative means this actor is using immediate HP. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") float TargetHP = -1.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") bool bLethalDamagePending = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") float MP = 0.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") float MaxMP = 0.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") float ATBPercent = 0.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") bool bReadyForCommands = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") bool bCanAct = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") bool bQueued = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") bool bStaggered = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") float Overdrive = 0.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") float MaxOverdrive = 0.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") bool bCanOverdrive = true;

@@ -17,10 +17,12 @@
 #include "Components/SceneComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Blueprint/WidgetTree.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Engine/DataTable.h"
 #include "Engine/World.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "PaperSprite.h"
 #include "UObject/UnrealType.h"
@@ -59,7 +61,7 @@ namespace
         {
             if (bUsingATB) *bUsingATB=true;
             AActor* Unit=Cast<AActor>(ObjectValue(Controller,TEXT("ATBCommandUnit")));
-            return IsValid(Unit) && ATB->GetUnitState(Unit).Phase==EReditusATBPhase::Ready ? Unit : nullptr;
+            return IsValid(Unit) && ATB->CanIssueCommands(Unit) ? Unit : nullptr;
         }
 #endif
         return Cast<AActor>(ObjectValue(Controller,TEXT("currentAttackingUnit")));
@@ -256,6 +258,37 @@ namespace
         if (!Function || Function->NumParms != 0) return false;
         Actor->ProcessEvent(Function,nullptr);
         return true;
+    }
+
+    void BindLegacyBattleResult(AActor* Encounter,AActor* Controller)
+    {
+        static const FName HandlerName(TEXT("OnBattleOverHandler"));
+        UFunction* Handler=IsValid(Controller) ? Controller->FindFunction(HandlerName) : nullptr;
+        auto* Field=CastField<FMulticastInlineDelegateProperty>(Property(Encounter,TEXT("OnBattleOver")));
+        if (!Handler || !Field || !Field->SignatureFunction ||
+            !Handler->IsSignatureCompatibleWith(Field->SignatureFunction)) return;
+        FScriptDelegate HandlerBinding;
+        HandlerBinding.BindUFunction(Controller,HandlerName);
+        Field->ContainerPtrToValuePtr<FMulticastScriptDelegate>(Encounter)->AddUnique(HandlerBinding);
+    }
+
+    bool HasLegacyDefeatDialogue(UObject* WorldContext)
+    {
+        TArray<UUserWidget*> Widgets;
+        UWidgetBlueprintLibrary::GetAllWidgetsOfClass(WorldContext,Widgets,UUserWidget::StaticClass(),true);
+        for (UUserWidget* Widget:Widgets)
+            if (IsValid(Widget) && Widget->IsInViewport())
+                for (UClass* Type=Widget->GetClass(); Type; Type=Type->GetSuperClass())
+                    if (Type->GetPathName()==TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/Dialogues/BP_DefeatDialogue.BP_DefeatDialogue_C")) return true;
+        return false;
+    }
+
+    void ClearEncounterUnits(AActor* Encounter,FName Name)
+    {
+        auto* Field=CastField<FArrayProperty>(Property(Encounter,Name));
+        if (!Field || !CastField<FObjectPropertyBase>(Field->Inner)) return;
+        FScriptArrayHelper Units(Field,Field->ContainerPtrToValuePtr<void>(Encounter));
+        Units.EmptyValues();
     }
 
     bool CallUnitArgumentEvent(UObject* Object,FName Name,AActor* Unit)
@@ -466,17 +499,48 @@ namespace
     struct FHUDActionTargets
     {
         TArray<AActor*> Units;
+        AActor* Initial=nullptr;
         bool bGroup=false;
+        FName Mode=NAME_None;
     };
 
+    void OrderAlliesOnScreen(TArray<AActor*>& Allies,APlayerController* PlayerController)
+    {
+        if (!IsValid(PlayerController) || Allies.Num()<2) return;
+        struct FProjectedAlly
+        {
+            AActor* Unit=nullptr;
+            float ScreenX=0.f;
+            int32 OriginalIndex=0;
+        };
+        TArray<FProjectedAlly> Projected;
+        for (int32 Index=0; Index<Allies.Num(); ++Index)
+        {
+            AActor* Unit=Allies[Index];
+            FVector2D Position;
+            // If the camera is not available yet, retain the stable HUD order.
+            if (!IsValid(Unit) || !UGameplayStatics::ProjectWorldToScreen(PlayerController,Unit->GetActorLocation(),Position,false) ||
+                !FMath::IsFinite(Position.X)) return;
+            FProjectedAlly& Entry=Projected.AddDefaulted_GetRef();
+            Entry.Unit=Unit; Entry.ScreenX=Position.X; Entry.OriginalIndex=Index;
+        }
+        Projected.Sort([](const FProjectedAlly& A,const FProjectedAlly& B)
+        {
+            return A.ScreenX<B.ScreenX || (A.ScreenX==B.ScreenX && A.OriginalIndex<B.OriginalIndex);
+        });
+        Allies.Reset();
+        for (const auto& Entry:Projected) Allies.Add(Entry.Unit);
+    }
+
     FHUDActionTargets ListTargets(AActor* Controller,AActor* Owner,EReditusHUDCommand Command,const FHUDTableRow& Row,
-        const TArray<FReditusBattleHUDUnit>& Cards)
+        const TArray<FReditusBattleHUDUnit>& Cards,APlayerController* PlayerController)
     {
         FHUDActionTargets Result;
         UObject* Battle=ObjectValue(Controller,TEXT("currentBattle"));
-        TArray<AActor*> Allies=Actors(Battle,TEXT("playerUnits"));
+        TArray<AActor*> Allies;
         const TArray<AActor*> Enemies=Actors(Battle,TEXT("enemyUnits"));
         for (const auto& Card:Cards) if (IsValid(Card.Unit)) Allies.AddUnique(Card.Unit);
+        for (AActor* Unit:Actors(Battle,TEXT("playerUnits"))) Allies.AddUnique(Unit);
         const bool bItem=Command==EReditusHUDCommand::Items;
         // Enum values from E_UnitFilter, E_TargetScope, and E_SkillType in the project dump.
         int32 Scope=Row.Int(TEXT("TargetScope"));
@@ -507,6 +571,8 @@ namespace
             if (bItem && Filter==3 && Scope!=1 && Scope!=2) Scope=2;
         }
         Result.bGroup=Scope==1 || Scope==4 || Scope==5;
+        if (Scope==3) Result.Mode=bItem && Filter==2 ? TEXT("SingleDeadAlly") : TEXT("SingleLivingAlly");
+        else if (Scope==4 && !(bItem && Filter==2)) Result.Mode=TEXT("AllLivingAllies");
         const auto Append=[&](const TArray<AActor*>& Units,bool bEnemies)
         {
             for (AActor* Unit:Units)
@@ -523,13 +589,17 @@ namespace
         {
             // Also works when only the ready player's actor is available in the HUD.
             Allies.AddUnique(Owner);
+            OrderAlliesOnScreen(Allies,PlayerController);
             Append(Allies,false);
         }
+        if (Result.Units.Num()>0)
+            Result.Initial=!Result.bGroup && Scope==3 && Result.Units.Contains(Owner) ? Owner : Result.Units[0];
         return Result;
     }
 
     bool CanUseATBListEntry(AActor* Unit,EReditusHUDCommand Command,const FHUDTableRow& Row)
     {
+        if (!IsValid(Unit) || Boolean(Unit,TEXT("isStun")) || Boolean(Unit,TEXT("Staggered")) || Boolean(Unit,TEXT("IsSleeping"))) return false;
         if (!Row.Data) return false;
         if (Command==EReditusHUDCommand::Items)
         {
@@ -1049,6 +1119,7 @@ void UReditusBattleHUDPresenterComponent::ClearATBListTargeting()
     TArray<TWeakObjectPtr<AActor>> Icons=MoveTemp(DraftIcons);
     DraftIcons.Reset();
     DraftOwner.Reset();
+    DraftTarget.Reset();
     DraftActionID=NAME_None;
     DraftCycle=INDEX_NONE;
     bDraftActive=false;
@@ -1063,8 +1134,8 @@ bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FNa
     if (!ATB || CommandOwner(GetOwner())!=Unit || Boolean(Unit,TEXT("isInputBlocked"))) return false;
     const FHUDTableRow Row(Command==EReditusHUDCommand::Items ? ItemDescriptions : SkillDescriptions,ID);
     if (!CanUseATBListEntry(Unit,Command,Row)) return false;
-    const auto Targets=ListTargets(GetOwner(),Unit,Command,Row,DisplaySlots);
-    if (Targets.Units.Num()==0 || !SetObjectValue(Unit,TEXT("currentTarget"),Targets.Units[0]) ||
+    const auto Targets=ListTargets(GetOwner(),Unit,Command,Row,DisplaySlots,Player);
+    if (!IsValid(Targets.Initial) || !SetObjectValue(Unit,TEXT("currentTarget"),Targets.Initial) ||
         !SetSelectionValue(Unit,1))
     {
         if (bLogCommandRouting) UE_LOG(LogReditusBattleHUD,Log,TEXT("No valid battle targets for %s"),*ID.ToString());
@@ -1076,6 +1147,7 @@ bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FNa
     bDraftGroup=Targets.bGroup;
     bExplicitTarget=false;
     DraftOwner=Unit;
+    DraftTarget=Targets.Initial;
     DraftCommand=Command;
     DraftActionID=ID;
     DraftCycle=ATB->GetUnitState(Unit).CycleToken;
@@ -1083,8 +1155,9 @@ bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FNa
     const int32 IconCount=Targets.bGroup ? Targets.Units.Num() : 1;
     for (int32 Index=0; Index<IconCount; ++Index)
     {
-        DraftIcons.Emplace(Targets.Units[Index]);
-        SetTargetIcon(Targets.Units[Index],true);
+        AActor* IconTarget=Targets.bGroup ? Targets.Units[Index] : Targets.Initial;
+        DraftIcons.Emplace(IconTarget);
+        SetTargetIcon(IconTarget,true);
     }
     ClearNativeMenu();
     HUD->CloseListMenu();
@@ -1123,7 +1196,7 @@ bool UReditusBattleHUDPresenterComponent::RouteATBListTargetInput(FName ActionNa
 
     const bool bItem=DraftCommand==EReditusHUDCommand::Items;
     const FHUDTableRow Row(bItem ? ItemDescriptions : SkillDescriptions,DraftActionID);
-    const auto Targets=ListTargets(GetOwner(),Unit,DraftCommand,Row,DisplaySlots);
+    const auto Targets=ListTargets(GetOwner(),Unit,DraftCommand,Row,DisplaySlots,Player);
     if (Targets.Units.Num()==0)
     {
         ClearATBListTargeting();
@@ -1131,11 +1204,11 @@ bool UReditusBattleHUDPresenterComponent::RouteATBListTargetInput(FName ActionNa
         RestoreATBListCommands(Unit);
         return true;
     }
-    AActor* Target=Cast<AActor>(ObjectValue(Unit,TEXT("currentTarget")));
+    AActor* Target=DraftTarget.Get();
     const int32 OldIndex=Targets.Units.IndexOfByKey(Target);
     if (!Targets.bGroup && (!bConfirm || OldIndex==INDEX_NONE))
     {
-        const int32 Next=OldIndex==INDEX_NONE ? 0 :
+        const int32 Next=OldIndex==INDEX_NONE ? Targets.Units.IndexOfByKey(Targets.Initial) :
             (OldIndex+Targets.Units.Num()+(bBackward ? -1 : 1)) % Targets.Units.Num();
         AActor* NewTarget=Targets.Units[Next];
         if (DraftIcons.Num()!=1 || DraftIcons[0].Get()!=NewTarget)
@@ -1145,6 +1218,7 @@ bool UReditusBattleHUDPresenterComponent::RouteATBListTargetInput(FName ActionNa
             DraftIcons.Emplace(NewTarget);
             SetTargetIcon(NewTarget,true);
         }
+        DraftTarget=NewTarget;
         SetObjectValue(Unit,TEXT("currentTarget"),NewTarget);
         return true;
     }
@@ -1163,6 +1237,7 @@ bool UReditusBattleHUDPresenterComponent::RouteATBListTargetInput(FName ActionNa
     Action.Kind=bItem ? EReditusATBActionKind::Item :
         DraftCommand==EReditusHUDCommand::Overdrive ? EReditusATBActionKind::Overdrive : EReditusATBActionKind::Skill;
     Action.LegacyClass=Row.Class(bItem ? TEXT("UsableItemLegacyLaunch") : TEXT("LegacySkill"));
+    Action.TargetMode=Targets.Mode;
     if (Targets.bGroup) Action.Targets=Targets.Units;
     else Action.Targets.Add(Target);
     Action.AmpCommitted=FMath::Max(0,static_cast<int32>(Number(Unit,TEXT("CurrentAmpPointsInPlay"))));
@@ -1270,6 +1345,11 @@ void UReditusBattleHUDPresenterComponent::HandleNativeMenuCancelled(AActor* Unit
 void UReditusBattleHUDPresenterComponent::TickComponent(float DeltaTime,ELevelTick TickType,FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime,TickType,ThisTickFunction);
+    // Legacy Flee records the result before it persists the party and leaves
+    // the battle. Check from tick, outside that Blueprint's call stack.
+    FinishConfirmedDefeat();
+    FinishConfirmedFlee();
+    if (IsValid(HUD) && Boolean(GetOwner(),TEXT("isBattleOver"))) DestroyBattleHUD();
     if (!IsValid(HUD))
     {
         ClearEnemyMenuSlowdown();
@@ -1281,6 +1361,138 @@ void UReditusBattleHUDPresenterComponent::TickComponent(float DeltaTime,ELevelTi
     bRefresh=bRefresh || RunningATB(GetOwner())!=nullptr;
 #endif
     if (bRefresh) RefreshBattleHUD();
+}
+
+void UReditusBattleHUDPresenterComponent::ResetTrackedEncounter()
+{
+    TrackedEncounter.Reset();
+    TrackedEncounterUnits.Reset();
+    bTrackingEncounter=false;
+    bStoppedClockForFlee=false;
+    bRetriedOnLevelFleeExit=false;
+    bDefeatFlowHandled=false;
+}
+
+void UReditusBattleHUDPresenterComponent::TrackLegacyEncounter(AActor* Encounter)
+{
+    if (!IsValid(Encounter)) return;
+    if (!Boolean(GetOwner(),TEXT("isBattleOver"))) bDefeatFlowHandled=false;
+    if (!bTrackingEncounter || TrackedEncounter.Get()!=Encounter)
+    {
+        ResetTrackedEncounter();
+        TrackedEncounter=Encounter;
+        bTrackingEncounter=true;
+    }
+    // A native ATB setup can skip the old transition that binds this event.
+    // Bind the original handler, rather than rolling Flee again in the HUD.
+    BindLegacyBattleResult(Encounter,GetOwner());
+    static const FName Rosters[]={TEXT("enemyUnits"),TEXT("playerUnits"),TEXT("AllUnits")};
+    for (FName Roster:Rosters)
+        for (AActor* Unit:Actors(Encounter,Roster))
+            TrackedEncounterUnits.Add(TWeakObjectPtr<AActor>(Unit));
+}
+
+void UReditusBattleHUDPresenterComponent::FinishConfirmedDefeat()
+{
+    AActor* Controller=GetOwner();
+    if (!bCompleteRecordedDefeat || bDefeatFlowHandled || !IsValid(Controller) || !Boolean(Controller,TEXT("isBattleOver")) ||
+        Number(Controller,TEXT("battleResult"),-1.0)!=1.0) return;
+    // Consume the confirmed E_BattleResult::EnemyWon result. Do not guess a
+    // wipe from an empty array while initialization/recruit replacements run.
+    AActor* Encounter=Cast<AActor>(ObjectValue(Controller,TEXT("currentBattle")));
+    if (!IsValid(Encounter) || (TrackedEncounter.IsValid() && TrackedEncounter.Get()!=Encounter)) return;
+    if (Actors(Encounter,TEXT("playerUnits")).ContainsByPredicate([](AActor* Unit)
+        { return IsValid(Unit) && Number(Unit,TEXT("currentHP"))>0.0; })) return;
+    bDefeatFlowHandled=true; // Before callbacks: no reentrant duplicate screen.
+#if REDITUS_HUD_HAS_ATB
+    if (auto* ATB=RunningATB(Controller)) ATB->StopATB();
+#endif
+    if (!IsValid(Controller) || !Boolean(Controller,TEXT("isBattleOver")) ||
+        Number(Controller,TEXT("battleResult"),-1.0)!=1.0 || ObjectValue(Controller,TEXT("currentBattle"))!=Encounter) return;
+    // Keep the legacy backing root available for OnBattleOver's HideBattleUI
+    // call, then leave it hidden when native HUD teardown restores its state.
+    if (IsValid(HostedLegacyRoot))
+    {
+        HostedRootVisibility=ESlateVisibility::Collapsed;
+        HostedRootOpacity=0.f;
+    }
+    if (HasLegacyDefeatDialogue(this)) return;
+    // The original event fades the theme and calls EnemyWon(false), which owns
+    // BP_DefeatDialogue, its camera, animation and focus/continue behavior.
+    if (!CallNoArgumentEvent(Controller,TEXT("OnBattleOver")))
+    {
+        UE_LOG(LogReditusBattleHUD,Error,TEXT("Defeat was recorded, but the controller's OnBattleOver event was unavailable."));
+    }
+}
+
+void UReditusBattleHUDPresenterComponent::FinishConfirmedFlee()
+{
+    AActor* Controller=GetOwner();
+    if (!bTrackingEncounter || !Boolean(Controller,TEXT("isBattleOver"))) return;
+    // E_BattleResult::Fled is 2. Cancelled or failed attempts do not end battle.
+    AActor* Encounter=TrackedEncounter.Get();
+    auto* CurrentEncounter=Cast<AActor>(ObjectValue(Controller,TEXT("currentBattle")));
+    if (Number(Controller,TEXT("battleResult"),-1.0)==1.0) return;
+    if (Number(Controller,TEXT("battleResult"),-1.0)!=2.0 ||
+        (IsValid(CurrentEncounter) && CurrentEncounter!=Encounter))
+    {
+        ResetTrackedEncounter();
+        return;
+    }
+    if (!bStoppedClockForFlee)
+    {
+        bStoppedClockForFlee=true;
+#if REDITUS_HUD_HAS_ATB
+        if (auto* ATB=RunningATB(Controller)) ATB->StopATB();
+#endif
+    }
+    // Preserve the existing exit and party-save flow, including the off-level
+    // transition. Its RemoveBattle override decides whether the encounter
+    // itself is destroyed (one-time) or retained (reusable).
+    if (!IsValid(Controller) || !IsValid(Player)) return;
+    // The original on-level exit is synchronous. If it did not run, retry it
+    // once while its UI and roster are intact. Off-level overrides own their delay.
+    if (!bRetriedOnLevelFleeExit && IsValid(Encounter) && Number(Player,TEXT("gameState"),-1.0)==2.0)
+        if (const UFunction* Exit=Controller->FindFunction(TEXT("SwitchToExploreMode")))
+            if (Exit->GetOuter() && Exit->GetOuter()->GetFName()==FName(TEXT("BP_BattleController_C")))
+            {
+                bRetriedOnLevelFleeExit=true;
+                CallNoArgumentEvent(Controller,TEXT("OnBattleOver"));
+            }
+    if (!IsValid(Controller) || !IsValid(Player) || Number(Player,TEXT("gameState"),-1.0)!=0.0 ||
+        !Boolean(Controller,TEXT("isBattleOver")) || !bTrackingEncounter ||
+        (TrackedEncounter.IsValid() && TrackedEncounter.Get()!=Encounter)) return;
+
+    // When a Blueprint removal broadcast misses a spawned unit, the cached
+    // roster still identifies it even if the encounter already cleared its arrays.
+    AActor* ExplorePawn=Cast<AActor>(ObjectValue(Controller,TEXT("exploreCharacter")));
+    AActor* ControlledPawn=Player->GetPawn();
+    const auto Units=MoveTemp(TrackedEncounterUnits);
+    ResetTrackedEncounter();
+    DestroyBattleHUD();
+    if (IsValid(Encounter) && ObjectValue(Controller,TEXT("currentBattle"))==Encounter &&
+        (Actors(Encounter,TEXT("enemyUnits")).Num()>0 || Actors(Encounter,TEXT("playerUnits")).Num()>0))
+        CallNoArgumentEvent(Encounter,TEXT("RemoveBattle"));
+
+    auto* RemainingEncounter=Cast<AActor>(ObjectValue(Controller,TEXT("currentBattle")));
+    if (IsValid(RemainingEncounter) && RemainingEncounter!=Encounter) return;
+    for (const auto& Entry:Units)
+    {
+        AActor* Unit=Entry.Get();
+        if (!IsValid(Unit) || Unit==ExplorePawn || Unit==ControlledPawn || Unit==Encounter || Unit==Controller) continue;
+        UObject* UnitEncounter=ObjectValue(Unit,TEXT("battle"));
+        if (IsValid(UnitEncounter) && UnitEncounter!=Encounter) continue;
+        Unit->Destroy();
+    }
+    if (IsValid(Encounter))
+    {
+        ClearEncounterUnits(Encounter,TEXT("enemyUnits"));
+        ClearEncounterUnits(Encounter,TEXT("playerUnits"));
+        ClearEncounterUnits(Encounter,TEXT("AllUnits"));
+    }
+    UObject* FinalEncounter=ObjectValue(Controller,TEXT("currentBattle"));
+    if (FinalEncounter==Encounter || !IsValid(FinalEncounter))
+        SetObjectValue(Controller,TEXT("currentBattle"),nullptr);
 }
 
 void UReditusBattleHUDPresenterComponent::ClearEnemyMenuSlowdown()
@@ -1363,6 +1575,7 @@ void UReditusBattleHUDPresenterComponent::UpdateEnemyMenuSlowdown(UObject* Battl
 void UReditusBattleHUDPresenterComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
     DestroyBattleHUD();
+    ResetTrackedEncounter();
     Super::EndPlay(EndPlayReason);
 }
 
@@ -1415,15 +1628,24 @@ FReditusBattleHUDUnit UReditusBattleHUDPresenterComponent::ReadUnit(AActor* Unit
     Data.TotalAmp=static_cast<int32>(Number(Unit,TEXT("TotalAmpPoints")));
     Data.CommittedAmp=static_cast<int32>(Number(Unit,TEXT("CurrentAmpPointsInPlay")));
     Data.CurrentStamina=static_cast<int32>(Number(Unit,TEXT("CurrentStamina")));
+    Data.bStaggered=Boolean(Unit,TEXT("Staggered"));
 #if REDITUS_HUD_HAS_ATB
     if (const auto* ATB=RunningATB(GetOwner()))
     {
+        if (const auto* Health=Unit->FindComponentByClass<UReditusRollingHPComponent>())
+            if (ATB->RollingHP.bEnabled && Health->HasReceivedLegacyHPWrite())
+            {
+                Data.TargetHP=static_cast<float>(Health->GetTargetHP());
+                Data.bLethalDamagePending=Health->IsLethalDamagePending();
+            }
         const FReditusATBUnitView State=ATB->GetUnitState(Unit);
         Data.ATBPercent=ReditusHUDPolicy::Ratio(State.Gauge,1.f);
-        Data.bCanAct=Data.HP>0.f && State.Phase!=EReditusATBPhase::Inactive;
+        Data.bStaggered=ATB->IsUnitStaggered(Unit);
+        Data.bCanAct=Data.HP>0.f && !Data.bStaggered && !Boolean(Unit,TEXT("isStun")) &&
+            !Boolean(Unit,TEXT("IsSleeping")) && State.Phase!=EReditusATBPhase::Inactive;
         Data.bReadyForCommands=Data.bCanAct && State.Phase==EReditusATBPhase::Ready &&
             Unit==CurrentActor && bCommandWindow;
-        Data.bQueued=State.Phase==EReditusATBPhase::Preparing || State.Phase==EReditusATBPhase::Queued;
+        Data.bQueued=Data.bCanAct && (State.Phase==EReditusATBPhase::Preparing || State.Phase==EReditusATBPhase::Queued);
         return Data;
     }
 #endif
@@ -1630,8 +1852,14 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
     if (!IsValid(HUD) || bRefreshing) return;
     TGuardValue<bool> Guard(bRefreshing,true);
     AActor* Controller=GetOwner();
-    if (Boolean(Controller,TEXT("isBattleOver"))) { DestroyBattleHUD(); return; }
+    if (Boolean(Controller,TEXT("isBattleOver")))
+    {
+        // Leave the legacy backing UI alive until Blueprint exit logic returns.
+        if (!bTrackingEncounter) DestroyBattleHUD();
+        return;
+    }
     UObject* Battle=ObjectValue(Controller,TEXT("currentBattle"));
+    if (bRouteLegacyCommands) TrackLegacyEncounter(Cast<AActor>(Battle));
     // Enemy skill preparation also calls battleUI before any list has opened.
     // Keep the backing root available from HUD creation's first game-world refresh.
     if (bReadLegacyBattle && bRouteLegacyCommands && IsValid(Battle))
@@ -1654,6 +1882,14 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
     bool bUsingATB=false;
     AActor* CurrentActor=CommandOwner(Controller,&bUsingATB);
 #if REDITUS_HUD_HAS_ATB
+    if (bUsingATB && HUD->IsMenuOpen())
+        if (const auto* ATB=RunningATB(Controller))
+            if (ATB->IsUnitStaggered(HUD->GetSelectedUnit()))
+            {
+                ClearNativeMenu();
+                ClearATBListTargeting();
+                HUD->CloseListMenu();
+            }
     if (bDraftActive && (!bUsingATB || !IsValid(CurrentActor) || CurrentActor!=DraftOwner.Get() ||
         Number(CurrentActor,TEXT("currentHP"))<=0.0 ||
         RunningATB(Controller)->GetUnitState(CurrentActor).CycleToken!=DraftCycle))
@@ -1667,7 +1903,7 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
             const bool bHasReadyAlly=PartyUnits.ContainsByPredicate([ATB](AActor* Unit)
             {
                 return IsValid(Unit) && Number(Unit,TEXT("currentHP"))>0.0 &&
-                    ATB->GetUnitState(Unit).Phase==EReditusATBPhase::Ready;
+                    ATB->CanIssueCommands(Unit);
             });
             if (bHasReadyAlly && CallNoArgumentEvent(Controller,TEXT("PickNextATBCommandUnit")))
             {
@@ -1750,7 +1986,8 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
 #endif
     if (NativeMenuSource) RefreshNativeMenuEntries(false);
     UpdateEnemyMenuSlowdown(Battle,CurrentActor);
-    AActor* Target=TargetWindow ? (bExplicitTarget ? ExplicitEnemyTarget.Get() :
+    // Keep native list selection independent of mutable legacy action targets.
+    AActor* Target=TargetWindow ? (bDraftActive ? DraftTarget.Get() : bExplicitTarget ? ExplicitEnemyTarget.Get() :
         Cast<AActor>(ObjectValue(CurrentActor,TEXT("currentTarget")))) : nullptr;
     const bool bGroup=TargetWindow && bDraftActive && bDraftGroup;
     UpdateEnemyBadges(Battle,Target,bGroup);
@@ -1918,6 +2155,7 @@ AActor* UReditusBattleHUDPresenterComponent::FindTimedAttackOwner() const
     {
         // E_SelectType::RegularAttack is 5 in both timed-attack Blueprints.
         return IsValid(Unit) && PartyUnits.Contains(Unit) && Number(Unit,TEXT("currentHP"))>0.0 &&
+            !Boolean(Unit,TEXT("isStun")) && !Boolean(Unit,TEXT("Staggered")) && !Boolean(Unit,TEXT("IsSleeping")) &&
             Number(Unit,TEXT("SelectType"),-1.0)==5.0 && Boolean(Unit,TEXT("TimedAttackOpportunity"));
     };
 #if REDITUS_HUD_HAS_ATB
@@ -1974,6 +2212,11 @@ bool UReditusBattleHUDPresenterComponent::ForwardGameplayInput(FName ActionName,
     {
         AActor* Unit=HUD->GetSelectedUnit();
         AActor* Current=CommandOwner(GetOwner());
+#if REDITUS_HUD_HAS_ATB
+        // A cached widget snapshot may predate a hit by one frame. Do not let
+        // its input fall through to controller bindings for an incapacitated owner.
+        if (RunningATB(GetOwner()) && (!IsValid(Current) || Unit!=Current)) return false;
+#endif
         if (IsValid(Unit) && Unit==Current) { Routed=ExecuteInputAction(Unit,ActionName,Key); if (Routed) InputOwner=Unit; }
         if (!Routed) { Routed=ExecuteInputAction(Player,ActionName,Key); if (Routed) InputOwner=Player; }
     }

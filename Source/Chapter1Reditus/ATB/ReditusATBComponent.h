@@ -5,6 +5,7 @@
 // Generated UObject constructors can instantiate TUniquePtr cleanup in other
 // translation units, so the scheduler must be complete in this header.
 #include "ReditusATBCore.h"
+#include "ReditusRollingHPComponent.h"
 #include "ReditusATBComponent.generated.h"
 
 class AActor;
@@ -49,6 +50,8 @@ struct CHAPTER1REDITUS_API FReditusATBTuning
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Preparation", meta=(ClampMin="0.0")) float OverdrivePreparation = 1.2f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Preparation", meta=(ClampMin="0.0")) float DefendPreparation = 0.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Preparation", meta=(ClampMin="0.0")) float CustomPreparation = 0.35f;
+    /** Battle seconds per existing BP_Staggered turn. Zero uses this unit's normal full-gauge time. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Stagger", meta=(ClampMin="0.0")) float StaggerRecoveryTurnSeconds = 0.f;
     /** Exact selected row ID takes priority over the legacy-class timing below. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Preparation") TMap<FName,float> PreparationByID;
     /** Walks the supplied class's ancestry; nearest configured parent wins. */
@@ -140,12 +143,21 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB") FReditusATBTuning Tuning;
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Rolling HP") FReditusRollingHPTuning RollingHP;
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB") bool bPaused = false;
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Legacy") bool bReadLiveSpeed = true;
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Legacy") FName SpeedProperty = TEXT("speed");
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Legacy") bool bRemoveUnitsWithZeroHP = true;
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Legacy") FName HPProperty = TEXT("currentHP");
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Legacy") FName ExhaustedProperty = TEXT("IsExhausted");
+    /** Hold staggered gauges. If disabled, stagger still forfeits commands and expires through skipped personal cycles. */
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Legacy") bool bFreezeLegacyStagger = true;
+    /** Advance BP_Staggered's existing turn counter/cleanup. Frozen units use a separate recovery clock. */
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Legacy") bool bAdvanceLegacyStaggerOnCycleEnd = true;
+    /** Reviewed Reditus start effects are synchronous. Disable if you add a latent operation to that handler itself. */
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Legacy") bool bFinishSynchronousLegacyCycleStart = true;
+    /** Single living-ally commands recheck their target at execution; revival keeps its dead-target rule. */
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Targets") bool bRetargetLostLivingAlly = true;
 
     /** Run regen/poison/status checks once; acknowledge using Complete Cycle Start. */
     UPROPERTY(BlueprintAssignable,Category="Reditus|ATB") FReditusATBCycleEvent OnCycleStartRequested;
@@ -179,11 +191,14 @@ public:
     UFUNCTION(BlueprintPure,Category="Reditus|ATB") TArray<FReditusATBUnitView> GetUnitStates() const;
     /** Read intent for an enemy timeline without reading currentSkill/controller globals. */
     UFUNCTION(BlueprintPure,Category="Reditus|ATB") bool GetPendingAction(AActor* Unit,FReditusATBAction& Action) const;
+    UFUNCTION(BlueprintPure,Category="Reditus|ATB") bool IsUnitStaggered(AActor* Unit) const;
+    /** Checks live status as well as phase, including status applied between a tick and an input press. */
+    UFUNCTION(BlueprintPure,Category="Reditus|ATB") bool CanIssueCommands(AActor* Unit) const;
     UFUNCTION(BlueprintCallable,Category="Reditus|ATB") bool CompleteCycleStart(AActor* Unit,int32 CycleToken,bool bCanAct);
     /** Override -1 uses the editable tuning/ID/class lookup. Does not spend resources. */
     UFUNCTION(BlueprintCallable,Category="Reditus|ATB") bool SubmitAction(const FReditusATBAction& Action,int32& ActionToken,float PreparationOverride=-1.f);
     UFUNCTION(BlueprintCallable,Category="Reditus|ATB") bool CompleteAction(int32 ActionToken);
-    /** Validation failed before execution; returns the unit to READY in the same cycle. */
+    /** Validation failed before execution; restores READY, or ends the cycle if stagger was applied. */
     UFUNCTION(BlueprintCallable,Category="Reditus|ATB") bool RejectAction(int32 ActionToken);
     UFUNCTION(BlueprintCallable,Category="Reditus|ATB") bool CancelPendingAction(AActor* Unit);
     UFUNCTION(BlueprintCallable,Category="Reditus|ATB") bool CompleteCycleEnd(AActor* Unit,int32 CycleToken);
@@ -195,6 +210,7 @@ private:
     UPROPERTY(Transient) TMap<AActor*,float> SpeedOverrides;
     UPROPERTY(Transient) TMap<AActor*,FReditusATBTimingEffectList> TimingEffects;
     UPROPERTY(Transient) TMap<int32,FReditusATBAction> PendingActions;
+    UPROPERTY(Transient) TArray<TWeakObjectPtr<UReditusRollingHPComponent>> RollingUnits;
     TSet<int32> ExecutionInterruptRequests;
     bool bRunning = false;
     bool bStopping = false;
@@ -207,4 +223,8 @@ private:
     void UpdateTimingRates(AActor* Unit,int32 UnitID);
     void NotifyReady(AActor* Unit,int32 CycleToken);
     void NotifyCycleStartCompleted(AActor* Unit,int32 CycleToken,bool bFirst,bool bCanAct);
+    void SynchronizeLegacyStagger();
+    void AdvanceFrozenStaggerRecovery();
+    void FinishSynchronousCycleStart(AActor* Unit,int32 CycleToken);
+    bool RevalidateActionTargets(FReditusATBAction& Action) const;
 };

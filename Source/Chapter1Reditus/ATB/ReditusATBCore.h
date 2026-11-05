@@ -33,8 +33,10 @@ namespace ReditusATBCore
         double PreparationRemaining = 0.0;
         double GaugeMultiplier = 1.0;
         double PreparationMultiplier = 1.0;
+        double BlockedRecovery = 0.0;
         bool PauseGauge = false;
         bool PausePreparation = false;
+        bool CommandBlocked = false;
         bool StartResolved = false;
         bool ReadyAmpClaimed = false;
         Phase State = Phase::Filling;
@@ -45,6 +47,10 @@ namespace ReditusATBCore
         double ReferenceSpeed = 20.0;
         double FillRateMultiplier = 1.0;
         double RefillGauge = 0.0;
+        // Zero follows the unit's normal fill rate. This recovery clock never
+        // advances its action gauge or produces Ready/AMP work.
+        double BlockedRecoverySeconds = 0.0;
+        bool FreezeBlockedGauge = true;
         bool ContinueFillingDuringExecution = true;
         bool ContinuePreparingDuringExecution = true;
     };
@@ -128,6 +134,34 @@ namespace ReditusATBCore
                 U->PauseGauge = PauseGauge; U->PausePreparation = PausePreparation;
             }
         }
+        void SetCommandBlocked(int ID, bool Blocked)
+        {
+            if (Unit* U = Find(ID))
+            {
+                if (U->CommandBlocked != Blocked) U->BlockedRecovery = 0.0;
+                U->CommandBlocked = Blocked;
+            }
+        }
+        // End a command opportunity without taking another unit's execution
+        // lane. Poll requests this owner's cleanup when that lane is free.
+        bool ForfeitCommand(int ID)
+        {
+            Unit* U = Find(ID);
+            if (!U || Active.Unit == ID ||
+                (U->State != Phase::Ready && U->State != Phase::Preparing && U->State != Phase::Queued)) return false;
+            U->Action = -1;
+            U->PreparationTotal = U->PreparationRemaining = 0.0;
+            U->EligibleAt = Now;
+            U->State = Phase::CycleEnd;
+            return true;
+        }
+        bool ConsumeBlockedRecovery(int ID)
+        {
+            Unit* U = Find(ID);
+            if (!U || !U->CommandBlocked || U->BlockedRecovery < 1.0) return false;
+            U->BlockedRecovery -= 1.0;
+            return true;
+        }
         // Pushback after a cycle's start effects never replays poison/regen/AMP.
         bool PushBack(int ID, double FractionToRemove)
         {
@@ -148,10 +182,22 @@ namespace ReditusATBCore
             const bool Executing = Active.Kind == WorkKind::Action;
             for (Unit& U : Units)
             {
+                const double Denominator = NonNegative(Config.ReferenceSpeed) * NonNegative(Config.BaseFillSeconds);
+                const double Rate = Denominator > 0.0 ? NonNegative(U.Speed * NonNegative(Config.FillRateMultiplier) * U.GaugeMultiplier / Denominator) : 0.0;
+                if (U.CommandBlocked && Config.FreezeBlockedGauge)
+                {
+                    if (!U.PauseGauge && (!Executing || Config.ContinueFillingDuringExecution))
+                    {
+                        const double Seconds = NonNegative(Config.BlockedRecoverySeconds);
+                        const double RecoveryRate = Seconds > 0.0 ? 1.0 / Seconds : Rate;
+                        // Recovery also runs while this owner's end cleanup is
+                        // waiting behind another action. It never takes the lane.
+                        U.BlockedRecovery = std::min(1024.0, U.BlockedRecovery + Delta * RecoveryRate);
+                    }
+                    continue;
+                }
                 if (U.State == Phase::Filling && !U.PauseGauge && (!Executing || Config.ContinueFillingDuringExecution))
                 {
-                    const double Denominator = NonNegative(Config.ReferenceSpeed) * NonNegative(Config.BaseFillSeconds);
-                    const double Rate = Denominator > 0.0 ? NonNegative(U.Speed * NonNegative(Config.FillRateMultiplier) * U.GaugeMultiplier / Denominator) : 0.0;
                     const double Left = std::max(0.0, 1.0 - U.Gauge);
                     if (Left == 0.0 || (Rate > 0.0 && Delta >= Left / Rate))
                     {
@@ -160,7 +206,7 @@ namespace ReditusATBCore
                     }
                     else U.Gauge = Fraction(U.Gauge + Delta * Rate);
                 }
-                if (U.State == Phase::Preparing)
+                if (U.State == Phase::Preparing && !U.CommandBlocked)
                 {
                     if (!U.PausePreparation && (!Executing || Config.ContinuePreparingDuringExecution) && U.PreparationMultiplier>0.0)
                     {
@@ -183,13 +229,14 @@ namespace ReditusATBCore
             {
                 const Unit* Best = nullptr;
                 for (const Unit& U : Units)
-                    if ((U.State == Phase::CycleStart ||
-                         (U.State == Phase::Queued && !U.PausePreparation && U.PreparationMultiplier > 0.0)) &&
+                    if ((U.State == Phase::CycleStart || U.State == Phase::CycleEnd ||
+                         (U.State == Phase::Queued && !U.CommandBlocked && !U.PausePreparation && U.PreparationMultiplier > 0.0)) &&
                         (!Best || U.EligibleAt < Best->EligibleAt ||
                          (U.EligibleAt == Best->EligibleAt && U.ID < Best->ID))) Best = &U;
                 if (!Best) return Work();
                 Active.Unit = Best->ID; Active.Cycle = Best->Cycle; Active.Action = Best->Action;
-                Active.Kind = Best->State == Phase::CycleStart ? WorkKind::CycleStart : WorkKind::Action;
+                Active.Kind = Best->State == Phase::CycleStart ? WorkKind::CycleStart :
+                    Best->State == Phase::CycleEnd ? WorkKind::CycleEnd : WorkKind::Action;
                 if (Active.Kind == WorkKind::Action) Find(Best->ID)->State = Phase::Executing;
                 Sent = false;
             }
@@ -202,7 +249,7 @@ namespace ReditusATBCore
             Unit* U = Find(ID);
             if (!U || Active.Kind != WorkKind::CycleStart || Active.Unit != ID || Active.Cycle != Cycle) return false;
             U->StartResolved = true;
-            if (CanAct) { U->State = Phase::Ready; ClearLane(); }
+            if (CanAct && !U->CommandBlocked) { U->State = Phase::Ready; ClearLane(); }
             else BeginEnd(*U);
             return true;
         }
@@ -212,7 +259,7 @@ namespace ReditusATBCore
         {
             Unit* U = Find(ID);
             if (!U || Active.Kind!=WorkKind::Action || U->Cycle!=Cycle ||
-                U->State!=Phase::CycleStart || U->StartResolved || U->PauseGauge || U->GaugeMultiplier<=0.0)
+                U->State!=Phase::CycleStart || U->StartResolved || U->CommandBlocked || U->PauseGauge || U->GaugeMultiplier<=0.0)
                 return false;
             U->StartResolved = true;
             U->State = Phase::Ready;
@@ -223,14 +270,14 @@ namespace ReditusATBCore
         bool ClaimReadyAmp(int ID, int Cycle)
         {
             Unit* U = Find(ID);
-            if (!U || U->State != Phase::Ready || U->Cycle != Cycle || U->ReadyAmpClaimed) return false;
+            if (!U || U->CommandBlocked || U->State != Phase::Ready || U->Cycle != Cycle || U->ReadyAmpClaimed) return false;
             U->ReadyAmpClaimed = true;
             return true;
         }
         int Submit(int ID, double PreparationSeconds)
         {
             Unit* U = Find(ID);
-            if (!U || U->State != Phase::Ready || !std::isfinite(PreparationSeconds) || PreparationSeconds < 0.0 ||
+            if (!U || U->CommandBlocked || U->State != Phase::Ready || !std::isfinite(PreparationSeconds) || PreparationSeconds < 0.0 ||
                 NextAction == std::numeric_limits<int>::max()) return -1;
             U->Action = NextAction++;
             U->PreparationTotal = PreparationSeconds;
@@ -250,6 +297,7 @@ namespace ReditusATBCore
         {
             Unit* U = Find(Active.Unit);
             if (!U || Active.Kind != WorkKind::Action || Active.Action != Action) return false;
+            if (U->CommandBlocked) { BeginEnd(*U); return true; }
             U->Action = -1; U->State = Phase::Ready; ClearLane();
             U->PreparationRemaining = 0.0;
             return true;

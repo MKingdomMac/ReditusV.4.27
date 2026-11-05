@@ -638,6 +638,12 @@ void UReditusBattleHUDWidget::BuildCards()
             Place(Content,MakeText(Text(Labels[J]),15),X,39.f+J*31.f,38.f,20.f);
             PlaceStretchX(Content,Bars[J],X+39.f,42.f+J*31.f,8.f,18.f);
         }
+        Card.HPDestinationBar=Bar(FLinearColor(0.f,0.85f,0.28f,1.f));
+        FProgressBarStyle DestinationStyle=Card.HPDestinationBar->WidgetStyle;
+        DestinationStyle.BackgroundImage.DrawAs=ESlateBrushDrawType::NoDrawType;
+        Card.HPDestinationBar->WidgetStyle=DestinationStyle;
+        PlaceStretchX(Content,Card.HPDestinationBar,X+39.f,42.f,8.f,18.f);
+        Card.HPDestinationBar->SetVisibility(ESlateVisibility::Collapsed);
         Card.HP = MakeText(FText::GetEmpty(),15);
         Card.MP = MakeText(FText::GetEmpty(),15);
         Card.ATB = MakeText(FText::GetEmpty(),15);
@@ -1424,11 +1430,11 @@ void UReditusBattleHUDWidget::Refresh()
         const bool Alive=Occupied && IsValid(Data.Unit) && Data.HP>0.f;
         const FLinearColor Dull(0.64f,0.64f,0.64f,1.f);
         Card.Content->SetVisibility(Occupied ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Hidden);
-        Card.Select->SetIsEnabled(Alive);
-        Card.Frame->SetBrush(!Alive ? SilverFrameBrush : I==SelectedIndex ? SelectedFrameBrush : GoldFrameBrush);
+        Card.Select->SetIsEnabled(Alive && !Data.bStaggered);
+        Card.Frame->SetBrush(!Alive ? SilverFrameBrush : I==SelectedIndex && !Data.bStaggered ? SelectedFrameBrush : GoldFrameBrush);
         Card.Frame->SetBrushColor(FLinearColor::White);
         Card.Frame->SetRenderOpacity(!Occupied ? 0.16f : Alive ? 1.f : 0.62f);
-        Card.SelectionGlow->SetVisibility(Alive && I==SelectedIndex ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+        Card.SelectionGlow->SetVisibility(Alive && !Data.bStaggered && I==SelectedIndex ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
         if (!Occupied) continue;
         Card.Name->SetText(Data.DisplayName);
         Card.Name->SetColorAndOpacity(FSlateColor(Alive ? Gold : Dull));
@@ -1443,17 +1449,24 @@ void UReditusBattleHUDWidget::Refresh()
         Card.Portrait->SetBrush(Portrait);
         Card.Portrait->SetColorAndOpacity(Alive ? FLinearColor::White : FLinearColor(0.55f,0.55f,0.55f,1.f));
         Card.Portrait->SetVisibility(IsValid(Data.Portrait) ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
-        Card.HPBar->SetFillColorAndOpacity(Alive ? FLinearColor(0.f,0.85f,0.28f,1.f) : Dull);
+        const bool FallingHP=Alive && Data.TargetHP>=0.f && Data.TargetHP<Data.HP;
+        Card.HPBar->SetFillColorAndOpacity(!Alive ? Dull : FallingHP ?
+            FLinearColor(0.95f,0.18f,0.12f,1.f) : FLinearColor(0.f,0.85f,0.28f,1.f));
+        Card.HPDestinationBar->SetVisibility(FallingHP ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+        Card.HPDestinationBar->SetPercent(FallingHP ? ReditusHUDPolicy::Ratio(Data.TargetHP,Data.MaxHP) : 0.f);
         Card.MPBar->SetFillColorAndOpacity(Alive ? FLinearColor(0.f,0.40f,0.95f,1.f) : Dull);
-        Card.ATBBar->SetFillColorAndOpacity(Alive ? FLinearColor(1.f,0.72f,0.06f,1.f) : Dull);
+        Card.ATBBar->SetFillColorAndOpacity(Alive && !Data.bStaggered ? FLinearColor(1.f,0.72f,0.06f,1.f) : Dull);
         Card.ODBar->SetFillColorAndOpacity(Alive ? FLinearColor(0.65f,0.15f,1.f,1.f) : Dull);
         Card.HPBar->SetPercent(Alive ? ReditusHUDPolicy::Ratio(Data.HP,Data.MaxHP) : 0.f);
         Card.MPBar->SetPercent(ReditusHUDPolicy::Ratio(Data.MP,Data.MaxMP));
         Card.ATBBar->SetPercent(Alive ? ReditusHUDPolicy::Ratio(Data.ATBPercent,1.f) : 0.f);
         Card.ODBar->SetPercent(ReditusHUDPolicy::Ratio(Data.Overdrive,Data.MaxOverdrive));
         Card.HP->SetText(Numbers(Alive ? Data.HP : 0.f,Data.MaxHP));
+        const float Warning=GetWorld() ? 0.78f+0.22f*FMath::Sin(GetWorld()->GetTimeSeconds()*9.f) : 1.f;
+        Card.HP->SetColorAndOpacity(FSlateColor(Alive && Data.bLethalDamagePending ?
+            FLinearColor(1.f,0.18f,0.12f,Warning) : FLinearColor::White));
         Card.MP->SetText(Numbers(Data.MP,Data.MaxMP));
-        Card.ATB->SetText(!Alive ? Text(TEXT("-")) : Data.bQueued ? Text(TEXT("QUEUED")) :
+        Card.ATB->SetText(!Alive ? Text(TEXT("-")) : Data.bStaggered ? Text(TEXT("STAGGER")) : Data.bQueued ? Text(TEXT("QUEUED")) :
             Data.bReadyForCommands ? ReadyUnitText : FText::AsPercent(ReditusHUDPolicy::Ratio(Data.ATBPercent,1.f)));
         Card.OD->SetText(Alive && Data.bOverdriveEntered ? Text(TEXT("OD READY")) :
             FText::AsPercent(ReditusHUDPolicy::Ratio(Data.Overdrive,Data.MaxOverdrive)));
@@ -1695,8 +1708,11 @@ bool UReditusBattleHUDWidget::HandleBattleKeyDown(FKey Key,bool bRepeat)
     const bool Gamepad=Key.IsGamepadKey();
     const bool BlockKey=Gamepad ? Key==GamepadKeys.Block : Key==KeyboardBlockKey;
     if (HandleTimedAttackKeyDown(Key,bRepeat)) return true;
-    if (BlockKey && bReactionWindow)
+    if (BlockKey)
     {
+        // Forward every fresh Block press to the original gameplay timing
+        // gates, including the first attack and while another ally owns a menu.
+        // The HUD's periodically refreshed reaction flag is presentation only.
         if (!bRepeat) RequestCommand(EReditusHUDCommand::Block);
         return Owned();
     }
@@ -1704,13 +1720,6 @@ bool UReditusBattleHUDWidget::HandleBattleKeyDown(FKey Key,bool bRepeat)
     if (BackKey && (IsMenuOpen() || bTargetSelectionActive))
     {
         if (!bRepeat) RequestCommand(EReditusHUDCommand::Cancel);
-        return Owned();
-    }
-    if (BlockKey && (!Gamepad || bCommandsEnabled || bListOpen))
-    {
-        // Reserve Space in battle so Slate can't also use it to click a
-        // focused menu button when there is no active combat timing window.
-        if (Gamepad && !bRepeat) RequestCommand(EReditusHUDCommand::Block);
         return Owned();
     }
     const bool Increase=Gamepad ? Key==GamepadKeys.IncreaseAmp : MatchesAction(InputActions.IncreaseAmp,Key);

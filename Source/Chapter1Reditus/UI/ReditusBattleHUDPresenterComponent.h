@@ -45,6 +45,8 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD") bool bSyncLegacyDeviceFlag = true;
     /** Copy the old attack notice's text/icon/visibility out of its transparent backing root. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Legacy") bool bMirrorLegacyActionAnnouncement = true;
+    /** Complete a recorded EnemyWon result after the last live HP counter reaches 0. Disable for custom scripted exits. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Legacy") bool bCompleteRecordedDefeat = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Enemies") bool bShowEnemyStatusBadges = true;
     /** Apply battle-specific keyboard and gamepad mappings, then restore them when the HUD closes. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") bool bApplyCombatGamepadProfile = true;
@@ -129,6 +131,7 @@ private:
     EReditusHUDCommand NativeMenuCommand = EReditusHUDCommand::Tech;
     EReditusHUDCommand PendingMenuCommand = EReditusHUDCommand::Tech;
     TWeakObjectPtr<AActor> DraftOwner;
+    TWeakObjectPtr<AActor> DraftTarget;
     TArray<TWeakObjectPtr<AActor>> DraftIcons;
     FName DraftActionID;
     EReditusHUDCommand DraftCommand = EReditusHUDCommand::Tech;
@@ -142,6 +145,12 @@ private:
     double PendingMenuDeadline = 0.0;
     TWeakObjectPtr<AActor> PreviousLegacyUnit;
     TMap<TWeakObjectPtr<AActor>,int32> LastTurnCueCycles;
+    TWeakObjectPtr<AActor> TrackedEncounter;
+    TSet<TWeakObjectPtr<AActor>> TrackedEncounterUnits;
+    bool bTrackingEncounter = false;
+    bool bStoppedClockForFlee = false;
+    bool bRetriedOnLevelFleeExit = false;
+    bool bDefeatFlowHandled = false;
     bool bExplicitParty = false;
     bool bExplicitCommandWindow = false;
     bool bCommandWindowEnabled = false;
@@ -174,6 +183,10 @@ private:
     bool ShowExecutingEnemyAction(UObject* Battle);
     void UpdateEnemyBadges(UObject* Battle,AActor* Target,bool bGroup);
     void RestoreLegacyEnemyComponents();
+    void TrackLegacyEncounter(AActor* Encounter);
+    void FinishConfirmedDefeat();
+    void FinishConfirmedFlee();
+    void ResetTrackedEncounter();
     UFUNCTION() void HandleNativeMenuChosen(AActor* Unit, FName EntryID);
     UFUNCTION() void HandleNativeMenuCancelled(AActor* Unit);
     bool HandleCommand(AActor* Unit, EReditusHUDCommand Command);

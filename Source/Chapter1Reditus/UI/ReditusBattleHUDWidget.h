@@ -213,6 +213,7 @@ private:
         UHorizontalBox* AmpIcons = nullptr;
         TArray<UImage*> AmpImages;
         UProgressBar* HPBar = nullptr;
+        UProgressBar* HPDestinationBar = nullptr;
         UProgressBar* MPBar = nullptr;
         UProgressBar* ATBBar = nullptr;
         UProgressBar* ODBar = nullptr;
