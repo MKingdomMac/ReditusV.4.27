@@ -29,6 +29,7 @@ namespace ReditusATBCore
         double Speed = 0.0;
         double Gauge = 0.0;
         double EligibleAt = 0.0;
+        std::uint64_t ReadyOrder = 0;
         double PreparationTotal = 0.0;
         double PreparationRemaining = 0.0;
         double GaugeMultiplier = 1.0;
@@ -121,6 +122,19 @@ namespace ReditusATBCore
             return nullptr;
         }
         const std::vector<Unit>& Snapshot() const { return Units; }
+        // Command selection uses arrival order; action execution still uses
+        // EligibleAt and its existing single lane. Never reorder party slots.
+        std::vector<Unit> SnapshotInCommandOrder() const
+        {
+            auto Result = Units;
+            std::stable_sort(Result.begin(), Result.end(), [](const Unit& A, const Unit& B)
+            {
+                const bool AR = A.State == Phase::Ready, BR = B.State == Phase::Ready;
+                if (AR != BR) return AR;
+                return AR && A.ReadyOrder < B.ReadyOrder;
+            });
+            return Result;
+        }
         const Work& ActiveWork() const { return Active; }
         double Time() const { return Now; }
         void SetSpeed(int ID, double Speed)
@@ -170,6 +184,7 @@ namespace ReditusATBCore
                 (U->State!=Phase::Filling && U->State!=Phase::Ready && U->State!=Phase::CycleStart)) return false;
             U->Gauge = Fraction(U->Gauge-FractionToRemove);
             U->State = Phase::Filling;
+            U->ReadyOrder = 0;
             return true;
         }
 
@@ -180,6 +195,7 @@ namespace ReditusATBCore
             const double Before = Now;
             Now += Delta;
             const bool Executing = Active.Kind == WorkKind::Action;
+            std::vector<int> RefillingReady;
             for (Unit& U : Units)
             {
                 const double Denominator = NonNegative(Config.ReferenceSpeed) * NonNegative(Config.BaseFillSeconds);
@@ -203,6 +219,7 @@ namespace ReditusATBCore
                     {
                         U.Gauge = 1.0; U.State = U.StartResolved ? Phase::Ready : Phase::CycleStart;
                         U.EligibleAt = Before + (Left > 0.0 ? Left / Rate : 0.0);
+                        if (U.State == Phase::Ready) RefillingReady.push_back(U.ID);
                     }
                     else U.Gauge = Fraction(U.Gauge + Delta * Rate);
                 }
@@ -219,6 +236,14 @@ namespace ReditusATBCore
                     }
                 }
             }
+            // Several gauges can cross in one frame. Registration order must
+            // not decide which one arrived first.
+            std::sort(RefillingReady.begin(), RefillingReady.end(), [this](int A, int B)
+            {
+                const Unit& UA = *Find(A); const Unit& UB = *Find(B);
+                return UA.EligibleAt < UB.EligibleAt || (UA.EligibleAt == UB.EligibleAt && A < B);
+            });
+            for (int ID : RefillingReady) MarkReady(*Find(ID));
         }
 
         // At most one pending start/effect, action, or end/effect owns the lane.
@@ -249,7 +274,7 @@ namespace ReditusATBCore
             Unit* U = Find(ID);
             if (!U || Active.Kind != WorkKind::CycleStart || Active.Unit != ID || Active.Cycle != Cycle) return false;
             U->StartResolved = true;
-            if (CanAct && !U->CommandBlocked) { U->State = Phase::Ready; ClearLane(); }
+            if (CanAct && !U->CommandBlocked) { MarkReady(*U); ClearLane(); }
             else BeginEnd(*U);
             return true;
         }
@@ -262,7 +287,7 @@ namespace ReditusATBCore
                 U->State!=Phase::CycleStart || U->StartResolved || U->CommandBlocked || U->PauseGauge || U->GaugeMultiplier<=0.0)
                 return false;
             U->StartResolved = true;
-            U->State = Phase::Ready;
+            MarkReady(*U);
             return true;
         }
         // Returning to Ready after a rejected, cancelled or pushed-back command
@@ -284,6 +309,7 @@ namespace ReditusATBCore
             U->PreparationRemaining = PreparationSeconds;
             U->EligibleAt = Now + PreparationSeconds;
             U->State = PreparationSeconds > 0.0 ? Phase::Preparing : Phase::Queued;
+            U->ReadyOrder = 0;
             return U->Action;
         }
         bool CompleteAction(int Action)
@@ -298,7 +324,7 @@ namespace ReditusATBCore
             Unit* U = Find(Active.Unit);
             if (!U || Active.Kind != WorkKind::Action || Active.Action != Action) return false;
             if (U->CommandBlocked) { BeginEnd(*U); return true; }
-            U->Action = -1; U->State = Phase::Ready; ClearLane();
+            U->Action = -1; MarkReady(*U); ClearLane();
             U->PreparationRemaining = 0.0;
             return true;
         }
@@ -306,7 +332,7 @@ namespace ReditusATBCore
         {
             Unit* U = Find(ID);
             if (!U || (U->State != Phase::Preparing && U->State != Phase::Queued)) return false;
-            U->Action = -1; U->State = Phase::Ready;
+            U->Action = -1; MarkReady(*U);
             U->PreparationRemaining = 0.0;
             return true;
         }
@@ -318,6 +344,7 @@ namespace ReditusATBCore
             ++U->CompletedCycles; U->Cycle = NextCycle++; U->Action = -1;
             U->StartResolved = false; U->ReadyAmpClaimed = false; U->PreparationRemaining = 0.0;
             U->Gauge = Fraction(Config.RefillGauge); U->State = Phase::Filling;
+            U->ReadyOrder = 0;
             ClearLane();
             return true;
         }
@@ -328,6 +355,8 @@ namespace ReditusATBCore
         double Now = 0.0;
         int NextCycle = 1;
         int NextAction = 1;
+        std::uint64_t NextReadyOrder = 1;
+        void MarkReady(Unit& U) { U.State = Phase::Ready; U.ReadyOrder = NextReadyOrder++; }
         void ClearLane() { Active = Work(); Sent = false; }
         void BeginEnd(Unit& U)
         {

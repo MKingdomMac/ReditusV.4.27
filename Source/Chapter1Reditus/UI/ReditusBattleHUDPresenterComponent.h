@@ -175,6 +175,7 @@ private:
     bool IsBattleMoveUnlocked(AActor* Unit,FName MoveID,bool bOverdrive) const;
     void ClearNativeMenu();
     bool BeginATBListTargeting(AActor* Unit,FName ID,EReditusHUDCommand Command);
+    void AdoptLegacyAllyTargeting(AActor* Unit);
     bool RouteATBListTargetInput(FName ActionName);
     AActor* FindTimedAttackOwner() const;
     void ClearATBListTargeting();
@@ -190,6 +191,8 @@ private:
     UFUNCTION() void HandleNativeMenuChosen(AActor* Unit, FName EntryID);
     UFUNCTION() void HandleNativeMenuCancelled(AActor* Unit);
     bool HandleCommand(AActor* Unit, EReditusHUDCommand Command);
+    bool SelectCommandUnit(AActor* Unit);
+    void SynchronizeCommandSelectionEffects(AActor* CommandUnit);
     UFUNCTION() void HandleSelection(AActor* Unit);
     UFUNCTION() void HandleDevice(EReditusHUDInputDevice Device);
 };

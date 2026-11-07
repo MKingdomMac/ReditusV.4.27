@@ -144,3 +144,4 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FReditusHUDDeviceEvent, EReditusHUDI
 
 DECLARE_DELEGATE_RetVal_TwoParams(bool, FReditusHUDCommandRouter, AActor*, EReditusHUDCommand);
 DECLARE_DELEGATE_RetVal_TwoParams(bool, FReditusHUDGameplayInputRouter, FName, FKey);
+DECLARE_DELEGATE_RetVal_OneParam(bool, FReditusHUDSelectionRouter, AActor*);

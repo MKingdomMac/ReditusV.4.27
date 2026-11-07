@@ -157,10 +157,22 @@ namespace
             {TEXT("Is Blind?"),E::Blind},{TEXT("IsSleeping"),E::Sleep},{TEXT("Is Confused"),E::Confusion},
             {TEXT("NewConfused"),E::Confusion},{TEXT("IsCharmed??"),E::Charm},{TEXT("IsBerserk??"),E::Berserk},
             {TEXT("IsTaunted"),E::Taunt},{TEXT("IsExhausted"),E::Exhausted},{TEXT("Swallowed"),E::Swallowed},
-            {TEXT("IsRegen"),E::Regen},{TEXT("IsDefending"),E::GuardUp},{TEXT("IsProtected"),E::Protected},
+            {TEXT("IsRegen"),E::Regen},{TEXT("IsDefending"),E::GuardUp},{TEXT("IsProtected"),E::GuardUp},
             {TEXT("HitIncrease"),E::AccuracyUp}
         };
         for (const auto& Flag:Flags) if (Boolean(Unit,Flag.PropertyName)) Record(Flag.Kind);
+        if (IsValid(Unit))
+        {
+            static const FName TableGuardUpTag(TEXT("Reditus.TableBuff.GuardUp"));
+            TInlineComponentArray<UActorComponent*> Components;
+            Unit->GetComponents(Components);
+            for (const UActorComponent* Component : Components)
+                if (IsValid(Component) && Component->ComponentHasTag(TableGuardUpTag))
+                {
+                    Record(E::GuardUp);
+                    break;
+                }
+        }
 
         auto* Map=CastField<FMapProperty>(Property(Unit,TEXT("activeBuffs")));
         auto* Key=Map ? CastField<FClassProperty>(Map->KeyProp) : nullptr;
@@ -335,6 +347,19 @@ namespace
         if (auto* FX=Cast<USceneComponent>(ObjectValue(Unit,TEXT("PS_GPS_Selection_02")))) FX->SetVisibility(true);
     }
 
+    USceneComponent* CommandSelectionEffect(AActor* Unit)
+    {
+        if (!IsValid(Unit)) return nullptr;
+        if (auto* FX=Cast<USceneComponent>(ObjectValue(Unit,TEXT("PS_GPS_Selection_02")))) return FX;
+        // SCS component names can survive even when their generated BP member
+        // is unavailable. Match this one component; leave AMP/status FX alone.
+        TArray<USceneComponent*> Components;
+        Unit->GetComponents<USceneComponent>(Components);
+        for (auto* Component:Components)
+            if (IsValid(Component) && Component->GetFName()==TEXT("PS_GPS_Selection_02")) return Component;
+        return nullptr;
+    }
+
     TArray<UUserWidget*> WidgetArray(UObject* Object,FName Name)
     {
         TArray<UUserWidget*> Result;
@@ -504,6 +529,30 @@ namespace
         FName Mode=NAME_None;
     };
 
+    bool ProjectAllyTargetScreenX(AActor* Unit,APlayerController* PlayerController,float& ScreenX)
+    {
+        if (!IsValid(Unit) || !IsValid(PlayerController)) return false;
+        const auto Project=[PlayerController,&ScreenX](const FVector& Anchor)
+        {
+            FVector2D Position;
+            if (!UGameplayStatics::ProjectWorldToScreen(PlayerController,Anchor,Position,false) ||
+                !FMath::IsFinite(Position.X)) return false;
+            ScreenX=Position.X;
+            return true;
+        };
+        // Target the position the player sees. Pixel2D can be offset from the
+        // actor origin by its component transform, pivot or animation bounds.
+        auto* Visual=Cast<USceneComponent>(ObjectValue(Unit,TEXT("Pixel2D")));
+        if (!IsValid(Visual)) Visual=Cast<USceneComponent>(ObjectValue(Unit,TEXT("SkeletalMesh")));
+        if (IsValid(Visual))
+        {
+            if (auto* Primitive=Cast<UPrimitiveComponent>(Visual))
+                if (Project(Primitive->Bounds.Origin)) return true;
+            if (Project(Visual->GetComponentLocation())) return true;
+        }
+        return Project(Unit->GetActorLocation());
+    }
+
     void OrderAlliesOnScreen(TArray<AActor*>& Allies,APlayerController* PlayerController)
     {
         if (!IsValid(PlayerController) || Allies.Num()<2) return;
@@ -514,22 +563,24 @@ namespace
             int32 OriginalIndex=0;
         };
         TArray<FProjectedAlly> Projected;
+        TArray<int32> ProjectedSlots;
         for (int32 Index=0; Index<Allies.Num(); ++Index)
         {
             AActor* Unit=Allies[Index];
-            FVector2D Position;
-            // If the camera is not available yet, retain the stable HUD order.
-            if (!IsValid(Unit) || !UGameplayStatics::ProjectWorldToScreen(PlayerController,Unit->GetActorLocation(),Position,false) ||
-                !FMath::IsFinite(Position.X)) return;
+            float ScreenX=0.f;
+            // An unprojectable actor must not disable ordering for every ally.
+            // Keep only that actor's original slot while sorting known positions.
+            if (!ProjectAllyTargetScreenX(Unit,PlayerController,ScreenX)) continue;
             FProjectedAlly& Entry=Projected.AddDefaulted_GetRef();
-            Entry.Unit=Unit; Entry.ScreenX=Position.X; Entry.OriginalIndex=Index;
+            Entry.Unit=Unit; Entry.ScreenX=ScreenX; Entry.OriginalIndex=Index;
+            ProjectedSlots.Add(Index);
         }
         Projected.Sort([](const FProjectedAlly& A,const FProjectedAlly& B)
         {
             return A.ScreenX<B.ScreenX || (A.ScreenX==B.ScreenX && A.OriginalIndex<B.OriginalIndex);
         });
-        Allies.Reset();
-        for (const auto& Entry:Projected) Allies.Add(Entry.Unit);
+        for (int32 Index=0; Index<ProjectedSlots.Num(); ++Index)
+            Allies[ProjectedSlots[Index]]=Projected[Index].Unit;
     }
 
     FHUDActionTargets ListTargets(AActor* Controller,AActor* Owner,EReditusHUDCommand Command,const FHUDTableRow& Row,
@@ -589,8 +640,18 @@ namespace
         {
             // Also works when only the ready player's actor is available in the HUD.
             Allies.AddUnique(Owner);
-            OrderAlliesOnScreen(Allies,PlayerController);
-            Append(Allies,false);
+            if (Scope==5)
+            {
+                OrderAlliesOnScreen(Allies,PlayerController);
+                Append(Allies,false);
+            }
+            else
+            {
+                // Filter first: an excluded KO/off-camera unit is not a target
+                // and cannot decide the living party's navigation order.
+                Append(Allies,false);
+                OrderAlliesOnScreen(Result.Units,PlayerController);
+            }
         }
         if (Result.Units.Num()>0)
             Result.Initial=!Result.bGroup && Scope==3 && Result.Units.Contains(Owner) ? Owner : Result.Units[0];
@@ -720,6 +781,7 @@ UReditusBattleHUDWidget* UReditusBattleHUDPresenterComponent::CreateBattleHUD(AP
     if (!HUD) return nullptr;
     HUD->CommandRouter.BindUObject(this,&UReditusBattleHUDPresenterComponent::HandleCommand);
     HUD->GameplayInputRouter.BindUObject(this,&UReditusBattleHUDPresenterComponent::ForwardGameplayInput);
+    HUD->SelectionRouter.BindUObject(this,&UReditusBattleHUDPresenterComponent::SelectCommandUnit);
     HUD->OnSelectedUnitChanged.AddUniqueDynamic(this,&UReditusBattleHUDPresenterComponent::HandleSelection);
     HUD->OnInputDeviceChanged.AddUniqueDynamic(this,&UReditusBattleHUDPresenterComponent::HandleDevice);
     HUD->OnMenuEntryChosen.AddUniqueDynamic(this,&UReditusBattleHUDPresenterComponent::HandleNativeMenuChosen);
@@ -744,6 +806,7 @@ UReditusBattleHUDWidget* UReditusBattleHUDPresenterComponent::CreateBattleHUD(AP
 
 void UReditusBattleHUDPresenterComponent::DestroyBattleHUD()
 {
+    SynchronizeCommandSelectionEffects(nullptr);
     RestoreCombatInputProfile();
     ClearATBListTargeting();
     ClearEnemyMenuSlowdown();
@@ -1135,6 +1198,7 @@ bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FNa
     const FHUDTableRow Row(Command==EReditusHUDCommand::Items ? ItemDescriptions : SkillDescriptions,ID);
     if (!CanUseATBListEntry(Unit,Command,Row)) return false;
     const auto Targets=ListTargets(GetOwner(),Unit,Command,Row,DisplaySlots,Player);
+    AActor* PreviousTarget=Cast<AActor>(ObjectValue(Unit,TEXT("currentTarget")));
     if (!IsValid(Targets.Initial) || !SetObjectValue(Unit,TEXT("currentTarget"),Targets.Initial) ||
         !SetSelectionValue(Unit,1))
     {
@@ -1143,6 +1207,9 @@ bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FNa
     }
 
     ClearATBListTargeting();
+    // A legacy menu can have shown an icon before this draft existed. Its
+    // target is not in DraftIcons, so explicitly clear it before showing self.
+    if (!Targets.Mode.IsNone() && PreviousTarget!=Targets.Initial) SetTargetIcon(PreviousTarget,false);
     bDraftActive=true;
     bDraftGroup=Targets.bGroup;
     bExplicitTarget=false;
@@ -1159,12 +1226,69 @@ bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FNa
         DraftIcons.Emplace(IconTarget);
         SetTargetIcon(IconTarget,true);
     }
+    if (bLogCommandRouting && !Targets.Mode.IsNone())
+        UE_LOG(LogReditusBattleHUD,Log,TEXT("Player target opened: action=%s caster=%s initial=%s eligible=%d"),
+            *ID.ToString(),*GetNameSafe(Unit),*GetNameSafe(Targets.Initial),Targets.Units.Num());
     ClearNativeMenu();
     HUD->CloseListMenu();
     RefreshBattleHUD();
     return true;
 #else
     return false;
+#endif
+}
+
+void UReditusBattleHUDPresenterComponent::AdoptLegacyAllyTargeting(AActor* Unit)
+{
+#if REDITUS_HUD_HAS_ATB
+    const auto* ATB=RunningATB(GetOwner());
+    if (bDraftActive || !bRouteLegacyCommands || !IsValid(HUD) || HUD->IsMenuOpen() || !ATB ||
+        !IsValid(Unit) || CommandOwner(GetOwner())!=Unit || !ATB->CanIssueCommands(Unit) ||
+        Boolean(Unit,TEXT("isInputBlocked")) || Number(Unit,TEXT("SelectType"),-1.0)!=1.0) return;
+    // E_ActionType values verified in the Blueprint export. Attack, Hack and
+    // party switching retain their own paths.
+    const int32 Type=static_cast<int32>(Number(Unit,TEXT("actionType"),-1.0));
+    if (Type!=2 && Type!=3 && Type!=8) return;
+    const bool Item=Type==3;
+    const EReditusHUDCommand Command=Item ? EReditusHUDCommand::Items :
+        Type==8 ? EReditusHUDCommand::Overdrive : EReditusHUDCommand::Tech;
+    UDataTable*& Table=Item ? ItemDescriptions : SkillDescriptions;
+    if (!IsValid(Table))
+        Table=LoadObject<UDataTable>(nullptr,Item ?
+            TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_UsableItems.DT_UsableItems") :
+            TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Skills.DT_Skills"));
+    if (!IsValid(Table)) return;
+    FName ID=NameValue(Unit,Item ? TEXT("CurrentUsableItem") : TEXT("currentSkill"));
+    if (Item && ID.IsNone())
+    {
+        // The legacy item field is a class, not a row ID. Adopt only a unique
+        // exact match, so confirmation cannot consume a different inventory row.
+        UClass* Legacy=Cast<UClass>(ObjectValue(Unit,TEXT("CurrentUsableItem")));
+        if (!Legacy) return;
+        for (FName Candidate:Table->GetRowNames())
+            if (FHUDTableRow(Table,Candidate).Class(TEXT("UsableItemLegacyLaunch"))==Legacy)
+            {
+                if (!ID.IsNone()) return;
+                ID=Candidate;
+            }
+    }
+    if (ID.IsNone()) return;
+    const FHUDTableRow Row(Table,ID);
+    if (!Row.Data) return;
+    const auto Targets=ListTargets(GetOwner(),Unit,Command,Row,DisplaySlots,Player);
+    if (Targets.Mode!=TEXT("SingleLivingAlly") && Targets.Mode!=TEXT("SingleDeadAlly") &&
+        Targets.Mode!=TEXT("AllLivingAllies")) return;
+    if (!Item)
+    {
+        if (!IsValid(PartyMemberSkillDefinitions))
+            PartyMemberSkillDefinitions=LoadObject<UDataTable>(nullptr,TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_PartyMembers.DT_PartyMembers"));
+        if (!IsValid(EquipmentSkillDefinitions))
+            EquipmentSkillDefinitions=LoadObject<UDataTable>(nullptr,TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Equipment.DT_Equipment"));
+    }
+    // Reuse the existing caster-first draft and queue submission. Its input is
+    // consumed once; do not also invoke ChangePlayerTarget's array-index math.
+    if (BeginATBListTargeting(Unit,ID,Command) && bLogCommandRouting)
+        UE_LOG(LogReditusBattleHUD,Log,TEXT("Adopted legacy defensive target selection: %s on %s"),*ID.ToString(),*GetNameSafe(Unit));
 #endif
 }
 
@@ -1208,8 +1332,11 @@ bool UReditusBattleHUDPresenterComponent::RouteATBListTargetInput(FName ActionNa
     const int32 OldIndex=Targets.Units.IndexOfByKey(Target);
     if (!Targets.bGroup && (!bConfirm || OldIndex==INDEX_NONE))
     {
+        // Allies are sorted from screen-left to screen-right. Do not invert
+        // the already-correct joystick/key direction a second time.
+        const int32 Step=bBackward ? -1 : 1;
         const int32 Next=OldIndex==INDEX_NONE ? Targets.Units.IndexOfByKey(Targets.Initial) :
-            (OldIndex+Targets.Units.Num()+(bBackward ? -1 : 1)) % Targets.Units.Num();
+            (OldIndex+Targets.Units.Num()+Step) % Targets.Units.Num();
         AActor* NewTarget=Targets.Units[Next];
         if (DraftIcons.Num()!=1 || DraftIcons[0].Get()!=NewTarget)
         {
@@ -1220,6 +1347,9 @@ bool UReditusBattleHUDPresenterComponent::RouteATBListTargetInput(FName ActionNa
         }
         DraftTarget=NewTarget;
         SetObjectValue(Unit,TEXT("currentTarget"),NewTarget);
+        if (bLogCommandRouting && !Targets.Mode.IsNone())
+            UE_LOG(LogReditusBattleHUD,Log,TEXT("Player target moved: input=%s caster=%s previous=%s next=%s eligible=%d"),
+                *ActionName.ToString(),*GetNameSafe(Unit),*GetNameSafe(Target),*GetNameSafe(NewTarget),Targets.Units.Num());
         return true;
     }
     if (!bConfirm) return true;
@@ -1643,8 +1773,9 @@ FReditusBattleHUDUnit UReditusBattleHUDPresenterComponent::ReadUnit(AActor* Unit
         Data.bStaggered=ATB->IsUnitStaggered(Unit);
         Data.bCanAct=Data.HP>0.f && !Data.bStaggered && !Boolean(Unit,TEXT("isStun")) &&
             !Boolean(Unit,TEXT("IsSleeping")) && State.Phase!=EReditusATBPhase::Inactive;
-        Data.bReadyForCommands=Data.bCanAct && State.Phase==EReditusATBPhase::Ready &&
-            Unit==CurrentActor && bCommandWindow;
+        // Eligibility is independent of command ownership. The selected owner
+        // and command surface still gate dispatch; other Ready allies can switch in.
+        Data.bReadyForCommands=Data.bCanAct && ATB->CanIssueCommands(Unit);
         Data.bQueued=Data.bCanAct && (State.Phase==EReditusATBPhase::Preparing || State.Phase==EReditusATBPhase::Queued);
         return Data;
     }
@@ -1914,6 +2045,13 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
     }
 #endif
     const bool IsPartyActor=PartyUnits.Contains(CurrentActor);
+#if REDITUS_HUD_HAS_ATB
+    if (bUsingATB)
+    {
+        if (IsPartyActor) AdoptLegacyAllyTargeting(CurrentActor);
+        SynchronizeCommandSelectionEffects(IsPartyActor ? CurrentActor : nullptr);
+    }
+#endif
     const bool OwnsLegacyCommand=bUsingATB || !Property(Controller,TEXT("CurrentCommandUnit")) || ObjectValue(Controller,TEXT("CurrentCommandUnit"))==CurrentActor;
     const int32 LegacySelection=static_cast<int32>(Number(CurrentActor,TEXT("SelectType"),-1.0));
     const int32 BattleMode=static_cast<int32>(Number(Controller,TEXT("BattleInputMode"),-1.0));
@@ -1959,6 +2097,13 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
     HUD->SetTargetSelectionActive(TargetWindow);
     UpdateDisplaySlots(Battle,CurrentActor,CommandWindow);
     HUD->SetPartySnapshot(DisplaySlots);
+    TArray<AActor*> ReadyOrder;
+#if REDITUS_HUD_HAS_ATB
+    if (const auto* ATB=RunningATB(Controller))
+        for (const FReditusATBUnitView& State : ATB->GetUnitStates())
+            if (PartyUnits.Contains(State.Unit) && ATB->CanIssueCommands(State.Unit)) ReadyOrder.Add(State.Unit);
+#endif
+    HUD->SetReadyUnitOrder(ReadyOrder);
     if (bUsingATB || bFollowLegacyTurnSelection)
         ReditusHUDPolicy::FollowChangedTurn(TWeakObjectPtr<AActor>(CurrentActor),PreviousLegacyUnit,IsPartyActor,
             [this](TWeakObjectPtr<AActor> Candidate) { return HUD->SelectReadyUnit(Candidate.Get()); });
@@ -2196,6 +2341,7 @@ bool UReditusBattleHUDPresenterComponent::ForwardGameplayInput(FName ActionName,
                 bForwarded ? TEXT("forwarded") : Attacker ? TEXT("no bound input action") : TEXT("no open attack window"));
         return bForwarded;
     }
+    AdoptLegacyAllyTargeting(CommandOwner(GetOwner()));
     if (RouteATBListTargetInput(ActionName))
     {
         RefreshBattleHUD();
@@ -2236,7 +2382,61 @@ bool UReditusBattleHUDPresenterComponent::ForwardGameplayInput(FName ActionName,
     return Routed;
 }
 
-void UReditusBattleHUDPresenterComponent::HandleSelection(AActor* Unit) { OnSelectedUnitChanged.Broadcast(Unit); }
+bool UReditusBattleHUDPresenterComponent::SelectCommandUnit(AActor* Unit)
+{
+#if REDITUS_HUD_HAS_ATB
+    AActor* Controller=GetOwner();
+    if (auto* ATB=RunningATB(Controller))
+    {
+        AActor* Previous=CommandOwner(Controller);
+        if (Unit==Previous && IsValid(Unit)) return true; // Following an existing BP handoff.
+        if (!IsValid(HUD) || !IsValid(Player) || bRouting || bRefreshing || Boolean(Controller,TEXT("isBattleOver")) ||
+            UGameplayStatics::IsGamePaused(this) || HUD->bInputSuspended || !IsValid(Previous) ||
+            !PartyUnits.Contains(Unit) || !ATB->CanIssueCommands(Unit) || HUD->IsMenuOpen() || HUD->IsTargetSelectionActive() ||
+            NativeMenuSource || PendingMenuOwner || bDraftActive || Boolean(Previous,TEXT("isInputBlocked")) ||
+            Number(Previous,TEXT("SelectType"),-1.0)!=3.0) return false;
+        TGuardValue<bool> Guard(bRouting,true);
+        // Only command ownership changes. currentAttackingUnit, saved targets,
+        // preparation, AMP, statuses and cycle tokens belong to their live action.
+        UObject* PreviousCommand=ObjectValue(Controller,TEXT("CurrentCommandUnit"));
+        if (!SetObjectValue(Controller,TEXT("ATBCommandUnit"),Unit)) return false;
+        if ((Property(Controller,TEXT("CurrentCommandUnit")) && !SetObjectValue(Controller,TEXT("CurrentCommandUnit"),Unit)) ||
+            !SetSelectionValue(Unit,3))
+        {
+            SetObjectValue(Controller,TEXT("ATBCommandUnit"),Previous);
+            SetObjectValue(Controller,TEXT("CurrentCommandUnit"),PreviousCommand);
+            return false;
+        }
+        SetBoolValue(Previous,TEXT("isInputBlocked"),true);
+        RestoreATBListCommands(Unit);
+        CallNoArgumentEvent(Unit,TEXT("TargetReset"));
+        Unit->EnableInput(Player);
+        SynchronizeCommandSelectionEffects(CommandOwner(Controller));
+        return CommandOwner(Controller)==Unit && ATB->CanIssueCommands(Unit);
+    }
+#endif
+    return true;
+}
+
+void UReditusBattleHUDPresenterComponent::SynchronizeCommandSelectionEffects(AActor* CommandUnit)
+{
+    TArray<AActor*> Units=PartyUnits;
+    for (const auto& Card:DisplaySlots) if (IsValid(Card.Unit)) Units.AddUnique(Card.Unit);
+    if (IsValid(CommandUnit)) Units.AddUnique(CommandUnit);
+    for (AActor* Unit:Units)
+        if (auto* FX=CommandSelectionEffect(Unit))
+        {
+            const bool Show=IsValid(CommandUnit) && Unit==CommandUnit && Number(Unit,TEXT("currentHP"))>0.0;
+            FX->SetVisibility(Show);
+            FX->SetHiddenInGame(!Show);
+        }
+}
+
+void UReditusBattleHUDPresenterComponent::HandleSelection(AActor* Unit)
+{
+    OnSelectedUnitChanged.Broadcast(Unit);
+    RefreshBattleHUD();
+}
 void UReditusBattleHUDPresenterComponent::HandleDevice(EReditusHUDInputDevice Device)
 {
     if (!bSyncLegacyDeviceFlag || !IsValid(Player)) return;

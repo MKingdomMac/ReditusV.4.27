@@ -536,12 +536,15 @@ bool UReditusATBComponent::GetPendingAction(AActor* Unit,FReditusATBAction& Acti
 TArray<FReditusATBUnitView> UReditusATBComponent::GetUnitStates() const
 {
     TArray<FReditusATBUnitView> Result;
-    for (const ReditusATBCore::Unit& State : Scheduler->Snapshot()) Result.Add(GetUnitState(ResolveActor(State.ID)));
+    // Existing PickNextATBCommandUnit graphs consume this array. Put Ready
+    // units first in arrival order, preserving all other states and party slots.
+    for (const ReditusATBCore::Unit& State : Scheduler->SnapshotInCommandOrder()) Result.Add(GetUnitState(ResolveActor(State.ID)));
     return Result;
 }
 void UReditusATBComponent::RequestAmp(AActor* Unit)
 {
-    if (bRunning && UnitAlive(Unit) && Tuning.AmpGain>0 && !ReadBool(Unit,ExhaustedProperty))
+    // AMP recharges throughout the fight, independently of legacy exhaustion.
+    if (bRunning && UnitAlive(Unit) && Tuning.AmpGain>0)
         OnAmpGainRequested.Broadcast(Unit,Tuning.AmpGain);
 }
 bool UReditusATBComponent::CompleteCycleStart(AActor* Unit,int32 CycleToken,bool bCanAct)

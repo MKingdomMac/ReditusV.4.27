@@ -69,6 +69,9 @@ public:
     /** Gap between the projected sprite and the lower edge of its status badge, in HUD units. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Enemies", meta=(ClampMin="0.0"))
     float EnemyBadgeGap = 9.f;
+    /** Multiplier for the enemy targeting diamond only. 1 is the original size. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Enemies", meta=(ClampMin="0.1",ClampMax="10.0"))
+    float EnemyTargetIconScale = 3.f;
     /** Reuses each legacy row's SelectedImage brush unless explicitly assigned. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Style") FSlateBrush ListSelectionBrush;
     /** Match the live original item/skill text font and size. */
@@ -122,6 +125,8 @@ public:
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetPartySnapshot(const TArray<FReditusBattleHUDUnit>& Units);
     UFUNCTION(BlueprintPure, Category="Battle HUD") TArray<FReditusBattleHUDUnit> GetPartySnapshot() const { return Party; }
     UFUNCTION(BlueprintCallable, Category="Battle HUD") bool SelectReadyUnit(AActor* Unit);
+    /** Runtime ready queue, independent of the fixed party-card arrangement. */
+    void SetReadyUnitOrder(const TArray<AActor*>& Units);
     UFUNCTION(BlueprintPure, Category="Battle HUD") AActor* GetSelectedUnit() const;
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetCommandsEnabled(bool bEnabled);
     /** Routes a shared Back/Block key to the existing Block reaction action. */
@@ -160,6 +165,7 @@ public:
 
     FReditusHUDCommandRouter CommandRouter;
     FReditusHUDGameplayInputRouter GameplayInputRouter;
+    FReditusHUDSelectionRouter SelectionRouter;
     void HandleButton(EReditusHUDCommand Command, int32 Index);
     void HandleHover(EReditusHUDCommand Command, int32 Index);
     void ObserveKey(const FKey& Key);
@@ -233,6 +239,7 @@ private:
     };
 
     UPROPERTY(Transient) TArray<FReditusBattleHUDUnit> Party;
+    TArray<TWeakObjectPtr<AActor>> ReadyUnitOrder;
     UPROPERTY(Transient) TArray<FReditusBattleHUDMenuEntry> MenuEntries;
     UPROPERTY(Transient) UUserWidget* HostedMenu = nullptr;
     UPROPERTY(Transient) AActor* MenuOwner = nullptr;

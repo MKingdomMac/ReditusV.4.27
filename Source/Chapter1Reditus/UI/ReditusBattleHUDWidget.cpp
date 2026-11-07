@@ -749,14 +749,23 @@ void UReditusBattleHUDWidget::SetPartySnapshot(const TArray<FReditusBattleHUDUni
 bool UReditusBattleHUDWidget::SelectReadyUnit(AActor* Unit)
 {
     const int32 Index = Party.IndexOfByPredicate([Unit](const FReditusBattleHUDUnit& Data) {
-        return Data.Unit == Unit && IsValid(Unit) && Data.HP>0.f && Data.bCanAct && Data.bReadyForCommands;
+        return Data.Unit == Unit && IsValid(Unit) && Data.HP>0.f && Data.bCanAct && Data.bReadyForCommands && !Data.bQueued;
     });
-    if (Index == INDEX_NONE || IsMenuOpen()) return false;
+    if (Index == INDEX_NONE || IsMenuOpen() || bTargetSelectionActive) return false;
+    // A rejected handoff must not move the portrait highlight away from the
+    // actor that actually owns commands (for example, after a stagger hit).
+    if (SelectionRouter.IsBound() && !SelectionRouter.Execute(Unit)) return false;
     AActor* Previous = GetSelectedUnit();
     SelectedIndex = Index;
     Refresh();
     if (Previous != Unit) OnSelectedUnitChanged.Broadcast(Unit);
     return true;
+}
+
+void UReditusBattleHUDWidget::SetReadyUnitOrder(const TArray<AActor*>& Units)
+{
+    ReadyUnitOrder.Reset();
+    for (AActor* Unit : Units) if (IsValid(Unit)) ReadyUnitOrder.AddUnique(TWeakObjectPtr<AActor>(Unit));
 }
 
 void UReditusBattleHUDWidget::SetCommandsEnabled(bool bEnabled)
@@ -826,6 +835,7 @@ void UReditusBattleHUDWidget::SetEnemyStatusViews(const TArray<FReditusEnemyHUDV
 {
     EnemyStatusViews=Views;
     if (!EnemyBadgeCanvas) return;
+    const float TargetIconSize=23.f*(FMath::IsFinite(EnemyTargetIconScale) ? FMath::Clamp(EnemyTargetIconScale,.1f,10.f) : 3.f);
     for (auto It=EnemyBadges.CreateIterator(); It; ++It)
         if (!It.Key().IsValid() || !Views.ContainsByPredicate([&It](const FReditusEnemyHUDView& View){return View.Unit==It.Key().Get();}))
         {
@@ -840,7 +850,7 @@ void UReditusBattleHUDWidget::SetEnemyStatusViews(const TArray<FReditusEnemyHUDV
         {
             Badge.Stack=WidgetTree->ConstructWidget<UVerticalBox>();
             Badge.Stack->SetVisibility(ESlateVisibility::Collapsed);
-            Badge.Diamond=MakeEnemyGlyph(19,23.f);
+            Badge.Diamond=MakeEnemyGlyph(19,TargetIconSize);
             Badge.Stack->AddChildToVerticalBox(Badge.Diamond)->SetHorizontalAlignment(HAlign_Center);
             Badge.Strip=WidgetTree->ConstructWidget<UHorizontalBox>();
             Badge.Frame=MakeFrame(Badge.Strip,FMargin(6.f,3.f));
@@ -855,6 +865,13 @@ void UReditusBattleHUDWidget::SetEnemyStatusViews(const TArray<FReditusEnemyHUDV
         }
         const bool bSelected=View.bTargeted;
         const bool bHasStrip=View.MaxStamina>0 || View.Effects.Num()>0;
+        const FVector2D TargetIconDimensions(TargetIconSize,TargetIconSize);
+        if (Badge.Diamond->Brush.ImageSize!=TargetIconDimensions)
+        {
+            FSlateBrush TargetBrush=Badge.Diamond->Brush;
+            TargetBrush.ImageSize=TargetIconDimensions;
+            Badge.Diamond->SetBrush(TargetBrush);
+        }
         Badge.Diamond->SetVisibility(bSelected ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
         Badge.Frame->SetVisibility(bHasStrip ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
         Badge.Notch->SetVisibility(bHasStrip ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
@@ -1258,6 +1275,20 @@ void UReditusBattleHUDWidget::MoveCommandSelection(int32 Horizontal,int32 Vertic
 
 bool UReditusBattleHUDWidget::CycleReadyAlly()
 {
+    if (!CanExecuteCommand(EReditusHUDCommand::ReadyAlly)) return false;
+    if (ReadyUnitOrder.Num()>0)
+    {
+        const int32 Current=ReadyUnitOrder.IndexOfByPredicate([this](const TWeakObjectPtr<AActor>& Entry)
+        { return Entry.Get()==GetSelectedUnit(); });
+        for (int32 Step=1; Step<=ReadyUnitOrder.Num(); ++Step)
+        {
+            const int32 Index=ReditusHUDInputPolicy::Wrap(Current+Step,ReadyUnitOrder.Num());
+            AActor* Candidate=ReadyUnitOrder[Index].Get();
+            if (Candidate!=GetSelectedUnit() && SelectReadyUnit(Candidate)) return true;
+        }
+        return false;
+    }
+    // Explicit snapshots without an ATB component retain their supplied order.
     for (int32 Step=1; Step<=Party.Num(); ++Step)
     {
         const int32 Index=ReditusHUDInputPolicy::Wrap(SelectedIndex+Step,Party.Num());
