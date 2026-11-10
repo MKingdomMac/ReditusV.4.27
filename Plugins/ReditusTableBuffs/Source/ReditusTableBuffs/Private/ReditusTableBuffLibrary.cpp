@@ -837,6 +837,125 @@ int32 UReditusTableBuffLibrary::ApplyBuffByIDToTargets(AActor* Caster, const TAr
     return ApplyToRecipients(Caster, EligibleTargets, BuffTable, BuffID, false);
 }
 
+void UReditusTableBuffLibrary::SetTableSkillID(AActor* Skill, FName SkillID)
+{
+    if (IsValid(Skill) && !SkillID.IsNone())
+        if (const auto* Field = FindFProperty<FNameProperty>(Skill->GetClass(), TEXT("SkillID")))
+            Field->SetPropertyValue_InContainer(Skill, SkillID);
+}
+
+const FProperty* UReditusTableBuffLibrary::FindSkillBuffRowsField(const UScriptStruct* Struct)
+{
+    if (!Struct) return nullptr;
+    const FProperty* Result = nullptr;
+    for (TFieldIterator<FProperty> It(Struct); It; ++It)
+    {
+        // User-defined structs can sanitize punctuation and append a field ID and GUID.
+        FString Name;
+        for (TCHAR Character : It->GetName())
+            if (FChar::IsAlnum(Character)) Name.AppendChar(Character);
+        const auto Matches = [&Name](const TCHAR* Stem)
+        {
+            const int32 Length = FCString::Strlen(Stem);
+            return Name.StartsWith(Stem, ESearchCase::IgnoreCase) &&
+                (Name.Len() == Length || FChar::IsDigit(Name[Length]));
+        };
+        if (!Matches(TEXT("BuffDebuff")) && !Matches(TEXT("BuffRows"))) continue;
+        const auto* Array = CastField<FArrayProperty>(*It);
+        const auto* Handle = CastField<FStructProperty>(Array ? Array->Inner : *It);
+        if (!Handle || Handle->Struct != FDataTableRowHandle::StaticStruct() || Result) return nullptr;
+        Result = *It;
+    }
+    return Result;
+}
+
+bool UReditusTableBuffLibrary::ApplySkillBuffRows(AActor* Skill, UDataTable* SkillTable, AActor* EligibleTarget)
+{
+    if (!IsValid(Skill) || !IsValid(SkillTable) || !SkillTable->GetRowStruct()) return false;
+    const auto* IDField = FindFProperty<FNameProperty>(Skill->GetClass(), TEXT("SkillID"));
+    if (!IDField) return false;
+    const FName ID = IDField->GetPropertyValue_InContainer(Skill);
+    if (ID.IsNone()) return false;
+    const uint8* Row = SkillTable->GetRowMap().FindRef(ID);
+    const auto* Field = FindSkillBuffRowsField(SkillTable->GetRowStruct());
+    if (!Row || !Field) return false;
+
+    const auto* Battle = Cast<AActor>(ReadObject(Skill, TEXT("battleController")));
+    auto* Caster = Cast<AActor>(ReadObject(Battle, TEXT("currentAttackingUnit")));
+    TArray<FDataTableRowHandle> Handles;
+    if (const auto* Array = CastField<FArrayProperty>(Field))
+    {
+        FScriptArrayHelper Rows(Array, Field->ContainerPtrToValuePtr<void>(Row));
+        for (int32 Index = 0; Index < Rows.Num(); ++Index)
+            Handles.Add(*reinterpret_cast<const FDataTableRowHandle*>(Rows.GetRawPtr(Index)));
+    }
+    else
+    {
+        Handles.Add(*Field->ContainerPtrToValuePtr<FDataTableRowHandle>(Row));
+    }
+    bool bConfigured = false;
+    TArray<FDataTableRowHandle> Seen;
+    for (const auto& Handle : Handles)
+    {
+        if (!Handle.DataTable && Handle.RowName.IsNone()) continue;
+        bConfigured = true;
+        if (Seen.ContainsByPredicate([&](const FDataTableRowHandle& Other)
+            { return Other.DataTable == Handle.DataTable && Other.RowName == Handle.RowName; })) continue;
+        Seen.Add(Handle);
+        if (!IsValid(Handle.DataTable) || Handle.DataTable->GetRowStruct() != FReditusTableBuffRow::StaticStruct() ||
+            Handle.RowName.IsNone() || !Handle.DataTable->GetRowMap().Contains(Handle.RowName))
+        {
+            UE_LOG(LogReditusTableBuffs, Warning, TEXT("Skill '%s' has an invalid Buff/Debuff entry (%s)."),
+                *ID.ToString(), *Handle.RowName.ToString());
+            continue;
+        }
+        ApplyToRecipients(Caster, {EligibleTarget}, const_cast<UDataTable*>(Handle.DataTable), Handle.RowName, false);
+    }
+    return bConfigured;
+}
+
+namespace
+{
+    int32 FindAggroFocus(AActor* BattleController, AActor*& OutTarget)
+    {
+        // Use the same array and preserve its exact indices, including any empty slots.
+        OutTarget = nullptr;
+        UObject* Battle = ReadObject(BattleController, TEXT("currentBattle"));
+        const auto* Property = IsValid(Battle) ? FindFProperty<FArrayProperty>(Battle->GetClass(), TEXT("playerUnits")) : nullptr;
+        const auto* Item = Property ? CastField<FObjectPropertyBase>(Property->Inner) : nullptr;
+        if (!Item) return INDEX_NONE;
+        FScriptArrayHelper Players(Property, Property->ContainerPtrToValuePtr<void>(Battle));
+        int32 BestIndex = INDEX_NONE;
+        uint64 BestOrder = 0;
+        for (int32 Index = 0; Index < Players.Num(); ++Index)
+        {
+            auto* Unit = Cast<AActor>(Item->GetObjectPropertyValue(Players.GetRawPtr(Index)));
+            if (!AliveInBattle(Unit, BattleController) || ReadBool(Unit, TEXT("Swallowed"))) continue;
+            TInlineComponentArray<UReditusTableBuffState*> States;
+            Unit->GetComponents(States);
+            for (const auto* State : States)
+            {
+                if (!IsValid(State)) continue;
+                const uint64 Order = State->GetAggroFocusOrder(BattleController);
+                if (Order > BestOrder)
+                {
+                    BestOrder = Order;
+                    BestIndex = Index;
+                    OutTarget = Unit;
+                }
+            }
+        }
+        return BestIndex;
+    }
+}
+
+AActor* UReditusTableBuffLibrary::GetAggroFocusTarget(AActor* BattleController)
+{
+    AActor* Target = nullptr;
+    FindAggroFocus(BattleController, Target);
+    return Target;
+}
+
 int32 UReditusTableBuffLibrary::ResolveAggroFocusIndex(AActor* BattleController, AActor* Selector, int32 LegacyIndex)
 {
     if (!IsValid(BattleController) || !IsValid(Selector)) return LegacyIndex;
@@ -849,32 +968,9 @@ int32 UReditusTableBuffLibrary::ResolveAggroFocusIndex(AActor* BattleController,
     if (!AliveInBattle(Attacker, BattleController) ||
         !MatchesCatalogueSide(Attacker, Enemy)) return LegacyIndex;
 
-    // Use the same array and preserve its exact indices, including any empty slots.
-    UObject* Battle = ReadObject(BattleController, TEXT("currentBattle"));
-    const auto* Property = IsValid(Battle) ? FindFProperty<FArrayProperty>(Battle->GetClass(), TEXT("playerUnits")) : nullptr;
-    const auto* Item = Property ? CastField<FObjectPropertyBase>(Property->Inner) : nullptr;
-    if (!Item) return LegacyIndex;
-    FScriptArrayHelper Players(Property, Property->ContainerPtrToValuePtr<void>(Battle));
-    int32 BestIndex = LegacyIndex;
-    uint64 BestOrder = 0;
-    for (int32 Index = 0; Index < Players.Num(); ++Index)
-    {
-        auto* Unit = Cast<AActor>(Item->GetObjectPropertyValue(Players.GetRawPtr(Index)));
-        if (!AliveInBattle(Unit, BattleController) || ReadBool(Unit, TEXT("Swallowed"))) continue;
-        TInlineComponentArray<UReditusTableBuffState*> States;
-        Unit->GetComponents(States);
-        for (const auto* State : States)
-        {
-            if (!IsValid(State)) continue;
-            const uint64 Order = State->GetAggroFocusOrder(BattleController);
-            if (Order > BestOrder)
-            {
-                BestOrder = Order;
-                BestIndex = Index;
-            }
-        }
-    }
-    return BestIndex;
+    AActor* Target = nullptr;
+    const int32 FocusIndex = FindAggroFocus(BattleController, Target);
+    return FocusIndex == INDEX_NONE ? LegacyIndex : FocusIndex;
 }
 
 int32 UReditusTableBuffLibrary::GetBuffedDefense(AActor* Target, int32 BaseDefense)

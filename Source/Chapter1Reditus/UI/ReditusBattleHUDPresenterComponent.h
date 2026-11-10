@@ -109,6 +109,12 @@ private:
     UPROPERTY(Transient) UDataTable* EquipmentSkillDefinitions = nullptr;
     UPROPERTY(Transient) TMap<int32,UTexture2D*> ActionElementTextures;
     TMap<TWeakObjectPtr<USceneComponent>,bool> HiddenLegacyEnemyComponents;
+    struct FAggroIndicatorVisibility
+    {
+        bool bVisible;
+        bool bHiddenInGame;
+    };
+    TMap<TWeakObjectPtr<USceneComponent>,FAggroIndicatorVisibility> OwnedAggroIndicators;
     TWeakObjectPtr<AActor> ExplicitEnemyTarget;
     UPROPERTY(Transient) TArray<UWidget*> SuppressedMenuWidgets;
     UPROPERTY(Transient) TArray<ESlateVisibility> SuppressedMenuVisibility;
@@ -184,6 +190,8 @@ private:
     bool ShowExecutingEnemyAction(UObject* Battle);
     void UpdateEnemyBadges(UObject* Battle,AActor* Target,bool bGroup);
     void RestoreLegacyEnemyComponents();
+    void UpdateAggroIndicator(UObject* Battle);
+    void ReleaseAggroIndicators();
     void TrackLegacyEncounter(AActor* Encounter);
     void FinishConfirmedDefeat();
     void FinishConfirmedFlee();

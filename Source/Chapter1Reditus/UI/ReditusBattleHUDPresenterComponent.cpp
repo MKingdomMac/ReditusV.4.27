@@ -25,6 +25,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "PaperSprite.h"
+#include "UObject/StructOnScope.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -136,6 +137,23 @@ namespace
             if (AActor* Actor=Cast<AActor>(Inner->GetObjectPropertyValue(Helper.GetRawPtr(I))))
                 if (IsValid(Actor)) Result.AddUnique(Actor);
         return Result;
+    }
+
+    AActor* ReadAggroFocusTarget(AActor* Controller)
+    {
+        // Keep the HUD compatible with builds that do not link the buff plugin.
+        UClass* Library=FindObject<UClass>(nullptr,TEXT("/Script/ReditusTableBuffs.ReditusTableBuffLibrary"));
+        UFunction* Function=Library ? Library->FindFunctionByName(TEXT("GetAggroFocusTarget")) : nullptr;
+        if (!IsValid(Controller) || !Function || Function->NumParms!=2 || !Function->HasAnyFunctionFlags(FUNC_Static)) return nullptr;
+        const auto* Input=FindFProperty<FObjectPropertyBase>(Function,TEXT("BattleController"));
+        const auto* Result=CastField<FObjectPropertyBase>(Function->GetReturnProperty());
+        if (!Input || !Result || Input->PropertyClass!=AActor::StaticClass() || Result->PropertyClass!=AActor::StaticClass() ||
+            !Input->HasAnyPropertyFlags(CPF_Parm) || Input->HasAnyPropertyFlags(CPF_OutParm|CPF_ReturnParm)) return nullptr;
+        FStructOnScope Params(Function);
+        auto* Memory=Params.GetStructMemory();
+        Input->SetObjectPropertyValue_InContainer(Memory,Controller);
+        Library->GetDefaultObject()->ProcessEvent(Function,Memory);
+        return Cast<AActor>(Result->GetObjectPropertyValue_InContainer(Memory));
     }
 
     void ReadEnemyEffects(AActor* Unit,TArray<FReditusEnemyHUDEffect>& Effects)
@@ -812,6 +830,7 @@ void UReditusBattleHUDPresenterComponent::DestroyBattleHUD()
     ClearEnemyMenuSlowdown();
     OpenLegacyMenuWindows.Reset();
     RestoreLegacyEnemyComponents();
+    ReleaseAggroIndicators();
     ExplicitEnemyTarget.Reset();
     bShowingEnemyATBAnnouncement=false;
     ClearNativeMenu();
@@ -1856,6 +1875,74 @@ void UReditusBattleHUDPresenterComponent::UpdateDisplaySlots(UObject* Battle,AAc
     }
 }
 
+void UReditusBattleHUDPresenterComponent::ReleaseAggroIndicators()
+{
+    for (const auto& Entry:OwnedAggroIndicators)
+        if (USceneComponent* Component=Entry.Key.Get())
+        {
+            Component->SetHiddenInGame(Entry.Value.bHiddenInGame);
+            Component->SetVisibility(Entry.Value.bVisible);
+        }
+    OwnedAggroIndicators.Reset();
+}
+
+void UReditusBattleHUDPresenterComponent::UpdateAggroIndicator(UObject* Battle)
+{
+    if (!IsValid(Battle))
+    {
+        ReleaseAggroIndicators();
+        return;
+    }
+
+    const TArray<AActor*> ActiveParty=Actors(Battle,TEXT("playerUnits"));
+    AActor* Leader=ReadAggroFocusTarget(GetOwner());
+    if (!IsValid(Leader) || !ActiveParty.Contains(Leader))
+    {
+        // Keep the original >80% threshold for the overhead marker.
+        Leader=nullptr;
+        double Highest=0.0;
+        const double PartyAggro=Number(GetOwner(),TEXT("Player Party Aggro"));
+        if (PartyAggro>0.0)
+            for (AActor* Unit:ActiveParty)
+            {
+                if (Number(Unit,TEXT("currentHP"))<=0.0 || Boolean(Unit,TEXT("IsDead?")) || Boolean(Unit,TEXT("Swallowed"))) continue;
+                const double Aggro=Number(Unit,TEXT("Unit Aggro"));
+                if (Aggro>Highest && Aggro/PartyAggro>0.8)
+                {
+                    Highest=Aggro;
+                    Leader=Unit;
+                }
+            }
+    }
+
+    for (auto It=OwnedAggroIndicators.CreateIterator(); It; ++It)
+    {
+        USceneComponent* Component=It.Key().Get();
+        if (Component && ActiveParty.Contains(Component->GetOwner()) &&
+            ObjectValue(Component->GetOwner(),TEXT("AggroIndicator"))==Component) continue;
+        if (Component)
+        {
+            Component->SetHiddenInGame(It.Value().bHiddenInGame);
+            Component->SetVisibility(It.Value().bVisible);
+        }
+        It.RemoveCurrent();
+    }
+    for (AActor* Unit:ActiveParty)
+    {
+        auto* Indicator=Cast<USceneComponent>(ObjectValue(Unit,TEXT("AggroIndicator")));
+        if (!IsValid(Indicator)) continue;
+        const TWeakObjectPtr<USceneComponent> Key(Indicator);
+        const bool bVisible=Boolean(Indicator,TEXT("bVisible"),true);
+        const bool bHidden=Boolean(Indicator,TEXT("bHiddenInGame"));
+        if (!OwnedAggroIndicators.Contains(Key))
+            OwnedAggroIndicators.Add(Key,FAggroIndicatorVisibility{bVisible,bHidden});
+
+        const bool bShow=Unit==Leader;
+        if (bHidden==bShow) Indicator->SetHiddenInGame(!bShow);
+        if (bShow && !bVisible) Indicator->SetVisibility(true);
+    }
+}
+
 void UReditusBattleHUDPresenterComponent::RestoreLegacyEnemyComponents()
 {
     for (const auto& Entry:HiddenLegacyEnemyComponents)
@@ -1985,6 +2072,7 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
     AActor* Controller=GetOwner();
     if (Boolean(Controller,TEXT("isBattleOver")))
     {
+        ReleaseAggroIndicators();
         // Leave the legacy backing UI alive until Blueprint exit logic returns.
         if (!bTrackingEncounter) DestroyBattleHUD();
         return;
@@ -2096,6 +2184,7 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
     if (HUD->IsTargetSelectionActive() && !TargetWindow) { bExplicitTarget=false; ExplicitEnemyTarget.Reset(); }
     HUD->SetTargetSelectionActive(TargetWindow);
     UpdateDisplaySlots(Battle,CurrentActor,CommandWindow);
+    UpdateAggroIndicator(Battle);
     HUD->SetPartySnapshot(DisplaySlots);
     TArray<AActor*> ReadyOrder;
 #if REDITUS_HUD_HAS_ATB

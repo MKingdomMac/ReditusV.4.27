@@ -8,6 +8,7 @@
 #include "ReditusTableBuffLibrary.generated.h"
 
 class AActor;
+class FProperty;
 class UActorComponent;
 class UParticleSystem;
 class USoundBase;
@@ -209,9 +210,23 @@ public:
     UFUNCTION(BlueprintCallable, Category="Reditus|Table Buffs", meta=(DisplayName="Apply Buff by ID to Targets"))
     static int32 ApplyBuffByIDToTargets(AActor* Caster, const TArray<AActor*>& EligibleTargets, UDataTable* BuffTable, FName BuffID);
 
+    /** Store the row ID from the player skill selection on the spawned skill actor. */
+    UFUNCTION(BlueprintCallable, Category="Reditus|Table Buffs")
+    static void SetTableSkillID(AActor* Skill, FName SkillID);
+
+    static const FProperty* FindSkillBuffRowsField(const UScriptStruct* Struct);
+
+    /** Returns true when the skill explicitly uses table buffs, even if application was resisted. */
+    UFUNCTION(BlueprintCallable, Category="Reditus|Table Buffs", meta=(DisplayName="Apply Skill Buff Rows"))
+    static bool ApplySkillBuffRows(AActor* Skill, UDataTable* SkillTable, AActor* EligibleTarget);
+
     /** Insert on the player index in enemy aggro selectors. Falls back to the old index. */
     UFUNCTION(BlueprintPure, Category="Reditus|Table Buffs")
     static int32 ResolveAggroFocusIndex(AActor* BattleController, AActor* Selector, int32 LegacyIndex);
+
+    /** The active Aggro Focus recipient used by normal enemy aggro selection, or None. */
+    UFUNCTION(BlueprintPure, Category="Reditus|Table Buffs")
+    static AActor* GetAggroFocusTarget(AActor* BattleController);
 
     /** Read the live base value; the table buff never writes the unit's defense. */
     UFUNCTION(BlueprintPure, Category="Reditus|Table Buffs")

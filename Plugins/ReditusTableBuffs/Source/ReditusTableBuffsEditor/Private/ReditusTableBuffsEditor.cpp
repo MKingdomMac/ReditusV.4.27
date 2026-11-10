@@ -14,15 +14,22 @@
 #include "GameFramework/Actor.h"
 #include "HAL/IConsoleManager.h"
 #include "IAssetTools.h"
+#include "K2Node_BreakStruct.h"
 #include "K2Node_CallDelegate.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_ClassDynamicCast.h"
+#include "K2Node_CustomEvent.h"
+#include "K2Node_Event.h"
 #include "K2Node_FunctionResult.h"
 #include "K2Node_GetArrayItem.h"
+#include "K2Node_IfThenElse.h"
 #include "K2Node_Knot.h"
 #include "K2Node_MakeArray.h"
 #include "K2Node_MakeStruct.h"
 #include "K2Node_Self.h"
+#include "K2Node_SpawnActorFromClass.h"
 #include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "KismetCompiler.h"
@@ -608,6 +615,280 @@ namespace
         }
         return Result;
     }
+
+    struct FBuffRowLoop
+    {
+        UEdGraphPin* Body = nullptr;
+        UEdGraphPin* Recipient = nullptr;
+        UEdGraphPin* Legacy = nullptr;
+        bool bInstalled = false;
+    };
+
+    UK2Node_Self* AddSkillSelf(UEdGraph* Graph, int32 X, int32 Y)
+    {
+        auto* Self = NewObject<UK2Node_Self>(Graph, NAME_None, RF_Transactional);
+        Graph->AddNode(Self, false, false);
+        Self->CreateNewGuid();
+        Self->AllocateDefaultPins();
+        Self->NodePosX = X;
+        Self->NodePosY = Y;
+        return Self;
+    }
+
+    bool FindBuffRowLoop(UBlueprint* Tech, UFunction* Apply, FBuffRowLoop& Site)
+    {
+        if (!Tech || !Apply) return false;
+        for (auto* Graph : Tech->UbergraphPages)
+            for (auto* Node : Graph->Nodes)
+                if (auto* Event = Cast<UK2Node_CustomEvent>(Node))
+                    if (Event->CustomFunctionName == TEXT("ApplyBuffs"))
+                    {
+                        if (Site.Body) return false;
+                        auto* Entry = OneLink(Pin(Event, UEdGraphSchema_K2::PN_Then));
+                        auto* Loop = Entry ? Entry->GetOwningNode() : nullptr;
+                        if (!Entry || Entry->PinName != TEXT("Exec") ||
+                            TraceSource(Pin(Loop, TEXT("Array"))) != Pin(Event, TEXT("targetUnits"))) return false;
+                        Site.Body = Pin(Loop, TEXT("LoopBody"));
+                        Site.Recipient = Pin(Loop, TEXT("Array Element"));
+                        Site.Legacy = OneLink(Site.Body);
+                        if (!Site.Recipient || !Site.Legacy) return false;
+                        const auto* Call = Cast<UK2Node_CallFunction>(Site.Legacy->GetOwningNode());
+                        Site.bInstalled = Call && Call->FunctionReference.GetMemberName() == Apply->GetFName();
+                        if (Site.bInstalled && TraceSource(Pin(Site.Legacy->GetOwningNode(), TEXT("EligibleTarget"))) != Site.Recipient)
+                            return false;
+                    }
+        return Site.Body && Site.Recipient && Site.Legacy;
+    }
+
+    bool WireBuffRowLoop(UBlueprint* Tech, UFunction* Apply, UDataTable* Skills, const FBuffRowLoop& Site)
+    {
+        if (Site.bInstalled) return true;
+        auto* Loop = Site.Body->GetOwningNode();
+        auto* Graph = Loop->GetGraph();
+        Tech->Modify();
+        Graph->Modify();
+        Loop->Modify();
+        Site.Legacy->GetOwningNode()->Modify();
+        auto* Call = AddCall(Graph, Apply, Loop->NodePosX + 208, Loop->NodePosY + 120);
+        auto* Self = AddSkillSelf(Graph, Call->NodePosX - 150, Call->NodePosY + 165);
+        auto* Branch = NewObject<UK2Node_IfThenElse>(Graph, NAME_None, RF_Transactional);
+        Graph->AddNode(Branch, false, false);
+        Branch->CreateNewGuid();
+        Branch->AllocateDefaultPins();
+        Branch->NodePosX = Call->NodePosX + 244;
+        Branch->NodePosY = Call->NodePosY;
+        auto* Table = Pin(Call, TEXT("SkillTable"));
+        if (!Table) return false;
+        Table->DefaultObject = Skills;
+        if (!Link(Graph, Pin(Self, UEdGraphSchema_K2::PN_Self), Pin(Call, TEXT("Skill"))) ||
+            !Link(Graph, Site.Recipient, Pin(Call, TEXT("EligibleTarget"))) ||
+            !Link(Graph, Pin(Call, UEdGraphSchema_K2::PN_ReturnValue), Pin(Branch, TEXT("Condition"))) ||
+            !Link(Graph, Pin(Call, UEdGraphSchema_K2::PN_Then), Pin(Branch, UEdGraphSchema_K2::PN_Execute))) return false;
+        Site.Body->BreakLinkTo(Site.Legacy);
+        if (!Link(Graph, Site.Body, Pin(Call, UEdGraphSchema_K2::PN_Execute)) ||
+            !Link(Graph, Pin(Branch, UEdGraphSchema_K2::PN_Else), Site.Legacy)) return false;
+        FBlueprintEditorUtils::MarkBlueprintAsModified(Tech);
+        return true;
+    }
+
+    struct FSkillSpawnID
+    {
+        UEdGraphPin* AfterSpawn;
+        UEdGraphPin* SpawnedSkill;
+        UEdGraphPin* Continue;
+        UEdGraphPin* SelectedID;
+        bool bInstalled;
+    };
+
+    bool FindPlayerSkillSpawns(UBlueprint* Controller, UFunction* Setter, TArray<FSkillSpawnID>& Sites)
+    {
+        if (!Controller || !Setter) return false;
+        for (auto* Graph : Controller->UbergraphPages)
+            for (auto* Node : Graph->Nodes)
+            {
+                auto* Spawn = Cast<UK2Node_SpawnActorFromClass>(Node);
+                if (!Spawn) continue;
+                auto* Before = TraceSource(Pin(Spawn, UEdGraphSchema_K2::PN_Execute));
+                auto* CastNode = Before ? Cast<UK2Node_ClassDynamicCast>(Before->GetOwningNode()) : nullptr;
+                auto* Class = TraceSource(Pin(CastNode, TEXT("Class")));
+                auto* Break = Class ? Cast<UK2Node_BreakStruct>(Class->GetOwningNode()) : nullptr;
+                if (!Break || !Class->PinName.ToString().StartsWith(TEXT("LegacySkill_"))) continue;
+                auto* Definition = TraceSource(Pin(Break, TEXT("S_SkillDefinition")));
+                auto* Lookup = Definition ? Cast<UK2Node_CallFunction>(Definition->GetOwningNode()) : nullptr;
+                if (!Lookup || Lookup->FunctionReference.GetMemberName() != TEXT("GetSkillDefinition")) continue;
+                auto* ID = TraceSource(Pin(Lookup, TEXT("Skill ID")));
+                auto* Event = ID ? Cast<UK2Node_CustomEvent>(ID->GetOwningNode()) : nullptr;
+                if (!Event || Event->CustomFunctionName != TEXT("OnSkillSelectedHandler") ||
+                    ID->PinName != TEXT("selectedSkill") || ID->PinType.PinCategory != UEdGraphSchema_K2::PC_Name) continue;
+                auto* After = Pin(Spawn, UEdGraphSchema_K2::PN_Then);
+                auto* Spawned = Pin(Spawn, UEdGraphSchema_K2::PN_ReturnValue);
+                auto* Next = OneLink(After);
+                if (!Spawned || !Next) return false;
+                auto* Call = Cast<UK2Node_CallFunction>(Next->GetOwningNode());
+                const bool bInstalled = Call && Call->FunctionReference.GetMemberName() == Setter->GetFName();
+                if (bInstalled && (TraceSource(Pin(Call, TEXT("Skill"))) != Spawned ||
+                    TraceSource(Pin(Call, TEXT("SkillID"))) != ID)) return false;
+                auto* StoreExec = bInstalled ? OneLink(Pin(Call, UEdGraphSchema_K2::PN_Then)) : Next;
+                auto* Store = StoreExec ? Cast<UK2Node_VariableSet>(StoreExec->GetOwningNode()) : nullptr;
+                if (!Store || Store->VariableReference.GetMemberName() != TEXT("currentSkill") ||
+                    TraceSource(Pin(Store, TEXT("currentSkill"))) != Spawned) return false;
+                Sites.Add(FSkillSpawnID{After, Spawned, Next, ID, bInstalled});
+            }
+        return Sites.Num() == 2;
+    }
+
+    bool WirePlayerSkillSpawns(UBlueprint* Controller, UFunction* Setter, const TArray<FSkillSpawnID>& Sites)
+    {
+        bool bChanged = false;
+        for (const auto& Site : Sites)
+        {
+            if (Site.bInstalled) continue;
+            auto* Spawn = Site.AfterSpawn->GetOwningNode();
+            auto* Graph = Spawn->GetGraph();
+            Controller->Modify();
+            Graph->Modify();
+            Spawn->Modify();
+            Site.Continue->GetOwningNode()->Modify();
+            Site.SelectedID->GetOwningNode()->Modify();
+            auto* Call = AddCall(Graph, Setter, Spawn->NodePosX + 260, Spawn->NodePosY + 150);
+            if (!Link(Graph, Site.SpawnedSkill, Pin(Call, TEXT("Skill"))) ||
+                !Link(Graph, Site.SelectedID, Pin(Call, TEXT("SkillID")))) return false;
+            Site.AfterSpawn->BreakLinkTo(Site.Continue);
+            if (!Link(Graph, Site.AfterSpawn, Pin(Call, UEdGraphSchema_K2::PN_Execute)) ||
+                !Link(Graph, Pin(Call, UEdGraphSchema_K2::PN_Then), Site.Continue)) return false;
+            bChanged = true;
+        }
+        if (bChanged) FBlueprintEditorUtils::MarkBlueprintAsModified(Controller);
+        return true;
+    }
+
+    bool PrepareTableBuffSkill(UBlueprint* Skill)
+    {
+        UK2Node_Event* Use = nullptr;
+        UK2Node_CallFunction* Apply = nullptr;
+        for (auto* Graph : Skill->UbergraphPages)
+            for (auto* Node : Graph->Nodes)
+            {
+                if (auto* Event = Cast<UK2Node_Event>(Node))
+                    if (Event->EventReference.GetMemberName() == TEXT("UseSkill") ||
+                        Event->EventReference.GetMemberName() == TEXT("Use Skill"))
+                    {
+                        if (Use) return false;
+                        Use = Event;
+                    }
+                if (auto* Call = Cast<UK2Node_CallFunction>(Node))
+                    if (Call->FunctionReference.GetMemberName() == TEXT("ApplyBuffs"))
+                    {
+                        if (Apply) return false;
+                        Apply = Call;
+                    }
+            }
+        auto* UseExec = Pin(Use, UEdGraphSchema_K2::PN_Then);
+        auto* ApplyExec = Pin(Apply, UEdGraphSchema_K2::PN_Execute);
+        auto* Finish = OneLink(Pin(Apply, UEdGraphSchema_K2::PN_Then));
+        auto* Done = Finish ? Cast<UK2Node_CallDelegate>(Finish->GetOwningNode()) : nullptr;
+        auto* Array = TraceSource(Pin(Apply, TEXT("targetUnits")));
+        auto* MakeArray = Array ? Cast<UK2Node_MakeArray>(Array->GetOwningNode()) : nullptr;
+        auto* Target = TraceSource(Pin(MakeArray, TEXT("[0]")));
+        if (!UseExec || !ApplyExec || !Done || Done->DelegateReference.GetMemberName() != TEXT("OnSkillUsed") ||
+            !IsVariableOutput(Target, TEXT("currentTargetUnit")) || Use->GetGraph() != Apply->GetGraph()) return false;
+        auto* Graph = Use->GetGraph();
+        UseExec->BreakAllPinLinks();
+        ApplyExec->BreakAllPinLinks();
+        if (!Link(Graph, UseExec, ApplyExec)) return false;
+        FBlueprintEditorUtils::MarkBlueprintAsModified(Skill);
+        if (!Compile(Skill) || !Skill->GeneratedClass) return false;
+        auto* Default = Skill->GeneratedClass->GetDefaultObject();
+        const auto* Buffs = FindFProperty<FArrayProperty>(Skill->GeneratedClass, TEXT("buffs"));
+        const auto* Type = FindFProperty<FByteProperty>(Skill->GeneratedClass, TEXT("skillType"));
+        if (!Default || !Buffs || !Type || !Type->Enum ||
+            Type->Enum->GetPathName() != TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Skills/E_SkillType.E_SkillType"))
+            return false;
+        const int64 Defensive = Type->Enum->GetValueByNameString(TEXT("NewEnumerator1"));
+        if (Defensive < 0 || Defensive > 255) return false;
+        Default->Modify();
+        Type->SetPropertyValue_InContainer(Default, static_cast<uint8>(Defensive));
+        FScriptArrayHelper Entries(Buffs, Buffs->ContainerPtrToValuePtr<void>(Default));
+        Entries.EmptyValues();
+        Skill->MarkPackageDirty();
+        return true;
+    }
+
+    void InstallSkillBuffRows()
+    {
+        if (!GEditor || GEditor->PlayWorld)
+        {
+            UE_LOG(LogReditusGuardUpInstall, Error, TEXT("Stop Play before running Reditus.InstallSkillBuffRows."));
+            return;
+        }
+        auto* Skills = LoadObject<UDataTable>(nullptr, SkillsPath);
+        if (!Skills || !UReditusTableBuffLibrary::FindSkillBuffRowsField(Skills->GetRowStruct()))
+        {
+            UE_LOG(LogReditusGuardUpInstall, Error, TEXT("Save Buff/Debuff (Data Table Row Handle) on S_SkillDefinition first. A BuffRows array is also supported. No assets were changed."));
+            return;
+        }
+        auto* Tech = LoadObject<UBlueprint>(nullptr, SkillTargetingPath);
+        auto* Controller = LoadObject<UBlueprint>(nullptr, BattlePath);
+        auto* Library = UReditusTableBuffLibrary::StaticClass();
+        auto* Setter = Library->FindFunctionByName(GET_FUNCTION_NAME_CHECKED(UReditusTableBuffLibrary, SetTableSkillID));
+        auto* Apply = Library->FindFunctionByName(GET_FUNCTION_NAME_CHECKED(UReditusTableBuffLibrary, ApplySkillBuffRows));
+        FBuffRowLoop Loop;
+        TArray<FSkillSpawnID> Sites;
+        if (!FindBuffRowLoop(Tech, Apply, Loop) || !FindPlayerSkillSpawns(Controller, Setter, Sites))
+        {
+            UE_LOG(LogReditusGuardUpInstall, Error, TEXT("Skill Buff Rows could not recognize ApplyBuffs or the two player skill spawns. No assets were changed."));
+            return;
+        }
+
+        const TCHAR* Template = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Skills/BuffSkills/BP_ProtectOtherBuff.BP_ProtectOtherBuff");
+        const TCHAR* Package = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Skills/BuffSkills/BP_TableBuffSkill");
+        const TCHAR* Path = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Skills/BuffSkills/BP_TableBuffSkill.BP_TableBuffSkill");
+        UObject* Occupant = LoadObject<UObject>(nullptr, Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
+        auto* Skill = Cast<UBlueprint>(Occupant);
+        if ((Occupant && (!Skill || !Skill->GeneratedClass || !Tech->GeneratedClass ||
+            !Skill->GeneratedClass->IsChildOf(Tech->GeneratedClass))) || (!Occupant && FPackageName::DoesPackageExist(Package)))
+        {
+            UE_LOG(LogReditusGuardUpInstall, Error, TEXT("The BP_TableBuffSkill path is occupied. No assets were changed."));
+            return;
+        }
+        if (!Skill)
+        {
+            auto* Source = LoadObject<UBlueprint>(nullptr, Template);
+            if (Source)
+                Skill = Cast<UBlueprint>(FAssetToolsModule::GetModule().Get().DuplicateAsset(
+                    TEXT("BP_TableBuffSkill"), SkillFolder, Source));
+            if (!Skill || !PrepareTableBuffSkill(Skill))
+            {
+                UE_LOG(LogReditusGuardUpInstall, Error, TEXT("Could not prepare the new BP_TableBuffSkill. Existing assets were not changed."));
+                return;
+            }
+        }
+
+        bool bOK = false;
+        {
+            const FScopedTransaction Transaction(NSLOCTEXT("ReditusBuffs", "InstallSkillBuffRows", "Connect Skill Buff Rows"));
+            if (!Transaction.IsOutstanding()) return;
+            bool bSpawnChanges = false;
+            for (const auto& Site : Sites) bSpawnChanges |= !Site.bInstalled;
+            bOK = WireBuffRowLoop(Tech, Apply, Skills, Loop) && WirePlayerSkillSpawns(Controller, Setter, Sites) &&
+                (Loop.bInstalled || Compile(Tech)) && (!bSpawnChanges || Compile(Controller));
+        }
+        if (!bOK)
+        {
+            const bool bUndone = GEditor->UndoTransaction(false);
+            if (bUndone) { Compile(Tech); Compile(Controller); }
+            UE_LOG(LogReditusGuardUpInstall, Error, TEXT("Could not wire Skill Buff Rows. Undo: %s. The new unsaved skill Blueprint may remain."),
+                bUndone ? TEXT("succeeded") : TEXT("failed; do not save the skill graphs"));
+            return;
+        }
+        UE_LOG(LogReditusGuardUpInstall, Display,
+            TEXT("Skill Buff Rows installed. Save BP_BattleTechsBase, BP_BattleController, and BP_TableBuffSkill. Set the skill's Buff/Debuff and Legacy Skill in DT_Skills."));
+    }
+
+    FAutoConsoleCommand GInstallSkillBuffRows(
+        TEXT("Reditus.InstallSkillBuffRows"),
+        TEXT("Connect the BuffRows field on S_SkillDefinition to battle skills. Stop Play first."),
+        FConsoleCommandDelegate::CreateStatic(&InstallSkillBuffRows));
 
     void InstallGuardUpTableTest()
     {
