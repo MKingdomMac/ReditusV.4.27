@@ -253,8 +253,8 @@ void UReditusBattleHUDWidget::InitializeSkin()
         ResolvedStaminaBrush=BuildBrush(ReditusHUDSkin::StaminaFigure(),FMargin(0.f));
     ResolvedStaminaBrush.DrawAs=ESlateBrushDrawType::Image;
     ResolvedStaminaBrush.ImageSize=FVector2D(24.f,24.f);
-    static_assert(static_cast<int32>(EReditusEnemyEffect::Count)==17,"Enemy status artwork order changed");
-    for (int32 Kind=0; Kind<22; ++Kind)
+    static_assert(static_cast<int32>(EReditusEnemyEffect::Count)==18,"Enemy status artwork order changed");
+    for (int32 Kind=0; Kind<23; ++Kind)
     {
         FSlateBrush Glyph=BuildBrush(ReditusHUDSkin::EnemyBadgeGlyph(Kind),FMargin(0.f));
         Glyph.DrawAs=ESlateBrushDrawType::Image;
@@ -624,7 +624,7 @@ void UReditusBattleHUDWidget::BuildCards()
         Card.StatusIconRow=WidgetTree->ConstructWidget<UHorizontalBox>();
         Card.StatusIconRow->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
         Card.StatusIconRow->SetClipping(EWidgetClipping::ClipToBounds);
-        Place(Content,Card.StatusIconRow,-106.f,2.f,94.f,25.f);
+        Place(Content,Card.StatusIconRow,-106.f,0.f,94.f,29.f);
         CastChecked<UCanvasPanelSlot>(Card.StatusIconRow->Slot)->SetAnchors(FAnchors(1.f,0.f));
         const float X = 94.f;
         Card.HPBar = Bar(FLinearColor(0.f,0.85f,0.28f,1.f));
@@ -922,7 +922,7 @@ void UReditusBattleHUDWidget::SetEnemyStatusViews(const TArray<FReditusEnemyHUDV
             Add(Divider,5.f);
         }
         for (int32 I=0; I<FMath::Min(3,View.Effects.Num()); ++I)
-            Add(MakeEnemyGlyph(View.Effects[I].Kind,16.f));
+            Add(MakeEnemyGlyph(View.Effects[I].Kind==static_cast<uint8>(EReditusEnemyEffect::AmpBlock) ? 22 : View.Effects[I].Kind,16.f));
         if (View.Effects.Num()>3)
             Add(MakeText(FText::FromString(FString::Printf(TEXT("+%d"),View.Effects.Num()-3)),12),0.f);
     }
@@ -960,12 +960,12 @@ void UReditusBattleHUDWidget::RefreshTargetDisplay()
             FText::AsNumber(View->Stamina),FText::AsNumber(View->MaxStamina)),17));
     static const TCHAR* Labels[]={TEXT("STAGGERED"),TEXT("POISON"),TEXT("STUN"),TEXT("BLIND"),TEXT("SLEEP"),
         TEXT("CONFUSION"),TEXT("CHARMED"),TEXT("BERSERK"),TEXT("TAUNTED"),TEXT("EXHAUSTED"),TEXT("SWALLOWED"),
-        TEXT("REGEN"),TEXT("GUARD UP"),TEXT("PROTECTED"),TEXT("ACCURACY UP"),TEXT("CRITICAL UP"),TEXT("COUNTER")};
+        TEXT("REGEN"),TEXT("GUARD UP"),TEXT("PROTECTED"),TEXT("ACCURACY UP"),TEXT("CRITICAL UP"),TEXT("COUNTER"),TEXT("AMP BLOCK")};
     for (const auto& Effect:View->Effects)
     {
         if (Effect.Kind>=UE_ARRAY_COUNT(Labels)) continue;
         UHorizontalBox* Row=WidgetTree->ConstructWidget<UHorizontalBox>();
-        auto* Icon=Row->AddChildToHorizontalBox(MakeEnemyGlyph(Effect.Kind,16.f));
+        auto* Icon=Row->AddChildToHorizontalBox(MakeEnemyGlyph(Effect.Kind==static_cast<uint8>(EReditusEnemyEffect::AmpBlock) ? 22 : Effect.Kind,16.f));
         Icon->SetPadding(FMargin(0.f,0.f,7.f,0.f));
         Icon->SetVerticalAlignment(VAlign_Center);
         FText Name=FText::FromString(Labels[Effect.Kind]);
@@ -1446,6 +1446,79 @@ void UReditusBattleHUDWidget::FocusCommands()
     }
 }
 
+void UReditusBattleHUDWidget::RefreshPartyStatuses(FCard& Card,const FReditusBattleHUDUnit& Data,bool bAlive)
+{
+    if (!Card.StatusIconRow) return;
+    TArray<FReditusEnemyHUDEffect> Effects;
+    const auto Add=[&Effects](const FReditusEnemyHUDEffect& Effect)
+    {
+        if (Effect.Kind>=static_cast<uint8>(EReditusEnemyEffect::Count) || Effect.Turns==0) return;
+        if (auto* Existing=Effects.FindByPredicate([&Effect](const FReditusEnemyHUDEffect& Other){return Other.Kind==Effect.Kind;}))
+            Existing->Turns=FMath::Max(Existing->Turns,Effect.Turns);
+        else Effects.Add(Effect);
+    };
+    if (bAlive)
+    {
+        for (const auto& Effect:Data.StatusEffects) Add(Effect);
+        // Retain compatibility with callers supplying the old AMP-only snapshot.
+        if (Data.AmpBlockTurns>0)
+        {
+            FReditusEnemyHUDEffect Amp;
+            Amp.Kind=static_cast<uint8>(EReditusEnemyEffect::AmpBlock);
+            Amp.Turns=Data.AmpBlockTurns;
+            Add(Amp);
+        }
+    }
+    Effects.Sort([](const FReditusEnemyHUDEffect& A,const FReditusEnemyHUDEffect& B){return A.Kind<B.Kind;});
+    Card.StatusIconRow->SetVisibility(Effects.Num()>0 ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
+    if (Card.DisplayedEffects==Effects) return;
+    Card.DisplayedEffects=Effects;
+    Card.StatusIconRow->ClearChildren();
+    static const TCHAR* Names[]={TEXT("STAGGERED"),TEXT("POISON"),TEXT("STUN"),TEXT("BLIND"),TEXT("SLEEP"),
+        TEXT("CONFUSION"),TEXT("CHARMED"),TEXT("BERSERK"),TEXT("TAUNTED"),TEXT("EXHAUSTED"),TEXT("SWALLOWED"),
+        TEXT("REGEN"),TEXT("GUARD UP"),TEXT("PROTECTED"),TEXT("ACCURACY UP"),TEXT("CRITICAL UP"),TEXT("COUNTER"),TEXT("AMP BLOCK")};
+    static_assert(UE_ARRAY_COUNT(Names)==static_cast<int32>(EReditusEnemyEffect::Count),"Party status labels are incomplete");
+    FString Summary;
+    const int32 Visible=Effects.Num()<=4 ? Effects.Num() : 3;
+    for (int32 Index=0; Index<Effects.Num(); ++Index)
+    {
+        const auto& Effect=Effects[Index];
+        FText Description=FText::FromString(Names[Effect.Kind]);
+        if (Effect.Turns>0)
+            Description=FText::Format(Effect.Turns==1 ? NSLOCTEXT("ReditusHUD","PartyEffectCycle","{0} - {1} CYCLE") :
+                NSLOCTEXT("ReditusHUD","PartyEffectCycles","{0} - {1} CYCLES"),Description,FText::AsNumber(Effect.Turns));
+        if (!Summary.IsEmpty()) Summary+=TEXT("\n");
+        Summary+=Description.ToString();
+        if (Index>=Visible) continue;
+        auto* Column=WidgetTree->ConstructWidget<UVerticalBox>();
+        Column->SetVisibility(ESlateVisibility::HitTestInvisible);
+        auto* Icon=Column->AddChildToVerticalBox(MakeEnemyGlyph(
+            Effect.Kind==static_cast<uint8>(EReditusEnemyEffect::AmpBlock) ? 22 : Effect.Kind,16.f));
+        Icon->SetHorizontalAlignment(HAlign_Center);
+        if (Effect.Turns>0)
+        {
+            auto* Cycles=MakeText(Effect.Turns>99 ? Text(TEXT("99+")) : FText::AsNumber(Effect.Turns),11);
+            Cycles->SetJustification(ETextJustify::Center);
+            auto* CountSlot=Column->AddChildToVerticalBox(Cycles);
+            CountSlot->SetHorizontalAlignment(HAlign_Center);
+            CountSlot->SetPadding(FMargin(0.f,-1.f,0.f,0.f));
+        }
+        auto* Box=WidgetTree->ConstructWidget<USizeBox>();
+        Box->SetVisibility(ESlateVisibility::HitTestInvisible);
+        Box->SetWidthOverride(21.f); Box->SetHeightOverride(29.f); Box->AddChild(Column);
+        auto* StatusSlot=Card.StatusIconRow->AddChildToHorizontalBox(Box);
+        StatusSlot->SetVerticalAlignment(VAlign_Top); StatusSlot->SetPadding(FMargin(0.f,0.f,2.f,0.f));
+    }
+    if (Effects.Num()>Visible)
+    {
+        auto* More=MakeText(FText::FromString(FString::Printf(TEXT("+%d"),Effects.Num()-Visible)),12);
+        More->SetVisibility(ESlateVisibility::HitTestInvisible);
+        Card.StatusIconRow->AddChildToHorizontalBox(More)->SetVerticalAlignment(VAlign_Center);
+    }
+    // The existing card button owns hover/clicks; icons do not intercept input.
+    if (Card.Select) Card.Select->SetToolTipText(FText::FromString(Summary));
+}
+
 void UReditusBattleHUDWidget::Refresh()
 {
     if (!DesignCanvas) return;
@@ -1472,7 +1545,7 @@ void UReditusBattleHUDWidget::Refresh()
         Card.ReadyLabel->SetText(Text(TEXT("KO")));
         Card.ReadyLabel->SetColorAndOpacity(FSlateColor(Alive ? Gold : FLinearColor::White));
         Card.ReadyLabel->SetVisibility(!Alive ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-        Card.StatusIconRow->SetVisibility(Alive ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
+        RefreshPartyStatuses(Card,Data,Alive);
         FSlateBrush Portrait;
         Portrait.DrawAs = ESlateBrushDrawType::Image;
         Portrait.ImageSize = FVector2D(128.f,128.f);

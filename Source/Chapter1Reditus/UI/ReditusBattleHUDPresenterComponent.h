@@ -47,6 +47,8 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Legacy") bool bMirrorLegacyActionAnnouncement = true;
     /** Complete a recorded EnemyWon result after the last live HP counter reaches 0. Disable for custom scripted exits. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Legacy") bool bCompleteRecordedDefeat = true;
+    /** Serialized compatibility only. Victory handling stays in the original Blueprint flow. */
+    UPROPERTY() bool bCompleteRecordedVictory = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Enemies") bool bShowEnemyStatusBadges = true;
     /** Apply battle-specific keyboard and gamepad mappings, then restore them when the HUD closes. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Battle HUD|Input") bool bApplyCombatGamepadProfile = true;
@@ -87,6 +89,10 @@ public:
     UFUNCTION(BlueprintCallable, Category="Battle HUD") void SetLegacyWidgetsToHide(const TArray<UWidget*>& Widgets);
     UFUNCTION(BlueprintCallable, Category="Battle HUD") bool ExecuteLegacyCommand(AActor* Unit, EReditusHUDCommand Command);
     UFUNCTION(BlueprintCallable, Category="Battle HUD") bool ForwardGameplayInput(FName ActionName, FKey Key);
+
+    /** Compatibility pass-through for old installed nodes; RestoreVictoryFlow removes them. */
+    UFUNCTION(BlueprintCallable, Category="Battle HUD|Legacy")
+    static bool TryBeginRecordedBattleResult(AActor* BattleController);
 
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -154,7 +160,7 @@ private:
     TWeakObjectPtr<AActor> TrackedEncounter;
     TSet<TWeakObjectPtr<AActor>> TrackedEncounterUnits;
     bool bTrackingEncounter = false;
-    bool bStoppedClockForFlee = false;
+    bool bStoppedClockForExit = false;
     bool bRetriedOnLevelFleeExit = false;
     bool bDefeatFlowHandled = false;
     bool bExplicitParty = false;
@@ -194,12 +200,13 @@ private:
     void ReleaseAggroIndicators();
     void TrackLegacyEncounter(AActor* Encounter);
     void FinishConfirmedDefeat();
-    void FinishConfirmedFlee();
+    void FinishConfirmedBattleExit();
     void ResetTrackedEncounter();
     UFUNCTION() void HandleNativeMenuChosen(AActor* Unit, FName EntryID);
     UFUNCTION() void HandleNativeMenuCancelled(AActor* Unit);
     bool HandleCommand(AActor* Unit, EReditusHUDCommand Command);
     bool SelectCommandUnit(AActor* Unit);
+    void ReconcileATBCommandContext();
     void SynchronizeCommandSelectionEffects(AActor* CommandUnit);
     UFUNCTION() void HandleSelection(AActor* Unit);
     UFUNCTION() void HandleDevice(EReditusHUDInputDevice Device);

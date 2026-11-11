@@ -12,6 +12,7 @@
 #include "Particles/ParticleSystem.h"
 #include "Particles/ParticleSystemComponent.h"
 #include "Sound/SoundBase.h"
+#include "UObject/EnumProperty.h"
 #include "UObject/StructOnScope.h"
 #include "UObject/UnrealType.h"
 
@@ -23,6 +24,7 @@ namespace
     const FName CycleEndName(TEXT("OnCycleEndRequested"));
     const FName DefenseDownSlot(TEXT("Reditus.TableBuff.DefenseDown"));
     const FName AggroFocusSlot(TEXT("Reditus.TableBuff.AggroFocus"));
+    const FName AmpBlockSlot(TEXT("Reditus.TableBuff.BlockAmpGain"));
     uint64 NextAggroFocusOrder = 0;
     const FName GaugeSlot(TEXT("Reditus.TableBuff.GaugeRate"));
     const FName PreparationSlot(TEXT("Reditus.TableBuff.PreparationRate"));
@@ -40,6 +42,7 @@ namespace
         case EEffect::PhysicalDefense: return Row.PhysicalDefenseMultiplier >= 1.f ? GuardUpTag : DefenseDownSlot;
         case EEffect::GaugeRate: return GaugeSlot;
         case EEffect::AggroFocus: return AggroFocusSlot;
+        case EEffect::BlockAmpGain: return AmpBlockSlot;
         case EEffect::PreparationRate: return PreparationSlot;
         case EEffect::PeriodicDamage:
         case EEffect::PeriodicHealing:
@@ -60,6 +63,7 @@ namespace
         {
         case EEffect::PhysicalDefense: return ReditusTableBuffRules::ValidEffectScale(Row.PhysicalDefenseMultiplier);
         case EEffect::AggroFocus: return !Row.AggroFocusBuffClass.IsNull();
+        case EEffect::BlockAmpGain: return true;
         case EEffect::GaugeRate:
         case EEffect::PreparationRate: return ReditusTableBuffRules::ValidEffectScale(Row.RateMultiplier);
         case EEffect::PeriodicDamage: return ReditusTableBuffRules::PeriodicDamageFraction(Row.MaxHPDamagePercent) > 0.f;
@@ -362,6 +366,130 @@ namespace
         return false;
     }
 
+    using EEquipmentResistance = ReditusTableBuffRules::EEquipmentResistance;
+
+    const TCHAR* EquipmentAilmentEnum = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Enums/E_StatusAilments.E_StatusAilments");
+    const TCHAR* EquipmentResistanceEnum = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Enums/E_StatusResistanceLevel.E_StatusResistanceLevel");
+
+    // Match stable members of the actual Blueprint enum, not localized display text
+    // or the current order of its values.
+    const TCHAR* AilmentEnumerator(FName Status)
+    {
+        if (Status == TEXT("Poison")) return TEXT("NewEnumerator0");
+        if (Status == TEXT("Blind")) return TEXT("NewEnumerator1");
+        if (Status == TEXT("Berserk")) return TEXT("NewEnumerator2");
+        if (Status == TEXT("Petrify")) return TEXT("NewEnumerator3");
+        if (Status == TEXT("Zombie")) return TEXT("NewEnumerator4");
+        if (Status == TEXT("Imp")) return TEXT("NewEnumerator5");
+        if (Status == TEXT("Silence")) return TEXT("NewEnumerator6");
+        return nullptr;
+    }
+
+    FName EquipmentStatusForLegacyClass(const UClass* Class)
+    {
+        static const TCHAR* BuffFolder = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Skills/Buffs/");
+        for (const UClass* Current = Class; Current; Current = Current->GetSuperClass())
+        {
+            if (!Current->GetPathName().StartsWith(BuffFolder)) continue;
+            const FName Name = Current->GetFName();
+            if (Name == TEXT("BP_Poison_C") || Name == TEXT("BP_DeathBoarPoison_C")) return FName(TEXT("Poison"));
+            if (Name == TEXT("BP_Blind_C") || Name == TEXT("BP_BlackSprayBlind_C") ||
+                Name == TEXT("BP_WindVortexBlind_C") || Name == TEXT("BP_AugustusOverdriveBlind_C")) return FName(TEXT("Blind"));
+            if (Name == TEXT("BP_BerserkBuff_C") || Name == TEXT("BP_AmpBerserkBuff_C")) return FName(TEXT("Berserk"));
+        }
+        return NAME_None;
+    }
+
+    FName EquipmentStatusForTableRow(FName ID, const FReditusTableBuffRow& Row,
+        const UClass* LegacyClass, const UClass* ImmunityFamily)
+    {
+        const FName Authored = Row.Catalogue.ResistanceStatusKey;
+        if (AilmentEnumerator(Authored)) return Authored;
+        const FName ClassStatus = EquipmentStatusForLegacyClass(LegacyClass);
+        if (!ClassStatus.IsNone()) return ClassStatus;
+        const FName FamilyStatus = EquipmentStatusForLegacyClass(ImmunityFamily);
+        if (!FamilyStatus.IsNone()) return FamilyStatus;
+        if (ID == TEXT("Venom")) return FName(TEXT("Poison"));
+        if (ID == TEXT("BlindUntilCured")) return FName(TEXT("Blind"));
+        return AilmentEnumerator(ID) ? ID : NAME_None;
+    }
+
+    struct FReflectedStatusEnum
+    {
+        const UEnum* Enum = nullptr;
+        const FNumericProperty* Storage = nullptr;
+
+        explicit FReflectedStatusEnum(const FProperty* Property)
+        {
+            if (const auto* Native = CastField<FEnumProperty>(Property))
+            {
+                Enum = Native->GetEnum();
+                Storage = Native->GetUnderlyingProperty();
+            }
+            else if (const auto* Byte = CastField<FByteProperty>(Property))
+            {
+                Enum = Byte->Enum;
+                Storage = Byte;
+            }
+        }
+
+        bool IsType(const TCHAR* Path) const { return Enum && Storage && Enum->GetPathName() == Path; }
+        int64 Read(const void* Value) const { return static_cast<int64>(Storage->GetUnsignedIntPropertyValue(Value)); }
+    };
+
+    EEquipmentResistance ReadEquipmentResistance(AActor* Target, const AActor* Battle, FName Status)
+    {
+        const TCHAR* StatusEnumerator = AilmentEnumerator(Status);
+        if (!StatusEnumerator || !IsValid(Target) || !MatchesCatalogueSide(Target, TEXT("Player")))
+            return EEquipmentResistance::Normal;
+
+        const auto* CharacterField = FindFProperty<FNameProperty>(Target->GetClass(), TEXT("CharacterID"));
+        const FName Character = CharacterField ? CharacterField->GetPropertyValue_InContainer(Target) : NAME_None;
+        UObject* Player = ReadObject(Battle, TEXT("jRPGPlayerController"));
+        const auto* Roster = IsValid(Player) && !Character.IsNone()
+            ? FindFProperty<FMapProperty>(Player->GetClass(), TEXT("PlayerUnitDataID")) : nullptr;
+        const auto* RosterKey = Roster ? CastField<FNameProperty>(Roster->KeyProp) : nullptr;
+        const auto* UnitData = Roster ? CastField<FStructProperty>(Roster->ValueProp) : nullptr;
+        if (!RosterKey || !UnitData || !UnitData->Struct) return EEquipmentResistance::Normal;
+
+        const FMapProperty* Effective = nullptr;
+        for (TFieldIterator<FProperty> Field(UnitData->Struct); Field; ++Field)
+        {
+            const FString Name = Field->GetName();
+            if (Name != TEXT("EffectiveStatusResistance") && !Name.StartsWith(TEXT("EffectiveStatusResistance_"))) continue;
+            if (Effective) return EEquipmentResistance::Normal;
+            Effective = CastField<FMapProperty>(*Field);
+            if (!Effective) return EEquipmentResistance::Normal;
+        }
+        if (!Effective) return EEquipmentResistance::Normal;
+
+        const FReflectedStatusEnum Ailment(Effective->KeyProp);
+        const FReflectedStatusEnum Resistance(Effective->ValueProp);
+        if (!Ailment.IsType(EquipmentAilmentEnum) || !Resistance.IsType(EquipmentResistanceEnum))
+            return EEquipmentResistance::Normal;
+        const int64 Desired = Ailment.Enum->GetValueByNameString(StatusEnumerator);
+        if (Desired == INDEX_NONE) return EEquipmentResistance::Normal;
+        const int64 Resist = Resistance.Enum->GetValueByNameString(TEXT("NewEnumerator1"));
+        const int64 Immune = Resistance.Enum->GetValueByNameString(TEXT("NewEnumerator2"));
+
+        FScriptMapHelper RosterRows(Roster, Roster->ContainerPtrToValuePtr<void>(Player));
+        for (int32 I = 0; I < RosterRows.GetMaxIndex(); ++I)
+        {
+            if (!RosterRows.IsValidIndex(I) || RosterKey->GetPropertyValue(RosterRows.GetKeyPtr(I)) != Character) continue;
+            FScriptMapHelper Statuses(Effective, Effective->ContainerPtrToValuePtr<void>(RosterRows.GetValuePtr(I)));
+            for (int32 J = 0; J < Statuses.GetMaxIndex(); ++J)
+            {
+                if (!Statuses.IsValidIndex(J) || Ailment.Read(Statuses.GetKeyPtr(J)) != Desired) continue;
+                const int64 Level = Resistance.Read(Statuses.GetValuePtr(J));
+                if (Immune != INDEX_NONE && Level == Immune) return EEquipmentResistance::Immune;
+                if (Resist != INDEX_NONE && Level == Resist) return EEquipmentResistance::Resist;
+                break;
+            }
+            break;
+        }
+        return EEquipmentResistance::Normal;
+    }
+
     bool CallNoArgumentEvent(AActor* Actor, const TCHAR* Name)
     {
         UFunction* Function = IsValid(Actor) ? Actor->FindFunction(Name) : nullptr;
@@ -371,7 +499,8 @@ namespace
     }
 
     bool ApplyLegacyEffect(AActor* Caster, AActor* Unit, AActor* Battle, UActorComponent* Clock,
-        const FReditusTableBuffRow& Row, UClass* EffectClass, UClass* ImmunityFamily)
+        const FReditusTableBuffRow& Row, UClass* EffectClass, UClass* ImmunityFamily,
+        EEquipmentResistance EquipmentResistance)
     {
         using EDuration = EReditusLegacyBuffDuration;
         if (!EffectClass || !MatchesCatalogueSide(Caster, Row.Catalogue.AllowedSources) ||
@@ -401,10 +530,11 @@ namespace
             !Unit->IsA(UnitProp->PropertyClass) || !Permanent || !Default || !Chance ||
             !Apply || Apply->NumParms != 0 || (bTimed && (!TurnLeft || !End || End->NumParms != 0))) return false;
 
-        const float Probability = Row.LegacyChancePercent >= 0.f ? Row.LegacyChancePercent / 100.f
+        const float BaseChance = Row.LegacyChancePercent >= 0.f ? Row.LegacyChancePercent / 100.f
             : Chance->GetPropertyValue_InContainer(Default);
-        if (!FMath::IsFinite(Probability) || Probability <= 0.f ||
-            (Probability < 1.f && FMath::FRand() > Probability)) return false;
+        const float Probability = ReditusTableBuffRules::BuffApplicationChance(BaseChance, EquipmentResistance);
+        if (Probability <= 0.f ||
+            (Probability < 1.f && !ReditusTableBuffRules::PassesBuffApplicationRoll(Probability, FMath::FRand()))) return false;
         auto* Effect = FindLegacyBuff(Unit, EffectClass);
         const bool bExisting = IsValid(Effect);
         if (bExisting && bTimed && Permanent->GetPropertyValue_InContainer(Effect)) return false;
@@ -569,6 +699,11 @@ bool UReditusTableBuffState::Apply(AActor* InBattle, UActorComponent* Clock, UDa
     {
         if (bLegacySelfCast) Lifetime.StartOrRefresh(Row.OwnerCycles);
         else Lifetime.StartOrRefreshForTarget(Row.OwnerCycles, SkipEndToken);
+        if (Slot == AmpBlockSlot)
+        {
+            AmpBlockLifetime.StartOrRefresh(Row.OwnerCycles);
+            AmpBlockTurnsRemaining = AmpBlockLifetime.Remaining;
+        }
         if (Slot == AggroFocusSlot) AggroFocusOrder = ++NextAggroFocusOrder;
     };
     if (ActiveTable.Get() == Table && ActiveID == ID && Battle.Get() == InBattle &&
@@ -600,6 +735,7 @@ bool UReditusTableBuffState::Apply(AActor* InBattle, UActorComponent* Clock, UDa
     Callback.BindUFunction(this, GET_FUNCTION_NAME_CHECKED(UReditusTableBuffState, OnOwnerCycleEnd));
     Delegate->AddUnique(Callback);
     if (Slot == GuardUpTag) ComponentTags.AddUnique(GuardUpTag);
+    if (Slot == AmpBlockSlot) ComponentTags.AddUnique(AmpBlockSlot);
     SetComponentTickEnabled(true);
     PlayBuffApplyFeedback(GetOwner(), Row);
     Loop = SpawnBuffEffect(GetOwner(), Row.Visuals.WhileActive, Row.CascadeVisuals.WhileActive, false);
@@ -636,12 +772,30 @@ double UReditusTableBuffState::DefenseDelta() const
         ? static_cast<double>(ActiveRow.PhysicalDefenseMultiplier) - 1.0 : 0.0;
 }
 
+bool UReditusTableBuffState::TryBlockAmpGain(UActorComponent* Clock, int32 CycleToken)
+{
+    return Clock == BattleClock.Get() && BlocksAmpGain() && AmpBlockLifetime.BlockAward(CycleToken);
+}
+
+bool UReditusTableBuffState::BlocksAmpGain() const
+{
+    return EffectSlot == AmpBlockSlot && AmpBlockLifetime.Remaining > 0 &&
+        IsLive() && ClockRunning(BattleClock.Get());
+}
+
 void UReditusTableBuffState::OnOwnerCycleEnd(AActor* Unit, int32 CycleToken)
 {
     if (Unit != GetOwner()) return;
     if (!IsLive()) { Clear(false); return; }
     using EEnd = ReditusTableBuffRules::EOwnerEnd;
-    const EEnd Result = Lifetime.FinishOwnerCycle(CycleToken);
+    const EEnd Result = EffectSlot == AmpBlockSlot
+        ? AmpBlockLifetime.FinishOwnerCycle(CycleToken) : Lifetime.FinishOwnerCycle(CycleToken);
+    if (EffectSlot == AmpBlockSlot)
+    {
+        AmpBlockTurnsRemaining = AmpBlockLifetime.Remaining;
+        // Keep the ordinary active-state test in sync with the AMP lifetime.
+        Lifetime.Remaining = AmpBlockLifetime.Remaining;
+    }
     if (Result == EEnd::Advanced || Result == EEnd::Expired)
     {
         const EEffect Effect = EffectFor(ActiveRow);
@@ -666,7 +820,10 @@ void UReditusTableBuffState::Clear(bool bNormalExpiry, bool bKeepTiming)
     ActiveID = NAME_None;
     AggroFocusOrder = 0;
     Lifetime = {};
+    AmpBlockLifetime = {};
+    AmpBlockTurnsRemaining = 0;
     ComponentTags.Remove(GuardUpTag);
+    ComponentTags.Remove(AmpBlockSlot);
     SetComponentTickEnabled(false);
     if (auto* Delegate = CycleEndDelegate(BattleClock.Get()))
     {
@@ -704,6 +861,30 @@ void UReditusTableBuffState::OnComponentDestroyed(bool bDestroyingHierarchy)
 
 namespace
 {
+    int32 ReadCommittedBuffAmp(AActor* Caster, UActorComponent* Clock)
+    {
+        // Prefer the queued action snapshot: command selection can change the
+        // unit's editable AMP value while another action is being resolved.
+        UFunction* Function = IsValid(Clock) ? Clock->FindFunction(TEXT("GetPendingAction")) : nullptr;
+        const auto* Unit = Function ? InputProperty<FObjectPropertyBase>(Function, TEXT("Unit")) : nullptr;
+        const auto* Action = Function ? FindFProperty<FStructProperty>(Function, TEXT("Action")) : nullptr;
+        const auto* Result = Function ? CastField<FBoolProperty>(Function->GetReturnProperty()) : nullptr;
+        const auto* Amp = Action && Action->Struct ? FindFProperty<FIntProperty>(Action->Struct, TEXT("AmpCommitted")) : nullptr;
+        const auto* Actor = Action && Action->Struct ? FindFProperty<FObjectPropertyBase>(Action->Struct, TEXT("Unit")) : nullptr;
+        if (Function && Function->NumParms == 3 && Unit && Unit->PropertyClass == AActor::StaticClass() &&
+            Action && Action->HasAnyPropertyFlags(CPF_OutParm) && Result && Amp && Actor)
+        {
+            FStructOnScope Params(Function);
+            void* Memory = Params.GetStructMemory();
+            Unit->SetObjectPropertyValue_InContainer(Memory, Caster);
+            Clock->ProcessEvent(Function, Memory);
+            const void* Data = Action->ContainerPtrToValuePtr<void>(Memory);
+            if (Result->GetPropertyValue_InContainer(Memory) && Actor->GetObjectPropertyValue_InContainer(Data) == Caster)
+                return FMath::Max(0, Amp->GetPropertyValue_InContainer(Data));
+        }
+        return FMath::Max(0, ReadInt(Caster, TEXT("CurrentAmpPointsInPlay")));
+    }
+
     int32 ApplyToRecipients(AActor* Caster, const TArray<AActor*>& Targets, UDataTable* BuffTable, FName BuffID,
         bool bLegacySelfCast)
     {
@@ -753,6 +934,12 @@ namespace
             if (!MatchesCatalogueSide(Caster, TEXT("Player"))) return 0;
         }
 
+        // Work on this local row copy. Authored defaults never grow on recast.
+        // ClassDefault already adds AMP in BP_BuffBase.AddDuration; do not add
+        // it again. UntilCured remains persistent and has no cycle countdown.
+        if (!bLegacy || Row.LegacyDuration == EReditusLegacyBuffDuration::OwnerCycles)
+            Row.OwnerCycles = ReditusTableBuffRules::CyclesWithAmp(Row.OwnerCycles, ReadCommittedBuffAmp(Caster, Clock));
+        const FName EquipmentStatus = EquipmentStatusForTableRow(BuffID, Row, LegacyClass, ImmunityFamily);
         int32 Applied = 0;
         TSet<AActor*> Seen;
         for (AActor* Unit : Targets)
@@ -761,16 +948,19 @@ namespace
             Seen.Add(Unit);
             if (Slot == AggroFocusSlot && (!MatchesCatalogueSide(Unit, TEXT("Player")) || ReadBool(Unit, TEXT("Swallowed"))))
                 continue;
+            const auto EquipmentResistance = ReadEquipmentResistance(Unit, Battle, EquipmentStatus);
+            if (EquipmentResistance == EEquipmentResistance::Immune) continue;
             if (bLegacy)
             {
-                if (ApplyLegacyEffect(Caster, Unit, Battle, Clock, Row, LegacyClass, ImmunityFamily)) ++Applied;
+                if (ApplyLegacyEffect(Caster, Unit, Battle, Clock, Row, LegacyClass, ImmunityFamily, EquipmentResistance)) ++Applied;
                 continue;
             }
             if (Slot == GuardUpTag && ReadBool(Unit, TEXT("IsProtected"))) continue;
             if (!MatchesCatalogueSide(Caster, Row.Catalogue.AllowedSources) ||
-                !MatchesCatalogueSide(Unit, Row.Catalogue.AllowedTargets) ||
-                Row.ApplicationChancePercent <= 0.f ||
-                (Row.ApplicationChancePercent < 100.f && FMath::FRand() * 100.f >= Row.ApplicationChancePercent)) continue;
+                !MatchesCatalogueSide(Unit, Row.Catalogue.AllowedTargets)) continue;
+            const float Probability = ReditusTableBuffRules::BuffApplicationChance(
+                Row.ApplicationChancePercent / 100.f, EquipmentResistance);
+            if (Probability <= 0.f || (Probability < 1.f && FMath::FRand() >= Probability)) continue;
             int32 SkipEndToken = 0;
             if ((!bLegacySelfCast || Slot != GuardUpTag) && !ReadOpenCycle(Clock, Unit, SkipEndToken))
             {
@@ -831,10 +1021,64 @@ bool UReditusTableBuffLibrary::ApplyBuffByID(AActor* Caster, UDataTable* BuffTab
     return ApplyToRecipients(Caster, {Caster}, BuffTable, BuffID, true) != 0;
 }
 
+void UReditusTableBuffLibrary::SynchronizeLegacyBuffDuration(AActor* Buff)
+{
+    if (!IsValid(Buff)) return;
+    // BP_Staggered has an existing frozen-gauge recovery clock. Do not tick
+    // that family twice or convert it to a cycle it cannot reach while frozen.
+    for (const UClass* Type=Buff->GetClass(); Type; Type=Type->GetSuperClass())
+        if (Type->GetPathName()==TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Skills/Buffs/BP_Staggered.BP_Staggered_C")) return;
+    auto* Battle=Cast<AActor>(ReadObject(Buff,TEXT("battleController")));
+    if (ReadBool(Buff,TEXT("Permenant State")))
+    {
+        if (auto* Timer=Buff->FindComponentByClass<UReditusLegacyTableBuffTimer>()) Timer->Disarm();
+        UnbindLegacyTimers(Battle,Buff);
+        return;
+    }
+    auto* Unit=Cast<AActor>(ReadObject(Buff,TEXT("targetUnit")));
+    UActorComponent* Clock=FindClock(Battle);
+    const int32 Cycles=ReadInt(Buff,TEXT("turnLeft"));
+    int32 OpenToken=0;
+    if (!AliveInBattle(Unit,Battle) || !Clock || Cycles<=0 || !ReadOpenCycle(Clock,Unit,OpenToken)) return;
+    auto* Timer=Buff->FindComponentByClass<UReditusLegacyTableBuffTimer>();
+    const bool bCreated=!Timer;
+    if (!Timer)
+    {
+        Timer=NewObject<UReditusLegacyTableBuffTimer>(Buff,NAME_None,RF_Transient);
+        Buff->AddInstanceComponent(Timer);
+        Timer->RegisterComponent();
+    }
+    // AddDuration already computed base durationTurn + AMP + legacy carryover.
+    // Adopt that count; never add the AMP bonus a second time.
+    if (Timer->Arm(Unit,Clock,Cycles,OpenToken)) UnbindLegacyTimers(Battle,Buff);
+    else if (bCreated) Timer->DestroyComponent();
+}
+
+bool UReditusTableBuffLibrary::CanReceiveAmp(AActor* Unit)
+{
+    if (!IsValid(Unit)) return false;
+    TInlineComponentArray<UReditusTableBuffState*> States;
+    Unit->GetComponents(States);
+    for (const auto* State : States)
+        if (IsValid(State) && State->BlocksAmpGain()) return false;
+    return true;
+}
+
 int32 UReditusTableBuffLibrary::ApplyBuffByIDToTargets(AActor* Caster, const TArray<AActor*>& EligibleTargets,
     UDataTable* BuffTable, FName BuffID)
 {
     return ApplyToRecipients(Caster, EligibleTargets, BuffTable, BuffID, false);
+}
+
+bool UReditusTableBuffLibrary::PassesLegacyBuffResistanceRoll(
+    AActor* Target, TSubclassOf<AActor> BuffClass, float BaseChance, float Roll)
+{
+    if (!IsValid(Target) || !BuffClass.Get()) return false;
+    const AActor* Battle = Cast<AActor>(ReadObject(Target, TEXT("battleController")));
+    const FName Status = EquipmentStatusForLegacyClass(BuffClass.Get());
+    const auto Resistance = ReadEquipmentResistance(Target, Battle, Status);
+    const float Chance = ReditusTableBuffRules::BuffApplicationChance(BaseChance, Resistance);
+    return ReditusTableBuffRules::PassesBuffApplicationRoll(Chance, Roll);
 }
 
 void UReditusTableBuffLibrary::SetTableSkillID(AActor* Skill, FName SkillID)
@@ -916,6 +1160,67 @@ bool UReditusTableBuffLibrary::ApplySkillBuffRows(AActor* Skill, UDataTable* Ski
 
 namespace
 {
+    bool IsStaggeredForEnemyTargeting(UActorComponent* Clock, AActor* Unit)
+    {
+        if (!IsValid(Unit)) return false;
+        // Use the same state query that holds/restarts the affected unit's ATB
+        // gauge. The plugin cannot link against the game module directly.
+        UFunction* Function = IsValid(Clock) ? Clock->FindFunction(TEXT("IsUnitStaggered")) : nullptr;
+        const auto* UnitParam = Function ? InputProperty<FObjectPropertyBase>(Function, TEXT("Unit")) : nullptr;
+        const auto* Return = Function ? CastField<FBoolProperty>(Function->GetReturnProperty()) : nullptr;
+        if (Function && Function->NumParms == 2 && UnitParameter(UnitParam, Unit) &&
+            !UnitParam->HasAnyPropertyFlags(CPF_OutParm) && Return)
+        {
+            FStructOnScope Params(Function);
+            void* Memory = Params.GetStructMemory();
+            UnitParam->SetObjectPropertyValue_InContainer(Memory, Unit);
+            Clock->ProcessEvent(Function, Memory);
+            return Return->GetPropertyValue_InContainer(Memory);
+        }
+
+        // Legacy/non-ATB battles: distinguish stamina break from generic stun.
+        if (ReadBool(Unit, TEXT("Staggered"))) return true;
+        if (!ReadBool(Unit, TEXT("isStun"))) return false;
+        const auto* Property = FindFProperty<FMapProperty>(Unit->GetClass(), TEXT("activeBuffs"));
+        const auto* Value = Property ? CastField<FObjectPropertyBase>(Property->ValueProp) : nullptr;
+        if (!Value) return false;
+        FScriptMapHelper Buffs(Property, Property->ContainerPtrToValuePtr<void>(Unit));
+        for (int32 Index = 0; Index < Buffs.GetMaxIndex(); ++Index)
+        {
+            if (!Buffs.IsValidIndex(Index)) continue;
+            auto* Buff = Cast<AActor>(Value->GetObjectPropertyValue(Buffs.GetValuePtr(Index)));
+            if (!IsValid(Buff) || ReadObject(Buff, TEXT("targetUnit")) != Unit) continue;
+            bool bStagger = false;
+            for (auto* Type = Buff->GetClass(); Type; Type = Type->GetSuperClass())
+                if (Type->GetPathName() == TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Skills/Buffs/BP_Staggered.BP_Staggered_C"))
+                { bStagger = true; break; }
+            if (bStagger && (ReadBool(Buff, TEXT("Permenant State")) || ReadInt(Buff, TEXT("turnLeft")) > 0)) return true;
+        }
+        return false;
+    }
+
+    int32 FindStaggeredPlayerIndex(AActor* BattleController, int32 LegacyIndex)
+    {
+        // Preserve playerUnits indices: the existing Blueprint GET consumes this.
+        UObject* Battle = ReadObject(BattleController, TEXT("currentBattle"));
+        const auto* Property = IsValid(Battle) ? FindFProperty<FArrayProperty>(Battle->GetClass(), TEXT("playerUnits")) : nullptr;
+        const auto* Item = Property ? CastField<FObjectPropertyBase>(Property->Inner) : nullptr;
+        if (!Item) return LegacyIndex;
+        FScriptArrayHelper Players(Property, Property->ContainerPtrToValuePtr<void>(Battle));
+        UActorComponent* Clock = FindClock(BattleController);
+        TArray<int32> Candidates;
+        for (int32 Index = 0; Index < Players.Num(); ++Index)
+        {
+            auto* Unit = Cast<AActor>(Item->GetObjectPropertyValue(Players.GetRawPtr(Index)));
+            if (AliveInBattle(Unit, BattleController) && !ReadBool(Unit, TEXT("Swallowed")) &&
+                IsStaggeredForEnemyTargeting(Clock, Unit)) Candidates.Add(Index);
+        }
+        // Aggro has no influence within the staggered pool. Do not write any
+        // target, threat or action state; an existing attack keeps its snapshot.
+        return Candidates.Num() == 0 ? LegacyIndex
+            : Candidates[Candidates.Num() == 1 ? 0 : FMath::RandRange(0, Candidates.Num() - 1)];
+    }
+
     int32 FindAggroFocus(AActor* BattleController, AActor*& OutTarget)
     {
         // Use the same array and preserve its exact indices, including any empty slots.
@@ -967,10 +1272,15 @@ int32 UReditusTableBuffLibrary::ResolveAggroFocusIndex(AActor* BattleController,
         : Cast<AActor>(ReadObject(BattleController, TEXT("currentAttackingUnit")));
     if (!AliveInBattle(Attacker, BattleController) ||
         !MatchesCatalogueSide(Attacker, Enemy)) return LegacyIndex;
+    // Those statuses have their own either-side selection. Do not steer them
+    // back toward the party or override a deliberate friendly-fire choice.
+    if (ReadBool(Attacker, TEXT("Is Confused")) || ReadBool(Attacker, TEXT("NewConfused")) ||
+        ReadBool(Attacker, TEXT("IsCharmed??"))) return LegacyIndex;
 
     AActor* Target = nullptr;
     const int32 FocusIndex = FindAggroFocus(BattleController, Target);
-    return FocusIndex == INDEX_NONE ? LegacyIndex : FocusIndex;
+    if (FocusIndex != INDEX_NONE) return FocusIndex; // Rage Bait protects a staggered ally.
+    return FindStaggeredPlayerIndex(BattleController, LegacyIndex);
 }
 
 int32 UReditusTableBuffLibrary::GetBuffedDefense(AActor* Target, int32 BaseDefense)

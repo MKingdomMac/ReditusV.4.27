@@ -198,7 +198,7 @@ namespace ReditusHUDSkin
         return Result;
     }
 
-    // Indices 0–16 match EReditusEnemyEffect. The final five are HUD markers.
+    // Statuses 0-16 keep their old indices. Markers stay 17-21; AMP Block is 22.
     inline Image EnemyBadgeGlyph(int Kind)
     {
         static const char* const Shapes[]={
@@ -236,7 +236,13 @@ namespace ReditusHUDSkin
         else for (int Y=0; Y<16; ++Y) for (int X=0; X<16; ++X)
         {
             const int DX=std::abs(2*X-15), DY=std::abs(2*Y-15);
-            if (Kind==17 || Kind==18)
+            if (Kind==22)
+            {
+                const int Radius=DX*DX+DY*DY;
+                if (Radius<=182)
+                    Put(Result,X,Y,Radius>=130 ? Pixel(174,113,32) : Pixel(255,225,90));
+            }
+            else if (Kind==17 || Kind==18)
             {
                 const int Radius=DX*DX+DY*DY;
                 if (Radius<=182)
@@ -247,6 +253,12 @@ namespace ReditusHUDSkin
                 Put(Result,X,Y,DX+DY>=10 ? Pixel(255,207,84) : DX+DY<=4 ? Pixel(255,235,155) : Pixel(49,33,19));
             else if ((Kind==20 || Kind==21) && Y<=9 && DX<=15-Y*1.5f)
                 Put(Result,X,Y,DX>=11-Y*1.5f ? (Kind==20 ? Pixel(238,179,62) : Pixel(145,160,178)) : Pixel(13,23,39));
+        }
+        if (Kind==22)
+        {
+            Line(Result,2,13,13,2,Pixel(30,10,15));
+            Line(Result,2,12,12,2,Pixel(250,62,58));
+            Line(Result,3,13,13,3,Pixel(250,62,58));
         }
         return Result;
     }

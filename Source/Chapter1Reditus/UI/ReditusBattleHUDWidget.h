@@ -207,8 +207,9 @@ private:
         UImage* Portrait = nullptr;
         UTextBlock* Name = nullptr;
         UTextBlock* ReadyLabel = nullptr;
-        /** Reserved for the future buff presenter; no legacy buff hookup yet. */
+        /** Compact live buff/debuff icons above this character's gauges. */
         UHorizontalBox* StatusIconRow = nullptr;
+        TArray<FReditusEnemyHUDEffect> DisplayedEffects;
         UTextBlock* HP = nullptr;
         UTextBlock* MP = nullptr;
         UTextBlock* ATB = nullptr;
@@ -313,6 +314,7 @@ private:
     void UpdateEnemyBadgePositions(const FGeometry& Geometry);
     UImage* MakeEnemyGlyph(int32 Glyph,float Size);
     void InitializeSkin();
+    void RefreshPartyStatuses(FCard& Card, const FReditusBattleHUDUnit& Data, bool bAlive);
     void RefreshAmpImages(UHorizontalBox* IconHost, TArray<UImage*>& Images, int32 Total, int32 Committed);
     void BuildCards();
     void Refresh();

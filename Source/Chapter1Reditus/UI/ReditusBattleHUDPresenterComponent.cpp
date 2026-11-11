@@ -160,7 +160,9 @@ namespace
     {
         using E=EReditusEnemyEffect;
         constexpr int32 Count=static_cast<int32>(E::Count);
+        Effects.Reset(); // Each call is a fresh snapshot, even if its output array is reused.
         bool Active[Count]={};
+        bool Ended[Count]={};
         int32 Turns[Count];
         for (int32& Value:Turns) Value=INDEX_NONE;
         const auto Record=[&](E Kind,int32 Remaining=INDEX_NONE)
@@ -169,26 +171,26 @@ namespace
             Active[Index]=true;
             if (Remaining>0) Turns[Index]=FMath::Max(Turns[Index],Remaining);
         };
-        struct FFlag { const TCHAR* PropertyName; E Kind; };
+        struct FFlag { const TCHAR* PropertyName; E Kind; bool bIndependent; };
         static const FFlag Flags[]={
-            {TEXT("Staggered"),E::Staggered},{TEXT("Is DOT"),E::Poison},{TEXT("isStun"),E::Stun},
-            {TEXT("Is Blind?"),E::Blind},{TEXT("IsSleeping"),E::Sleep},{TEXT("Is Confused"),E::Confusion},
-            {TEXT("NewConfused"),E::Confusion},{TEXT("IsCharmed??"),E::Charm},{TEXT("IsBerserk??"),E::Berserk},
-            {TEXT("IsTaunted"),E::Taunt},{TEXT("IsExhausted"),E::Exhausted},{TEXT("Swallowed"),E::Swallowed},
-            {TEXT("IsRegen"),E::Regen},{TEXT("IsDefending"),E::GuardUp},{TEXT("IsProtected"),E::GuardUp},
-            {TEXT("HitIncrease"),E::AccuracyUp}
+            {TEXT("Staggered"),E::Staggered,true},{TEXT("Is DOT"),E::Poison,false},{TEXT("isStun"),E::Stun,false},
+            {TEXT("Is Blind?"),E::Blind,false},{TEXT("IsSleeping"),E::Sleep,false},{TEXT("Is Confused"),E::Confusion,false},
+            {TEXT("NewConfused"),E::Confusion,false},{TEXT("IsCharmed??"),E::Charm,false},{TEXT("IsBerserk??"),E::Berserk,false},
+            {TEXT("IsTaunted"),E::Taunt,false},{TEXT("IsExhausted"),E::Exhausted,false},{TEXT("Swallowed"),E::Swallowed,true},
+            {TEXT("IsRegen"),E::Regen,false},{TEXT("IsDefending"),E::GuardUp,true},{TEXT("IsProtected"),E::GuardUp,false},
+            {TEXT("HitIncrease"),E::AccuracyUp,false}
         };
-        for (const auto& Flag:Flags) if (Boolean(Unit,Flag.PropertyName)) Record(Flag.Kind);
         if (IsValid(Unit))
         {
             static const FName TableGuardUpTag(TEXT("Reditus.TableBuff.GuardUp"));
             TInlineComponentArray<UActorComponent*> Components;
             Unit->GetComponents(Components);
-            for (const UActorComponent* Component : Components)
-                if (IsValid(Component) && Component->ComponentHasTag(TableGuardUpTag))
+            for (UActorComponent* Component : Components)
+                if (IsValid(Component))
                 {
-                    Record(E::GuardUp);
-                    break;
+                    if (Component->ComponentHasTag(TableGuardUpTag)) Record(E::GuardUp);
+                    if (Component->ComponentHasTag(TEXT("Reditus.TableBuff.BlockAmpGain")))
+                        Record(E::AmpBlock,static_cast<int32>(Number(Component,TEXT("AmpBlockTurnsRemaining"))));
                 }
         }
 
@@ -224,10 +226,55 @@ namespace
                 else if (Name.Contains(TEXT("HitIncrease"))) Kind=E::AccuracyUp;
                 else if (Name.Contains(TEXT("CritIncrease"))) Kind=E::CriticalUp;
                 else if (Name.Contains(TEXT("HitCounter"))) Kind=E::Counter;
-                if (Kind!=E::Count)
-                    Record(Kind,Boolean(Instance,TEXT("Permenant State")) ? INDEX_NONE :
-                        static_cast<int32>(Number(Instance,TEXT("turnLeft"),INDEX_NONE)));
+                if (Kind==E::Count) continue;
+                const bool bPersistent=Boolean(Instance,TEXT("Permenant State"));
+                const int32 Remaining=static_cast<int32>(Number(Instance,TEXT("turnLeft"),INDEX_NONE));
+                // Match the actual flag set/cleared by each reviewed legacy BP.
+                // Some buffs (Critical Up) have no boolean and use their timer.
+                const TCHAR* RequiredFlag=nullptr;
+                switch (Kind)
+                {
+                case E::Staggered: case E::Stun: case E::Swallowed: RequiredFlag=TEXT("isStun"); break;
+                case E::Poison: RequiredFlag=TEXT("Is DOT"); break;
+                case E::Blind: RequiredFlag=TEXT("Is Blind?"); break;
+                case E::Sleep: RequiredFlag=TEXT("IsSleeping"); break;
+                case E::Confusion: RequiredFlag=TEXT("Is Confused"); break;
+                case E::Charm: RequiredFlag=TEXT("IsCharmed??"); break;
+                case E::Berserk: RequiredFlag=TEXT("IsBerserk??"); break;
+                case E::Taunt: RequiredFlag=TEXT("IsTaunted"); break;
+                case E::Exhausted: RequiredFlag=TEXT("IsExhausted"); break;
+                case E::Regen: RequiredFlag=TEXT("IsRegen"); break;
+                case E::GuardUp: case E::Protected: RequiredFlag=TEXT("IsProtected"); break;
+                case E::AccuracyUp: RequiredFlag=TEXT("HitIncrease"); break;
+                case E::Counter: RequiredFlag=TEXT("SkillHitCounterActivated"); break;
+                default: break;
+                }
+                const bool bClearedFlag=RequiredFlag && CastField<FBoolProperty>(Property(Unit,RequiredFlag)) &&
+                    !Boolean(Unit,RequiredFlag);
+                const bool bTimeOnly=Number(Instance,TEXT("durationTurn"))<=0.0 &&
+                    Number(Instance,TEXT("durationLeft"))>0.0;
+                if (bClearedFlag || (!bPersistent && !bTimeOnly && Remaining!=INDEX_NONE && Remaining<=0))
+                {
+                    Ended[static_cast<int32>(Kind)]=true;
+                    // These legacy actors share gameplay flags with another
+                    // icon kind. Do not let those flags resurrect an ended icon.
+                    if (Kind==E::Staggered || Kind==E::Swallowed) Ended[static_cast<int32>(E::Stun)]=true;
+                    if (Kind==E::Protected) Ended[static_cast<int32>(E::GuardUp)]=true;
+                    continue;
+                }
+                Record(Kind,bPersistent ? INDEX_NONE : Remaining);
             }
+        }
+        for (const auto& Flag:Flags)
+        {
+            const int32 Index=static_cast<int32>(Flag.Kind);
+            // BP_Staggered uses isStun as its action lock. That shared flag is
+            // not a second status; only an explicit live stun provider adds it.
+            if (Flag.Kind==E::Stun && Active[static_cast<int32>(E::Staggered)] && !Active[Index]) continue;
+            // A live provider wins over an old ended entry of the same kind.
+            // Defend/native stagger remain independent of legacy buff actors.
+            if (Boolean(Unit,Flag.PropertyName) && (Flag.bIndependent || !Ended[Index] || Active[Index]))
+                Record(Flag.Kind);
         }
         for (int32 Index=0; Index<Count; ++Index)
             if (Active[Index])
@@ -1494,10 +1541,10 @@ void UReditusBattleHUDPresenterComponent::HandleNativeMenuCancelled(AActor* Unit
 void UReditusBattleHUDPresenterComponent::TickComponent(float DeltaTime,ELevelTick TickType,FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime,TickType,ThisTickFunction);
-    // Legacy Flee records the result before it persists the party and leaves
-    // the battle. Check from tick, outside that Blueprint's call stack.
+    // Recorded results precede reward/save/exit callbacks. Check from tick,
+    // outside the Blueprint call stack, and defer actor cleanup until exploration.
     FinishConfirmedDefeat();
-    FinishConfirmedFlee();
+    FinishConfirmedBattleExit();
     if (IsValid(HUD) && Boolean(GetOwner(),TEXT("isBattleOver"))) DestroyBattleHUD();
     if (!IsValid(HUD))
     {
@@ -1517,7 +1564,7 @@ void UReditusBattleHUDPresenterComponent::ResetTrackedEncounter()
     TrackedEncounter.Reset();
     TrackedEncounterUnits.Reset();
     bTrackingEncounter=false;
-    bStoppedClockForFlee=false;
+    bStoppedClockForExit=false;
     bRetriedOnLevelFleeExit=false;
     bDefeatFlowHandled=false;
 }
@@ -1574,72 +1621,100 @@ void UReditusBattleHUDPresenterComponent::FinishConfirmedDefeat()
     }
 }
 
-void UReditusBattleHUDPresenterComponent::FinishConfirmedFlee()
+bool UReditusBattleHUDPresenterComponent::TryBeginRecordedBattleResult(AActor* BattleController)
+{
+    // Compatibility for the short-lived installer gate. Until its node is
+    // removed, always forward the original event without inspecting the result,
+    // consuming a receipt, or starting a replacement victory path.
+    return IsValid(BattleController);
+}
+
+void UReditusBattleHUDPresenterComponent::FinishConfirmedBattleExit()
 {
     AActor* Controller=GetOwner();
-    if (!bTrackingEncounter || !Boolean(Controller,TEXT("isBattleOver"))) return;
-    // E_BattleResult::Fled is 2. Cancelled or failed attempts do not end battle.
+    if (!bTrackingEncounter || !IsValid(Controller) || !Boolean(Controller,TEXT("isBattleOver"))) return;
+    // Confirmed E_BattleResult: PlayerWon=0, EnemyWon=1, Fled=2.
+    // Defeat has its own dialogue/continue flow and never enters this cleanup.
+    const int32 Result=static_cast<int32>(Number(Controller,TEXT("battleResult"),-1.0));
+    if (Result==1) return;
     AActor* Encounter=TrackedEncounter.Get();
     auto* CurrentEncounter=Cast<AActor>(ObjectValue(Controller,TEXT("currentBattle")));
-    if (Number(Controller,TEXT("battleResult"),-1.0)==1.0) return;
-    if (Number(Controller,TEXT("battleResult"),-1.0)!=2.0 ||
-        (IsValid(CurrentEncounter) && CurrentEncounter!=Encounter))
+    if ((Result!=0 && Result!=2) || (IsValid(CurrentEncounter) && CurrentEncounter!=Encounter))
     {
         ResetTrackedEncounter();
         return;
     }
-    if (!bStoppedClockForFlee)
+    // This stop belongs only to the pre-existing Flee fallback. A win must
+    // finish its original action/turn/reward flow before any actor cleanup.
+    if (Result==2 && !bStoppedClockForExit)
     {
-        bStoppedClockForFlee=true;
+        bStoppedClockForExit=true;
 #if REDITUS_HUD_HAS_ATB
         if (auto* ATB=RunningATB(Controller)) ATB->StopATB();
 #endif
     }
-    // Preserve the existing exit and party-save flow, including the off-level
-    // transition. Its RemoveBattle override decides whether the encounter
-    // itself is destroyed (one-time) or retained (reusable).
-    if (!IsValid(Controller) || !IsValid(Player)) return;
-    // The original on-level exit is synchronous. If it did not run, retry it
-    // once while its UI and roster are intact. Off-level overrides own their delay.
-    if (!bRetriedOnLevelFleeExit && IsValid(Encounter) && Number(Player,TEXT("gameState"),-1.0)==2.0)
+    if (!IsValid(Controller) || !IsValid(Player) || !Boolean(Controller,TEXT("isBattleOver")) ||
+        Number(Controller,TEXT("battleResult"),-1.0)!=Result) return;
+    CurrentEncounter=Cast<AActor>(ObjectValue(Controller,TEXT("currentBattle")));
+    if (IsValid(CurrentEncounter) && CurrentEncounter!=Encounter)
+    {
+        ResetTrackedEncounter();
+        return;
+    }
+    // Keep collecting this encounter's roster while reward/exit UI is active.
+    // Removal can clear the living arrays before their missed destroy callbacks run.
+    if (IsValid(Encounter))
+        for (FName Roster : {FName(TEXT("enemyUnits")),FName(TEXT("playerUnits")),FName(TEXT("AllUnits"))})
+            for (AActor* Unit:Actors(Encounter,Roster))
+                TrackedEncounterUnits.Add(TWeakObjectPtr<AActor>(Unit));
+
+    // Flee retains the existing one-time on-level continuation. A victory must
+    // never replay OnBattleOver: doing so could repeat rewards or reopen its UI.
+    if (Result==2 && !bRetriedOnLevelFleeExit && IsValid(Encounter) && Number(Player,TEXT("gameState"),-1.0)==2.0)
         if (const UFunction* Exit=Controller->FindFunction(TEXT("SwitchToExploreMode")))
             if (Exit->GetOuter() && Exit->GetOuter()->GetFName()==FName(TEXT("BP_BattleController_C")))
             {
                 bRetriedOnLevelFleeExit=true;
                 CallNoArgumentEvent(Controller,TEXT("OnBattleOver"));
             }
+    // Explore mode is reached after the original reward/save/remove/possess
+    // flow. Until then, retain the cache even if the native HUD was removed.
     if (!IsValid(Controller) || !IsValid(Player) || Number(Player,TEXT("gameState"),-1.0)!=0.0 ||
-        !Boolean(Controller,TEXT("isBattleOver")) || !bTrackingEncounter ||
-        (TrackedEncounter.IsValid() && TrackedEncounter.Get()!=Encounter)) return;
+        !Boolean(Controller,TEXT("isBattleOver")) || Number(Controller,TEXT("battleResult"),-1.0)!=Result ||
+        !bTrackingEncounter || (TrackedEncounter.IsValid() && TrackedEncounter.Get()!=Encounter)) return;
 
-    // When a Blueprint removal broadcast misses a spawned unit, the cached
-    // roster still identifies it even if the encounter already cleared its arrays.
     AActor* ExplorePawn=Cast<AActor>(ObjectValue(Controller,TEXT("exploreCharacter")));
     AActor* ControlledPawn=Player->GetPawn();
     const auto Units=MoveTemp(TrackedEncounterUnits);
-    ResetTrackedEncounter();
+    ResetTrackedEncounter(); // Consume before callbacks; cleanup is idempotent.
     DestroyBattleHUD();
     if (IsValid(Encounter) && ObjectValue(Controller,TEXT("currentBattle"))==Encounter &&
         (Actors(Encounter,TEXT("enemyUnits")).Num()>0 || Actors(Encounter,TEXT("playerUnits")).Num()>0))
         CallNoArgumentEvent(Encounter,TEXT("RemoveBattle"));
 
-    auto* RemainingEncounter=Cast<AActor>(ObjectValue(Controller,TEXT("currentBattle")));
-    if (IsValid(RemainingEncounter) && RemainingEncounter!=Encounter) return;
     for (const auto& Entry:Units)
     {
+        if (!IsValid(Controller) || !IsValid(Player)) return;
+        auto* LiveEncounter=Cast<AActor>(ObjectValue(Controller,TEXT("currentBattle")));
+        if (IsValid(LiveEncounter) && LiveEncounter!=Encounter) return;
         AActor* Unit=Entry.Get();
-        if (!IsValid(Unit) || Unit==ExplorePawn || Unit==ControlledPawn || Unit==Encounter || Unit==Controller) continue;
+        if (!IsValid(Unit) || Unit==ExplorePawn || Unit==ControlledPawn || Unit==Player->GetPawn() ||
+            Unit==Encounter || Unit==Controller || Unit==Player) continue;
         UObject* UnitEncounter=ObjectValue(Unit,TEXT("battle"));
         if (IsValid(UnitEncounter) && UnitEncounter!=Encounter) continue;
+        UObject* UnitController=ObjectValue(Unit,TEXT("battleController"));
+        if (IsValid(UnitController) && UnitController!=Controller) continue;
         Unit->Destroy();
     }
+    if (!IsValid(Controller)) return;
+    auto* FinalEncounter=Cast<AActor>(ObjectValue(Controller,TEXT("currentBattle")));
+    if (IsValid(FinalEncounter) && FinalEncounter!=Encounter) return;
     if (IsValid(Encounter))
     {
         ClearEncounterUnits(Encounter,TEXT("enemyUnits"));
         ClearEncounterUnits(Encounter,TEXT("playerUnits"));
         ClearEncounterUnits(Encounter,TEXT("AllUnits"));
     }
-    UObject* FinalEncounter=ObjectValue(Controller,TEXT("currentBattle"));
     if (FinalEncounter==Encounter || !IsValid(FinalEncounter))
         SetObjectValue(Controller,TEXT("currentBattle"),nullptr);
 }
@@ -1776,6 +1851,12 @@ FReditusBattleHUDUnit UReditusBattleHUDPresenterComponent::ReadUnit(AActor* Unit
     Data.bCanHack=Data.CharacterID==HackCharacterID;
     Data.TotalAmp=static_cast<int32>(Number(Unit,TEXT("TotalAmpPoints")));
     Data.CommittedAmp=static_cast<int32>(Number(Unit,TEXT("CurrentAmpPointsInPlay")));
+    // BP_UnitBase status flags/maps are shared by player and enemy actors.
+    // Read before the ATB branch returns, including non-command owners.
+    ReadEnemyEffects(Unit,Data.StatusEffects);
+    for (const auto& Effect:Data.StatusEffects)
+        if (Effect.Kind==static_cast<uint8>(EReditusEnemyEffect::AmpBlock))
+            Data.AmpBlockTurns=FMath::Max(Data.AmpBlockTurns,Effect.Turns);
     Data.CurrentStamina=static_cast<int32>(Number(Unit,TEXT("CurrentStamina")));
     Data.bStaggered=Boolean(Unit,TEXT("Staggered"));
 #if REDITUS_HUD_HAS_ATB
@@ -2097,6 +2178,8 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
     }
     else bWarnedPartyOverflow=false;
     for (auto It=Readiness.CreateIterator(); It; ++It) if (!IsValid(It.Key())) It.RemoveCurrent();
+    ReconcileATBCommandContext();
+    if (!IsValid(HUD) || !IsValid(Controller)) return;
     AActor* ExecutingActor=Cast<AActor>(ObjectValue(Controller,TEXT("currentAttackingUnit")));
     bool bUsingATB=false;
     AActor* CurrentActor=CommandOwner(Controller,&bUsingATB);
@@ -2113,24 +2196,6 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
         Number(CurrentActor,TEXT("currentHP"))<=0.0 ||
         RunningATB(Controller)->GetUnitState(CurrentActor).CycleToken!=DraftCycle))
         ClearATBListTargeting();
-    // A ready ally can predate the previous owner's submission. Recover the
-    // vacant slot through the same Blueprint that resets input and shows FX.
-    if (bUsingATB && !PartyUnits.Contains(CurrentActor))
-    {
-        if (const auto* ATB=RunningATB(Controller))
-        {
-            const bool bHasReadyAlly=PartyUnits.ContainsByPredicate([ATB](AActor* Unit)
-            {
-                return IsValid(Unit) && Number(Unit,TEXT("currentHP"))>0.0 &&
-                    ATB->CanIssueCommands(Unit);
-            });
-            if (bHasReadyAlly && CallNoArgumentEvent(Controller,TEXT("PickNextATBCommandUnit")))
-            {
-                if (!IsValid(HUD) || !IsValid(Controller)) return;
-                CurrentActor=CommandOwner(Controller,&bUsingATB);
-            }
-        }
-    }
 #endif
     const bool IsPartyActor=PartyUnits.Contains(CurrentActor);
 #if REDITUS_HUD_HAS_ATB
@@ -2505,6 +2570,94 @@ bool UReditusBattleHUDPresenterComponent::SelectCommandUnit(AActor* Unit)
     }
 #endif
     return true;
+}
+
+void UReditusBattleHUDPresenterComponent::ReconcileATBCommandContext()
+{
+#if REDITUS_HUD_HAS_ATB
+    AActor* Controller=GetOwner();
+    const auto* ATB=RunningATB(Controller);
+    if (!ATB || !IsValid(HUD) || !IsValid(Player) || bRouting || HUD->bInputSuspended ||
+        UGameplayStatics::IsGamePaused(this) || Boolean(Controller,TEXT("isBattleOver"))) return;
+    const auto Eligible=[this,ATB](AActor* Unit)
+    {
+        return IsValid(Unit) && PartyUnits.Contains(Unit) && ATB->CanIssueCommands(Unit);
+    };
+    AActor* RawOwner=Cast<AActor>(ObjectValue(Controller,TEXT("ATBCommandUnit")));
+    AActor* Next=Eligible(RawOwner) ? RawOwner : nullptr;
+    // A late legacy cleanup may clear ownership while a valid list/draft is
+    // open. Preserve its eligible owner before considering another ready ally.
+    if (!Next && bDraftActive && Eligible(DraftOwner.Get()) &&
+        ATB->GetUnitState(DraftOwner.Get()).CycleToken==DraftCycle) Next=DraftOwner.Get();
+    if (!Next && Eligible(PendingMenuOwner)) Next=PendingMenuOwner;
+    if (!Next && Eligible(NativeMenuOwner)) Next=NativeMenuOwner;
+    if (!Next)
+        for (const auto& State:ATB->GetUnitStates())
+            if (Eligible(State.Unit)) { Next=State.Unit; break; }
+
+    const bool LostMenu=(NativeMenuSource && NativeMenuOwner!=Next) ||
+        (NativeMenuOwner && NativeMenuOwner!=Next) || (PendingMenuOwner && PendingMenuOwner!=Next) ||
+        (HUD->IsNativeListOpen() && !NativeMenuSource && !PendingMenuOwner);
+    const bool LostDraft=bDraftActive && (DraftOwner.Get()!=Next || !Next ||
+        ATB->GetUnitState(Next).CycleToken!=DraftCycle);
+    if (LostMenu || LostDraft || (!Next && HUD->IsMenuOpen()))
+    {
+        // Do not call the old Cancel handler: it can restart the new owner's turn.
+        ClearNativeMenu();
+        ClearATBListTargeting();
+        HUD->CloseListMenu();
+        HUD->SetTargetSelectionActive(false);
+        bExplicitTarget=false;
+        ExplicitEnemyTarget.Reset();
+    }
+    if (!Next)
+    {
+        if (RawOwner) SetObjectValue(Controller,TEXT("ATBCommandUnit"),nullptr);
+        if (RawOwner && ObjectValue(Controller,TEXT("CurrentCommandUnit"))==RawOwner)
+            SetObjectValue(Controller,TEXT("CurrentCommandUnit"),nullptr);
+        return;
+    }
+
+    const bool Changed=Next!=RawOwner;
+    const bool OwnedSurface=(NativeMenuOwner==Next && NativeMenuSource) || PendingMenuOwner==Next ||
+        (bDraftActive && DraftOwner.Get()==Next) || HUD->IsMenuOpen();
+    const int32 Selection=static_cast<int32>(Number(Next,TEXT("SelectType"),-1.0));
+    const bool Blocked=Boolean(Next,TEXT("isInputBlocked"));
+    const bool RootSurface=Selection==0 || Selection==3;
+    const bool RestoreRoot=!OwnedSurface && (Changed || (RootSurface &&
+        (Selection!=3 || Blocked || Boolean(Next,TEXT("Confirmed")) || Boolean(Next,TEXT("TargetSet")))));
+    const bool SyncCompatibility=Property(Controller,TEXT("CurrentCommandUnit")) &&
+        ObjectValue(Controller,TEXT("CurrentCommandUnit"))!=Next;
+    if (!Changed && !SyncCompatibility && !RestoreRoot) return;
+
+    TGuardValue<bool> Guard(bRouting,true);
+    UObject* PreviousCommand=ObjectValue(Controller,TEXT("CurrentCommandUnit"));
+    if (!SetObjectValue(Controller,TEXT("ATBCommandUnit"),Next)) return;
+    if (SyncCompatibility && !SetObjectValue(Controller,TEXT("CurrentCommandUnit"),Next))
+    {
+        SetObjectValue(Controller,TEXT("ATBCommandUnit"),RawOwner);
+        SetObjectValue(Controller,TEXT("CurrentCommandUnit"),PreviousCommand);
+        return;
+    }
+    if (RestoreRoot)
+    {
+        // Only a READY unit reaches this path. Leave the executing actor,
+        // action token, targets, AMP and start/end callbacks untouched.
+        ClearATBListTargeting();
+        HUD->SetTargetSelectionActive(false);
+        bExplicitTarget=false;
+        ExplicitEnemyTarget.Reset();
+        RestoreATBListCommands(Next);
+        if (!IsValid(HUD) || !IsValid(Controller) || RunningATB(Controller)!=ATB || !Eligible(Next) ||
+            ObjectValue(Controller,TEXT("ATBCommandUnit"))!=Next) return;
+        CallNoArgumentEvent(Next,TEXT("TargetReset"));
+        if (!IsValid(Controller) || RunningATB(Controller)!=ATB || !Eligible(Next)) return;
+        Next->EnableInput(Player);
+    }
+    LastRouteStatus=FString::Printf(TEXT("Recovered ATB command context: %s -> %s; cycle=%d; SelectType=%d; blocked=%d; restored root=%d"),
+        *GetNameSafe(RawOwner),*GetNameSafe(Next),ATB->GetUnitState(Next).CycleToken,Selection,Blocked,RestoreRoot);
+    if (bLogCommandRouting) UE_LOG(LogReditusBattleHUD,Log,TEXT("%s"),*LastRouteStatus);
+#endif
 }
 
 void UReditusBattleHUDPresenterComponent::SynchronizeCommandSelectionEffects(AActor* CommandUnit)

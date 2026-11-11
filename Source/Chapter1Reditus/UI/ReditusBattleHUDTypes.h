@@ -12,7 +12,7 @@ class USceneComponent;
 enum class EReditusEnemyEffect : uint8
 {
     Staggered, Poison, Stun, Blind, Sleep, Confusion, Charm, Berserk, Taunt, Exhausted, Swallowed,
-    Regen, GuardUp, Protected, AccuracyUp, CriticalUp, Counter, Count
+    Regen, GuardUp, Protected, AccuracyUp, CriticalUp, Counter, AmpBlock, Count
 };
 
 USTRUCT()
@@ -98,8 +98,11 @@ struct CHAPTER1REDITUS_API FReditusBattleHUDUnit
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") bool bCanHack = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") int32 TotalAmp = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") int32 CommittedAmp = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") int32 AmpBlockTurns = 0;
     /** Live BP_UnitBase.CurrentStamina; the HUD does not spend or restore it. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="HUD") int32 CurrentStamina = 0;
+    /** Shared live status snapshot; internal to the native player/enemy HUD. */
+    UPROPERTY() TArray<FReditusEnemyHUDEffect> StatusEffects;
 
     /** Cached KO cards may outlive their actor. A default snapshot is empty. */
     bool HasCharacter() const

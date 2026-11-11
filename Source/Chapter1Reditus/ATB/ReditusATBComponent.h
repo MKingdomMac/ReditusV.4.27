@@ -50,18 +50,18 @@ struct CHAPTER1REDITUS_API FReditusATBTuning
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Preparation", meta=(ClampMin="0.0")) float OverdrivePreparation = 1.2f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Preparation", meta=(ClampMin="0.0")) float DefendPreparation = 0.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Preparation", meta=(ClampMin="0.0")) float CustomPreparation = 0.35f;
-    /** Battle seconds per existing BP_Staggered turn. Zero uses this unit's normal full-gauge time. */
+    /** Battle seconds per existing BP_Staggered turn. Zero follows this unit's current ATB fill rate, including speed modifiers. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Stagger", meta=(ClampMin="0.0")) float StaggerRecoveryTurnSeconds = 0.f;
     /** Exact selected row ID takes priority over the legacy-class timing below. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Preparation") TMap<FName,float> PreparationByID;
     /** Walks the supplied class's ancestry; nearest configured parent wins. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Preparation") TMap<TSubclassOf<AActor>,float> PreparationByClass;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP") EReditusATBAmpTiming AmpTiming = EReditusATBAmpTiming::OnReady;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP") EReditusATBAmpTiming AmpTiming = EReditusATBAmpTiming::PersonalCycle;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP", meta=(ClampMin="0")) int32 AmpGain = 1;
     /** Personal Cycle mode only. On Ready includes the first cycle. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP") bool bAmpOnFirstCycle = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP") bool bAmpOnFirstCycle = true;
     /** Personal Cycle mode only. On Ready never awards for skipped cycles. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP") bool bAmpOnSkippedCycles = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP") bool bAmpOnSkippedCycles = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP", meta=(ClampMin="0.01")) float SharedAmpPulseSeconds = 5.f;
     /** Work limit per tick; surplus pulses are retained for following ticks. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP", meta=(ClampMin="1")) int32 MaxAmpPulsesPerTick = 8;

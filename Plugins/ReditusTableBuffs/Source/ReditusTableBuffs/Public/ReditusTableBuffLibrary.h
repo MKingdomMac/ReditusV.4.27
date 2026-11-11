@@ -24,7 +24,8 @@ enum class EReditusTableBuffEffect : uint8
     LegacyBlueprint,
     PeriodicHealing,
     PeriodicMP,
-    AggroFocus
+    AggroFocus,
+    BlockAmpGain
 };
 
 UENUM(BlueprintType)
@@ -35,7 +36,7 @@ enum class EReditusLegacyBuffDuration : uint8
     UntilCured
 };
 
-/** Authoring notes imported from the design CSV. These are not runtime rules. */
+/** Catalogue metadata, including the status key and side restrictions used by application. */
 USTRUCT(BlueprintType)
 struct REDITUSTABLEBUFFS_API FReditusBuffCatalogueDesign
 {
@@ -68,6 +69,7 @@ struct REDITUSTABLEBUFFS_API FReditusBuffCatalogueDesign
     UPROPERTY(EditAnywhere, Category="Application")
     float BaseChancePercent = 100.0f;
 
+    /** Optional key from E_StatusAilments (e.g. Poison) used to look up equipment resistance. */
     UPROPERTY(EditAnywhere, Category="Application")
     FName ResistanceStatusKey;
 
@@ -158,7 +160,7 @@ struct REDITUSTABLEBUFFS_API FReditusTableBuffRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Buff", meta=(ClampMin="0.0", ClampMax="100.0"))
     float ApplicationChancePercent = 100.f;
 
-    /** Full future cycles of the recipient. Recasting refreshes this value. */
+    /** Base future cycles of the recipient. Each committed AMP adds one cycle; recasting refreshes base plus AMP. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Buff", meta=(ClampMin="1", ClampMax="99"))
     int32 OwnerCycles = 3;
 
@@ -202,6 +204,14 @@ class REDITUSTABLEBUFFS_API UReditusTableBuffLibrary : public UBlueprintFunction
     GENERATED_BODY()
 
 public:
+    /** Called after BP_BuffBase.AddDuration so class-list buffs use recipient cycles under ATB. */
+    UFUNCTION(BlueprintCallable, Category="Reditus|Table Buffs")
+    static void SynchronizeLegacyBuffDuration(AActor* Buff);
+
+    /** AMP Block suppresses gains without removing or preventing use of stored AMP. */
+    UFUNCTION(BlueprintPure, Category="Reditus|Table Buffs")
+    static bool CanReceiveAmp(AActor* Unit);
+
     /** Apply the selected row to the caster. Call once when the skill successfully resolves. */
     UFUNCTION(BlueprintCallable, Category="Reditus|Table Buffs")
     static bool ApplyBuffByID(AActor* Caster, UDataTable* BuffTable, FName BuffID);
@@ -209,6 +219,10 @@ public:
     /** Pass the skill's resolved recipients. For hostile skills, pass only targets that passed the skill's hit and resistance checks. Returns the number applied or refreshed. */
     UFUNCTION(BlueprintCallable, Category="Reditus|Table Buffs", meta=(DisplayName="Apply Buff by ID to Targets"))
     static int32 ApplyBuffByIDToTargets(AActor* Caster, const TArray<AActor*>& EligibleTargets, UDataTable* BuffTable, FName BuffID);
+
+    /** Replaces the comparison in Apply Buffs' old class-list branch. Use its existing random roll. */
+    UFUNCTION(BlueprintPure, Category="Reditus|Table Buffs", meta=(DisplayName="Passes Legacy Buff Resistance Roll"))
+    static bool PassesLegacyBuffResistanceRoll(AActor* Target, TSubclassOf<AActor> BuffClass, float BaseChance, float Roll);
 
     /** Store the row ID from the player skill selection on the spawned skill actor. */
     UFUNCTION(BlueprintCallable, Category="Reditus|Table Buffs")
@@ -220,7 +234,7 @@ public:
     UFUNCTION(BlueprintCallable, Category="Reditus|Table Buffs", meta=(DisplayName="Apply Skill Buff Rows"))
     static bool ApplySkillBuffRows(AActor* Skill, UDataTable* SkillTable, AActor* EligibleTarget);
 
-    /** Insert on the player index in enemy aggro selectors. Falls back to the old index. */
+    /** Normal enemy single-target priority: active Aggro Focus, then living staggered players, then the original aggro index. Does not change committed targets. */
     UFUNCTION(BlueprintPure, Category="Reditus|Table Buffs")
     static int32 ResolveAggroFocusIndex(AActor* BattleController, AActor* Selector, int32 LegacyIndex);
 

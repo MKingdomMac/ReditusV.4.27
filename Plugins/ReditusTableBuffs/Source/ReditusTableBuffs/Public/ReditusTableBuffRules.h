@@ -41,7 +41,65 @@ namespace ReditusTableBuffRules
         return std::isfinite(Percent) && Percent >= 0.1f && Percent <= 100.f ? Percent / 100.f : 0.f;
     }
 
+    enum class EEquipmentResistance { Normal, Resist, Immune };
+
+    // Probabilities use the same 0..1 units as the legacy Blueprint roll.
+    inline float BuffApplicationChance(float BaseChance, EEquipmentResistance Resistance)
+    {
+        if (!std::isfinite(BaseChance) || BaseChance <= 0.f ||
+            Resistance == EEquipmentResistance::Immune) return 0.f;
+        const float Chance = BaseChance < 1.f ? BaseChance : 1.f;
+        return Resistance == EEquipmentResistance::Resist ? Chance * 0.5f : Chance;
+    }
+
+    inline bool PassesBuffApplicationRoll(float Chance, float Roll)
+    {
+        // Explicit zero check: an immune recipient cannot pass even at roll 0.
+        return Chance > 0.f && std::isfinite(Roll) && Roll >= 0.f && Roll <= Chance;
+    }
+
+    // Extra duration is per committed AMP, once per application/refresh, never
+    // per recipient or hit. Persistent effects do not call this helper.
+    inline int CyclesWithAmp(int BaseCycles, int CommittedAmp)
+    {
+        if (BaseCycles <= 0) return BaseCycles;
+        const int Bonus = CommittedAmp > 0 ? CommittedAmp : 0;
+        const int Maximum = (std::numeric_limits<int>::max)();
+        return Bonus > Maximum - BaseCycles ? Maximum : BaseCycles + Bonus;
+    }
+
     enum class EOwnerEnd { Ignored, CastingCycle, Advanced, Expired };
+
+    // Count blocked personal-turn awards, not unrelated units' turns or time.
+    // Expiry is deferred until that turn ends, so the last award stays blocked.
+    struct FAmpBlockLifetime
+    {
+        int Remaining = 0;
+        int LastEndToken = 0;
+        int BlockedToken = 0;
+
+        void StartOrRefresh(int Turns)
+        {
+            if (Remaining <= 0) LastEndToken = 0;
+            Remaining = Turns;
+            BlockedToken = 0;
+        }
+
+        bool BlockAward(int Token)
+        {
+            if (Remaining <= 0 || Token <= LastEndToken) return false;
+            BlockedToken = Token;
+            return true;
+        }
+
+        EOwnerEnd FinishOwnerCycle(int Token)
+        {
+            if (Remaining <= 0 || Token <= LastEndToken || Token != BlockedToken)
+                return EOwnerEnd::Ignored;
+            LastEndToken = Token;
+            return --Remaining == 0 ? EOwnerEnd::Expired : EOwnerEnd::Advanced;
+        }
+    };
 
     // The pilot self-casts during its own ATB cycle. That cycle does not
     // consume one of the future full cycles. A refresh follows the same rule.

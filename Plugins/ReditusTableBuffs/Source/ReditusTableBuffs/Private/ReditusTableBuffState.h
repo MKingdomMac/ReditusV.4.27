@@ -20,6 +20,11 @@ public:
     FName GetEffectSlot() const { return EffectSlot; }
     double DefenseDelta() const;
     uint64 GetAggroFocusOrder(const AActor* InBattle) const;
+    bool BlocksAmpGain() const;
+
+    /** Internal ATB gate. A suppressed award consumes one turn at Cycle End. */
+    UFUNCTION()
+    bool TryBlockAmpGain(UActorComponent* Clock, int32 CycleToken);
 
 protected:
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* TickFunction) override;
@@ -44,9 +49,14 @@ private:
     uint64 AggroFocusOrder = 0;
     FName EffectSlot = NAME_None;
     ReditusTableBuffRules::FGuardUpLifetime Lifetime;
+    ReditusTableBuffRules::FAmpBlockLifetime AmpBlockLifetime;
+
+    /** Read by the shared player/enemy status HUD. */
+    UPROPERTY(Transient)
+    int32 AmpBlockTurnsRemaining = 0;
 };
 
-/** Attached only to a legacy buff actor whose row explicitly sets Owner Cycles. */
+/** Recipient-cycle timer for table overrides and legacy buffs adopted by AddDuration. */
 UCLASS(Transient, NotBlueprintable)
 class UReditusLegacyTableBuffTimer : public UActorComponent
 {

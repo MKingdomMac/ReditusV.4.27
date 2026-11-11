@@ -1,9 +1,11 @@
 #include "ReditusATBComponent.h"
 #include "ReditusATBCore.h"
+#include "ReditusAmpRules.h"
 #include "Components/SceneComponent.h"
 #include "GameFramework/Actor.h"
 #include "Particles/ParticleSystemComponent.h"
 #include "UObject/UnrealType.h"
+#include "UObject/StructOnScope.h"
 
 namespace
 {
@@ -37,6 +39,34 @@ namespace
     {
         const FBoolProperty* Value=IsValid(Object) ? FindFProperty<FBoolProperty>(Object->GetClass(),PropertyName) : nullptr;
         return Value && Value->GetPropertyValue_InContainer(Object);
+    }
+
+    bool BlocksPersonalAmp(AActor* Unit,UActorComponent* Clock,int32 CycleToken)
+    {
+        bool bBlocked=false;
+        TInlineComponentArray<UActorComponent*> Components;
+        Unit->GetComponents(Components);
+        for (UActorComponent* Component:Components)
+        {
+            if (!IsValid(Component) || !Component->ComponentHasTag(TEXT("Reditus.TableBuff.BlockAmpGain"))) continue;
+            // The game module remains independent of the optional buff plugin.
+            // Verify the reflected signature before asking it to consume a turn.
+            UFunction* Function=Component->FindFunction(TEXT("TryBlockAmpGain"));
+            if (!Function || Function->NumParms!=3) continue;
+            const auto* ClockParam=FindFProperty<FObjectPropertyBase>(Function,TEXT("Clock"));
+            const auto* TokenParam=FindFProperty<FIntProperty>(Function,TEXT("CycleToken"));
+            const auto* Result=CastField<FBoolProperty>(Function->GetReturnProperty());
+            if (!ClockParam || ClockParam->PropertyClass!=UActorComponent::StaticClass() || !TokenParam || !Result ||
+                !ClockParam->HasAnyPropertyFlags(CPF_Parm) || ClockParam->HasAnyPropertyFlags(CPF_OutParm|CPF_ReturnParm) ||
+                !TokenParam->HasAnyPropertyFlags(CPF_Parm) || TokenParam->HasAnyPropertyFlags(CPF_OutParm|CPF_ReturnParm)) continue;
+            FStructOnScope Params(Function);
+            void* Memory=Params.GetStructMemory();
+            ClockParam->SetObjectPropertyValue_InContainer(Memory,Clock);
+            TokenParam->SetPropertyValue_InContainer(Memory,CycleToken);
+            Component->ProcessEvent(Function,Memory);
+            bBlocked=Result->GetPropertyValue_InContainer(Memory) || bBlocked;
+        }
+        return bBlocked;
     }
     bool IsIncapacitated(const AActor* Unit)
     {
@@ -543,9 +573,23 @@ TArray<FReditusATBUnitView> UReditusATBComponent::GetUnitStates() const
 }
 void UReditusATBComponent::RequestAmp(AActor* Unit)
 {
-    // AMP recharges throughout the fight, independently of legacy exhaustion.
-    if (bRunning && UnitAlive(Unit) && Tuning.AmpGain>0)
-        OnAmpGainRequested.Broadcast(Unit,Tuning.AmpGain);
+    if (!bRunning || !UnitAlive(Unit) || Tuning.AmpGain<=0) return;
+    const int32 CycleToken=GetUnitState(Unit).CycleToken;
+    if (BlocksPersonalAmp(Unit,this,CycleToken)) return;
+
+    // Keep the existing Blueprint callback for AMP feedback. For Reditus units,
+    // the final amount is authoritative even if a legacy exhaustion gate or a
+    // duplicated delegate listener remains in that callback.
+    auto* Total=FindFProperty<FIntProperty>(Unit->GetClass(),TEXT("TotalAmpPoints"));
+    auto* Capacity=FindFProperty<FIntProperty>(Unit->GetClass(),TEXT("MaxExhaustionPoints"));
+    const bool bHasAmp=Total && Capacity;
+    const int32 Expected=bHasAmp ? ReditusAmpRules::Award(Total->GetPropertyValue_InContainer(Unit),
+        Tuning.AmpGain,Capacity->GetPropertyValue_InContainer(Unit)) : 0;
+    const uint64 Epoch=ClockEpoch;
+    OnAmpGainRequested.Broadcast(Unit,Tuning.AmpGain);
+    if (bHasAmp && bRunning && Epoch==ClockEpoch && UnitAlive(Unit) &&
+        GetUnitState(Unit).CycleToken==CycleToken)
+        Total->SetPropertyValue_InContainer(Unit,Expected);
 }
 bool UReditusATBComponent::CompleteCycleStart(AActor* Unit,int32 CycleToken,bool bCanAct)
 {

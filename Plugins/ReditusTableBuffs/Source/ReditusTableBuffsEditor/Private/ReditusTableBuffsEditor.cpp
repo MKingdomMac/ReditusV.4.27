@@ -22,6 +22,7 @@
 #include "K2Node_Event.h"
 #include "K2Node_FunctionResult.h"
 #include "K2Node_GetArrayItem.h"
+#include "K2Node_GetClassDefaults.h"
 #include "K2Node_IfThenElse.h"
 #include "K2Node_Knot.h"
 #include "K2Node_MakeArray.h"
@@ -690,6 +691,146 @@ namespace
         FBlueprintEditorUtils::MarkBlueprintAsModified(Tech);
         return true;
     }
+
+    struct FEquipmentResistanceSite
+    {
+        UEdGraphPin* Condition = nullptr;
+        UEdGraphPin* Target = nullptr;
+        UEdGraphPin* BuffClass = nullptr;
+        UEdGraphPin* BaseChance = nullptr;
+        UEdGraphPin* Roll = nullptr;
+        bool bInstalled = false;
+    };
+
+    UK2Node_CallFunction* SourceCall(UEdGraphPin* Input, FName Name)
+    {
+        auto* Source = TraceSource(Input);
+        auto* Call = Source ? Cast<UK2Node_CallFunction>(Source->GetOwningNode()) : nullptr;
+        return Call && Call->FunctionReference.GetMemberName() == Name ? Call : nullptr;
+    }
+
+    bool FindEquipmentResistanceSite(const FBuffRowLoop& Outer, UFunction* Check, FEquipmentResistanceSite& Site)
+    {
+        auto* OuterNode = Outer.Body ? Outer.Body->GetOwningNode() : nullptr;
+        auto* Graph = OuterNode ? OuterNode->GetGraph() : nullptr;
+        if (!Graph || !Check || !Outer.Recipient) return false;
+        for (auto* Candidate : Graph->Nodes)
+        {
+            if (!IsVariableOutput(TraceSource(Pin(Candidate, TEXT("Array"))), TEXT("buffs"))) continue;
+            auto* Start = TraceSource(Pin(Candidate, TEXT("Exec")));
+            auto* Alive = Start ? Cast<UK2Node_IfThenElse>(Start->GetOwningNode()) : nullptr;
+            auto* Not = Alive ? SourceCall(Pin(Alive, TEXT("Condition")), TEXT("Not_PreBool")) : nullptr;
+            auto* Dead = SourceCall(Pin(Not, TEXT("A")), TEXT("IsUnitDead"));
+            if (!Alive || Start != Pin(Alive, TEXT("then")) || !Dead ||
+                TraceSource(Pin(Dead, UEdGraphSchema_K2::PN_Self)) != Outer.Recipient) continue;
+
+            auto* LoopBody = Pin(Candidate, TEXT("LoopBody"));
+            auto* Item = Pin(Candidate, TEXT("Array Element"));
+            auto* Entry = OneLink(LoopBody);
+            auto* RollBranch = Entry ? Cast<UK2Node_IfThenElse>(Entry->GetOwningNode()) : nullptr;
+            auto* Condition = Pin(RollBranch, TEXT("Condition"));
+            if (!Item || !RollBranch || Entry != Pin(RollBranch, UEdGraphSchema_K2::PN_Execute) || !Condition)
+                return false;
+
+            auto* Existing = SourceCall(Condition, Check->GetFName());
+            auto* Compare = SourceCall(Condition, TEXT("GreaterEqual_FloatFloat"));
+            if (!Existing && !Compare) return false;
+            auto* Chance = TraceSource(Pin(Existing ? Existing : Compare, Existing ? TEXT("BaseChance") : TEXT("A")));
+            auto* Roll = TraceSource(Pin(Existing ? Existing : Compare, Existing ? TEXT("Roll") : TEXT("B")));
+            auto* Defaults = Chance ? Cast<UK2Node_GetClassDefaults>(Chance->GetOwningNode()) : nullptr;
+            auto* Random = Roll ? Cast<UK2Node_CallFunction>(Roll->GetOwningNode()) : nullptr;
+            auto* Min = Pin(Random, TEXT("Min"));
+            auto* Max = Pin(Random, TEXT("Max"));
+            if (!Defaults || Chance->PinName != TEXT("successChance") ||
+                TraceSource(Pin(Defaults, TEXT("Class"))) != Item ||
+                !Random || Random->FunctionReference.GetMemberName() != TEXT("RandomFloatInRange") ||
+                Roll != Pin(Random, UEdGraphSchema_K2::PN_ReturnValue) ||
+                !Min || !Max || Min->LinkedTo.Num() != 0 || Max->LinkedTo.Num() != 0 ||
+                FCString::Atof(*Min->DefaultValue) != 0.f || FCString::Atof(*Max->DefaultValue) != 1.f ||
+                (Existing && (TraceSource(Pin(Existing, TEXT("Target"))) != Outer.Recipient ||
+                    TraceSource(Pin(Existing, TEXT("BuffClass"))) != Item)) || Site.Condition)
+                return false;
+
+            Site.Condition = Condition;
+            Site.Target = Outer.Recipient;
+            Site.BuffClass = Item;
+            Site.BaseChance = Chance;
+            Site.Roll = Roll;
+            Site.bInstalled = Existing != nullptr;
+        }
+        return Site.Condition != nullptr;
+    }
+
+    void InstallEquipmentBuffResistance()
+    {
+        if (!GEditor || GEditor->PlayWorld)
+        {
+            UE_LOG(LogReditusGuardUpInstall, Error, TEXT("Stop Play before running Reditus.InstallEquipmentBuffResistance."));
+            return;
+        }
+        auto* Tech = LoadObject<UBlueprint>(nullptr, SkillTargetingPath);
+        auto* Library = UReditusTableBuffLibrary::StaticClass();
+        auto* Apply = Library->FindFunctionByName(GET_FUNCTION_NAME_CHECKED(UReditusTableBuffLibrary, ApplySkillBuffRows));
+        auto* Check = Library->FindFunctionByName(GET_FUNCTION_NAME_CHECKED(UReditusTableBuffLibrary, PassesLegacyBuffResistanceRoll));
+        FBuffRowLoop Outer;
+        FEquipmentResistanceSite Site;
+        if (!FindBuffRowLoop(Tech, Apply, Outer) || !FindEquipmentResistanceSite(Outer, Check, Site))
+        {
+            UE_LOG(LogReditusGuardUpInstall, Error, TEXT("Could not recognize the legacy Apply Buffs chance check in BP_BattleTechsBase. No assets changed. Table buffs already use equipment resistance."));
+            return;
+        }
+        if (Site.bInstalled)
+        {
+            UE_LOG(LogReditusGuardUpInstall, Display, TEXT("Equipment buff resistance is already connected in BP_BattleTechsBase."));
+            return;
+        }
+
+        bool bOK = false;
+        {
+            const FScopedTransaction Transaction(NSLOCTEXT("ReditusBuffs", "InstallEquipmentBuffResistance", "Connect Equipment Buff Resistance"));
+            if (!Transaction.IsOutstanding()) return;
+            auto* Branch = Site.Condition->GetOwningNode();
+            auto* Graph = Branch->GetGraph();
+            Tech->Modify();
+            Graph->Modify();
+            Branch->Modify();
+            Site.Target->GetOwningNode()->Modify();
+            Site.BuffClass->GetOwningNode()->Modify();
+            Site.BaseChance->GetOwningNode()->Modify();
+            Site.Roll->GetOwningNode()->Modify();
+            if (auto* Old = OneLink(Site.Condition)) Old->GetOwningNode()->Modify();
+
+            auto* Call = AddCall(Graph, Check, Branch->NodePosX - 275, Branch->NodePosY + 216);
+            bOK = Link(Graph, Site.Target, Pin(Call, TEXT("Target"))) &&
+                Link(Graph, Site.BuffClass, Pin(Call, TEXT("BuffClass"))) &&
+                Link(Graph, Site.BaseChance, Pin(Call, TEXT("BaseChance"))) &&
+                Link(Graph, Site.Roll, Pin(Call, TEXT("Roll")));
+            if (bOK)
+            {
+                Site.Condition->BreakAllPinLinks();
+                bOK = Link(Graph, Pin(Call, UEdGraphSchema_K2::PN_ReturnValue), Site.Condition);
+            }
+            if (bOK)
+            {
+                FBlueprintEditorUtils::MarkBlueprintAsModified(Tech);
+                bOK = Compile(Tech);
+            }
+        }
+        if (!bOK)
+        {
+            const bool bUndone = GEditor->UndoTransaction(false);
+            if (bUndone) Compile(Tech);
+            UE_LOG(LogReditusGuardUpInstall, Error, TEXT("Could not connect legacy equipment resistance. Undo: %s."),
+                bUndone ? TEXT("succeeded") : TEXT("failed; do not save BP_BattleTechsBase"));
+            return;
+        }
+        UE_LOG(LogReditusGuardUpInstall, Display, TEXT("Equipment buff resistance connected. Save BP_BattleTechsBase."));
+    }
+
+    FAutoConsoleCommand GInstallEquipmentBuffResistance(
+        TEXT("Reditus.InstallEquipmentBuffResistance"),
+        TEXT("Connect the existing legacy Apply Buffs roll to equipment status resistance. Stop Play first."),
+        FConsoleCommandDelegate::CreateStatic(&InstallEquipmentBuffResistance));
 
     struct FSkillSpawnID
     {
