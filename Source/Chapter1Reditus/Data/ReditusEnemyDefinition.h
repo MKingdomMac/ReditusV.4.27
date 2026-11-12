@@ -5,6 +5,7 @@
 #include "UObject/SoftObjectPath.h"
 #include "Templates/SubclassOf.h"
 #include "ReditusUnitStats.h"
+#include "ReditusEnemyDeathVisuals.h"
 #include "ReditusEnemyDefinition.generated.h"
 
 class UPixel2DAnimInstance;
@@ -399,4 +400,8 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Projectile Sockets")
 	FName ProjectileSocketName2 = NAME_None;
+
+    // Boss decisions only; normal death appearance/timing inherit BP_EnemyUnitBase.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boss Death")
+    FReditusEnemyBossDeathOptions BossDeath;
 };

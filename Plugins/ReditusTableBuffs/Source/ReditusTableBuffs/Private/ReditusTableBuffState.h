@@ -51,6 +51,10 @@ private:
     ReditusTableBuffRules::FGuardUpLifetime Lifetime;
     ReditusTableBuffRules::FAmpBlockLifetime AmpBlockLifetime;
 
+    /** Live recipient-cycle countdown for native table-buff HUD indicators. */
+    UPROPERTY(Transient)
+    int32 BuffTurnsRemaining = 0;
+
     /** Read by the shared player/enemy status HUD. */
     UPROPERTY(Transient)
     int32 AmpBlockTurnsRemaining = 0;

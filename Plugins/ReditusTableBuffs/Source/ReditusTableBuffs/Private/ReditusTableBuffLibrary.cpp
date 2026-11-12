@@ -705,6 +705,7 @@ bool UReditusTableBuffState::Apply(AActor* InBattle, UActorComponent* Clock, UDa
             AmpBlockTurnsRemaining = AmpBlockLifetime.Remaining;
         }
         if (Slot == AggroFocusSlot) AggroFocusOrder = ++NextAggroFocusOrder;
+        BuffTurnsRemaining = Lifetime.Remaining;
     };
     if (ActiveTable.Get() == Table && ActiveID == ID && Battle.Get() == InBattle &&
         BattleClock.Get() == Clock && Lifetime.Remaining > 0)
@@ -796,6 +797,7 @@ void UReditusTableBuffState::OnOwnerCycleEnd(AActor* Unit, int32 CycleToken)
         // Keep the ordinary active-state test in sync with the AMP lifetime.
         Lifetime.Remaining = AmpBlockLifetime.Remaining;
     }
+    BuffTurnsRemaining = Lifetime.Remaining;
     if (Result == EEnd::Advanced || Result == EEnd::Expired)
     {
         const EEffect Effect = EffectFor(ActiveRow);
@@ -821,6 +823,7 @@ void UReditusTableBuffState::Clear(bool bNormalExpiry, bool bKeepTiming)
     AggroFocusOrder = 0;
     Lifetime = {};
     AmpBlockLifetime = {};
+    BuffTurnsRemaining = 0;
     AmpBlockTurnsRemaining = 0;
     ComponentTags.Remove(GuardUpTag);
     ComponentTags.Remove(AmpBlockSlot);

@@ -177,7 +177,7 @@ namespace
             {TEXT("Is Blind?"),E::Blind,false},{TEXT("IsSleeping"),E::Sleep,false},{TEXT("Is Confused"),E::Confusion,false},
             {TEXT("NewConfused"),E::Confusion,false},{TEXT("IsCharmed??"),E::Charm,false},{TEXT("IsBerserk??"),E::Berserk,false},
             {TEXT("IsTaunted"),E::Taunt,false},{TEXT("IsExhausted"),E::Exhausted,false},{TEXT("Swallowed"),E::Swallowed,true},
-            {TEXT("IsRegen"),E::Regen,false},{TEXT("IsDefending"),E::GuardUp,true},{TEXT("IsProtected"),E::GuardUp,false},
+            {TEXT("IsRegen"),E::Regen,false},{TEXT("IsProtected"),E::GuardUp,false},
             {TEXT("HitIncrease"),E::AccuracyUp,false}
         };
         if (IsValid(Unit))
@@ -188,7 +188,11 @@ namespace
             for (UActorComponent* Component : Components)
                 if (IsValid(Component))
                 {
-                    if (Component->ComponentHasTag(TableGuardUpTag)) Record(E::GuardUp);
+                    if (Component->ComponentHasTag(TableGuardUpTag))
+                    {
+                        const int32 Remaining=static_cast<int32>(Number(Component,TEXT("BuffTurnsRemaining"),INDEX_NONE));
+                        if (Remaining!=0) Record(E::GuardUp,Remaining);
+                    }
                     if (Component->ComponentHasTag(TEXT("Reditus.TableBuff.BlockAmpGain")))
                         Record(E::AmpBlock,static_cast<int32>(Number(Component,TEXT("AmpBlockTurnsRemaining"))));
                 }
@@ -272,7 +276,8 @@ namespace
             // not a second status; only an explicit live stun provider adds it.
             if (Flag.Kind==E::Stun && Active[static_cast<int32>(E::Staggered)] && !Active[Index]) continue;
             // A live provider wins over an old ended entry of the same kind.
-            // Defend/native stagger remain independent of legacy buff actors.
+            // Native stagger remains independent of legacy buff actors.
+            // Defend/block is an action stance, not a Protect status provider.
             if (Boolean(Unit,Flag.PropertyName) && (Flag.bIndependent || !Ended[Index] || Active[Index]))
                 Record(Flag.Kind);
         }

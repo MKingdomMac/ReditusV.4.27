@@ -7,6 +7,7 @@ public class Chapter1Reditus : ModuleRules
 	public Chapter1Reditus(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+        PublicDependencyModuleNames.Add("ReditusEnemyDeath");
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "UMG", "Slate", "SlateCore", "Paper2D", "Pixel2D", "PaperZD" });
 
