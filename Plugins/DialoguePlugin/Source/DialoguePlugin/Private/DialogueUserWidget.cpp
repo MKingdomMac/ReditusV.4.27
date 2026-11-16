@@ -220,3 +220,15 @@ void UDialogueUserWidget::GetFirstChars(FString originalString, bool isRichText,
 		finished = true;
 	}
 }
+
+FDialogueWidgetInitializedNative& UDialogueUserWidget::OnInitializedNative()
+{
+    static FDialogueWidgetInitializedNative Delegate;
+    return Delegate;
+}
+
+void UDialogueUserWidget::NativeOnInitialized()
+{
+    Super::NativeOnInitialized();
+    OnInitializedNative().Broadcast(this);
+}

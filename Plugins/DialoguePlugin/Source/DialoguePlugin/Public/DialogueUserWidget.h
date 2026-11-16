@@ -7,6 +7,9 @@
 #include "Blueprint/UserWidget.h"
 #include "DialogueUserWidget.generated.h"
 
+class UDialogueUserWidget;
+DECLARE_MULTICAST_DELEGATE_OneParam(FDialogueWidgetInitializedNative, UDialogueUserWidget*);
+
 /**
  * 
  */
@@ -15,6 +18,11 @@ class DIALOGUEPLUGIN_API UDialogueUserWidget : public UUserWidget
 {
 	GENERATED_BODY()
 public:
+	// Optional presentation hook; runs after Blueprint widget initialization and before Slate construction.
+	static FDialogueWidgetInitializedNative& OnInitializedNative();
+
+	virtual void NativeOnInitialized() override;
+
 	// Conditions
 	UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category = "Dialogue UI")
 	bool IsConditionsMetForNode(FDialogueNode Node);

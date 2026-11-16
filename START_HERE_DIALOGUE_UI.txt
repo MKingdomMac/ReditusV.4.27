@@ -1,0 +1,56 @@
+REDITUS QUEST NPC + DIALOGUE UI — VERSION 1.1.3 — UE4.27
+
+1. CLOSE UNREAL EDITOR.
+
+2. Merge this ZIP's Plugins folder into your project's existing Plugins folder.
+   Replace the included files. Keep the rest of DialoguePlugin and its assets:
+   this package includes only its two native initialization-hook source files.
+
+3. Rebuild DEVELOPMENT EDITOR / WIN64 with Unreal closed, then reopen Unreal.
+   Regenerate project files first only if Visual Studio does not find new files.
+
+4. PLAY your map and talk to your same working TestNPC (AmbushDialogue1).
+   No setup command or new NPC/table/quest asset is required for this update.
+
+BUILD FIX IN 1.1.3
+  Removes unavailable SizeBox getter calls and renames local canvas-slot
+  variables that shadow UWidget::Slot (the reported C2039/C4458 errors).
+
+CHANGES IN 1.1.2
+  - Floating dialogue on a fully transparent background; fine gold ornament.
+  - Original fixed portrait bounds captured from your widget before reparenting.
+    The reference screenshot's oversized portrait is not copied. Aspect ratio
+    is preserved. Unmeasurable stretched slots use a conservative fallback.
+  - Centered, translucent response choices with gold details and teal selection.
+  - Small Advance / Auto / Log / Hold Skip strip only in Level Sequence dialogue.
+    No footer or added playback shortcuts in ordinary NPC conversations.
+  - Click the dialogue to advance; click a response to choose it. Existing
+    keyboard/gamepad confirm and reply navigation still use your widget.
+
+QUEST SYSTEM INCLUDED
+  The existing reusable NPC, quest markers/objectives, quest bridge and editor
+  setup/export code are carried forward unchanged from the recovered v1.1.0.
+  Quest progress, rewards and saving remain with your existing controller.
+
+SEQUENCE CONTROLS
+  Advance/choose: existing Enter/Space/A and reply navigation
+  Auto: F6 / Y / click Auto
+  Log: F7 / X / click Log; Escape/B closes it
+  Hold Skip: Shift / RT / hold Skip
+
+  Auto and Skip stop at choices. Release and press Skip again after choosing.
+  They advance eligible dialogue lines; full Level Sequence skipping is pending.
+  Existing blocking/sequence-resume behavior is retained. A sequence paused at
+  dialogue counts as sequence dialogue; a retained stopped player does not.
+
+The layout is generated at runtime. DemoDialogueWidget's Designer still shows
+its original layout; use Play to inspect the update.
+
+Optional fallback before opening a NEW conversation:
+  Reditus.DialogueStyle 0
+Enable again:
+  Reditus.DialogueStyle 1
+
+Offline quest/bridge, dialogue binding and playback policy checks passed.
+Unreal compilation, final appearance, sequence detection and project gameplay
+have NOT been tested here. See README_FIRST.md and VALIDATION.md.
