@@ -132,7 +132,9 @@ public:
     // inventory/reward handler; they are never silently discarded.
     UFUNCTION(BlueprintCallable, Category="Reditus|New Quests")
     bool TurnInQuest(FDataTableRowHandle Quest, APlayerController* Player);
-    // Fetch text mode may use the built-in item/gold exchange if no custom handler is bound.
+    // Shared by authored dialogue and fetch text; a bound custom handler takes priority.
+    bool TurnInDialogueQuest(FDataTableRowHandle Quest, APlayerController* Player);
+    // Retained native entry point for the generated fetch flow.
     bool TurnInFetchQuest(FDataTableRowHandle Quest, APlayerController* Player);
     UFUNCTION(BlueprintCallable, Category="Reditus|New Quests")
     bool ConfirmQuestDelivery(FDataTableRowHandle Quest, FGuid ReceiptID);
@@ -176,6 +178,7 @@ private:
     bool BuildStepDelivery(FDataTableRowHandle Quest, FName ActionID, FReditusQuestDelivery& Delivery) const;
     void NotifyQuest(FDataTableRowHandle Quest, EReditusQuestNoticeKind Kind);
     void PumpSequences();
+    bool AreQuestTimersPaused() const;
     void EndSequence(bool Completed);
     UFUNCTION() void SequenceFinished();
     UFUNCTION() void SequenceStopped();

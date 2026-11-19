@@ -1,3 +1,4 @@
+#include "ReditusQuestCatalog.h"
 #include "ReditusQuestSubsystem.h"
 #include "ReditusQuestRewardText.h"
 #include "UObject/UnrealType.h"
@@ -34,7 +35,7 @@ FText UReditusQuestSubsystem::GetQuestRewardSummary(FDataTableRowHandle Quest)
 {
     FReditusQuestSnapshot Snapshot;
     if (!ReadQuest(Quest, Snapshot)) return FText::GetEmpty();
-    const auto* Row = Quest.DataTable->FindRow<FReditusQuestDefinition>(Quest.RowName, TEXT("Quest rewards"), false);
+    const auto* Row = ReditusQuestCatalog::Definition(Quest);
     if (!Row) return FText::GetEmpty();
     std::vector<int> Amounts;
     for (const auto& Reward : Row->Rewards.Items)

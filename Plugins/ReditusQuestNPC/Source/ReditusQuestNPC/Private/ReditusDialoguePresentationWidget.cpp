@@ -1,5 +1,7 @@
 #include "ReditusDialoguePresentationWidget.h"
+#include "ReditusQuestNPCComponent.h"
 #include "ReditusQuestNPCReflection.h"
+#include "ReditusSequenceSkip.h"
 #include "Dialogue.h"
 #include "DialogueUserWidget.h"
 #include "Blueprint/WidgetTree.h"
@@ -7,11 +9,14 @@
 #include "Components/AudioComponent.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
+#include "Components/ButtonSlot.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
 #include "Components/PanelWidget.h"
 #include "Components/RichTextBlock.h"
 #include "Components/ScaleBox.h"
@@ -23,6 +28,7 @@
 #include "Framework/Application/IInputProcessor.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Engine/GameInstance.h"
+#include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/PlatformTime.h"
 #include "InputCoreTypes.h"
@@ -36,6 +42,12 @@ DEFINE_LOG_CATEGORY_STATIC(LogReditusDialogueUI, Log, All);
 
 namespace ReditusDialogueUI
 {
+    UReditusSequenceSkipSubsystem* SequenceSkip(const UObject* Context)
+    {
+        auto* Instance = UGameplayStatics::GetGameInstance(Context);
+        return Instance ? Instance->GetSubsystem<UReditusSequenceSkipSubsystem>() : nullptr;
+    }
+
     const FLinearColor Gold(0.87f, 0.64f, 0.22f, 1.f);
     const FLinearColor GoldDim(0.37f, 0.27f, 0.11f, 1.f);
     const FLinearColor Navy(0.018f, 0.035f, 0.062f, .98f);
@@ -92,17 +104,16 @@ namespace ReditusDialogueUI
     UMovieSceneSequencePlayer* SequencePlayer(UDialogueUserWidget* Widget)
     {
         if (!IsValid(Widget)) return nullptr;
-        // The exported widget reaches battleController THROUGH JrpgController.
-        // It has no direct battleController property of its own.
-        UObject* Controller = ReditusQuestNPCReflection::ReadObject(Widget, TEXT("JrpgController"));
-        if (!IsValid(Controller)) Controller = Widget->GetOwningPlayer();
+        auto* Controller = Widget->GetOwningPlayer();
+        if (!IsValid(Controller))
+            Controller = Cast<APlayerController>(ReditusQuestNPCReflection::ReadObject(Widget, TEXT("JrpgController")));
+        if (auto* System = SequenceSkip(Widget))
+            if (auto* Player = System->FindSequencePlayer(Controller)) return Player;
+
+        // The legacy battle dialogue already has its own playback reference
+        // and authored continuation. Exploration uses the sequence subsystem.
         UObject* Battle = ReditusQuestNPCReflection::ReadObject(Controller, TEXT("battleController"));
         auto* Player = Cast<UMovieSceneSequencePlayer>(ReditusQuestNPCReflection::ReadObject(Battle, TEXT("CurrentLevelSequence")));
-        if (IsValid(Player) && (Player->IsPlaying() || Player->IsPaused())) return Player;
-        // Exploration sequences use the controller's existing sequence actor.
-        // Preserve the trailing space in this actual Blueprint member name.
-        UObject* Actor = ReditusQuestNPCReflection::ReadObject(Controller, TEXT("Current Sequence "));
-        Player = Cast<UMovieSceneSequencePlayer>(ReditusQuestNPCReflection::ReadObject(Actor, TEXT("SequencePlayer")));
         return IsValid(Player) && (Player->IsPlaying() || Player->IsPaused()) ? Player : nullptr;
     }
 
@@ -209,6 +220,19 @@ namespace ReditusDialogueUI
         Result->SetContent(Text); return Result;
     }
 
+    void ChoiceButtonStyle(UButton* Button, bool Selected)
+    {
+        FButtonStyle Style;
+        // Fade the brushes independently so choice text stays fully readable.
+        Style.SetNormal(FSlateColorBrush(Selected ? FLinearColor(.055f, .30f, .39f, .38f) : FLinearColor(.025f, .065f, .10f, .06f)));
+        Style.SetHovered(FSlateColorBrush(FLinearColor(.07f, .35f, .44f, .46f)));
+        Style.SetPressed(FSlateColorBrush(FLinearColor(.09f, .40f, .48f, .54f)));
+        Style.SetDisabled(Style.Normal);
+        Style.SetNormalPadding(FMargin(20, 14)); Style.SetPressedPadding(FMargin(21, 15, 19, 13));
+        Button->SetStyle(Style);
+        Button->IsFocusable = false;
+    }
+
     UCanvasPanelSlot* Anchored(UCanvasPanel* Canvas, UWidget* Child, FAnchors Anchors, int32 Z = 0)
     {
         auto* CanvasSlot = Canvas->AddChildToCanvas(Child);
@@ -244,12 +268,12 @@ namespace ReditusDialogueUI
         V->SetPosition(FVector2D(Right ? -9.f : 7.f, Bottom ? -22.f : 7.f)); V->SetSize(FVector2D(2, 15));
     }
 
-    UBorder* GlassFrame(UWidgetTree* Tree, UWidget* Content, FMargin Padding)
+    UBorder* GlassFrame(UWidgetTree* Tree, UWidget* Content, FMargin Padding, FLinearColor Tint = Mist)
     {
         auto* Holder = Solid(Tree, FLinearColor::Transparent);
         auto* Canvas = Tree->ConstructWidget<UCanvasPanel>();
         Holder->SetContent(Canvas);
-        Anchored(Canvas, Solid(Tree, Mist), FAnchors(0, 0, 1, 1));
+        Anchored(Canvas, Solid(Tree, Tint), FAnchors(0, 0, 1, 1));
         auto* Face = Solid(Tree, FLinearColor::Transparent, Padding);
         Face->SetContent(Content);
         Anchored(Canvas, Face, FAnchors(0, 0, 1, 1), 1);
@@ -264,6 +288,58 @@ namespace ReditusDialogueUI
         Right->SetOffsets(FMargin(-1, 22, 1, 22));
         Corner(Tree, Canvas, 0, 0, false, false); Corner(Tree, Canvas, 1, 0, true, false);
         Corner(Tree, Canvas, 0, 1, false, true); Corner(Tree, Canvas, 1, 1, true, true);
+        return Holder;
+    }
+
+    void OrnamentStroke(UWidgetTree* Tree, UCanvasPanel* Canvas, FAnchors Anchor, FVector2D Start, FVector2D End)
+    {
+        const FVector2D Direction = End - Start;
+        auto* Stroke = Solid(Tree, FLinearColor(1.f, .78f, .34f, .82f));
+        Stroke->SetVisibility(ESlateVisibility::HitTestInvisible);
+        Stroke->SetRenderTransformPivot(FVector2D(0.f, .5f));
+        Stroke->SetRenderTransformAngle(FMath::RadiansToDegrees(FMath::Atan2(Direction.Y, Direction.X)));
+        auto* StrokeSlot = Anchored(Canvas, Stroke, Anchor, 12);
+        StrokeSlot->SetPosition(Start);
+        StrokeSlot->SetSize(FVector2D(Direction.Size(), 1.f));
+    }
+
+    void PromptFlourish(UWidgetTree* Tree, UCanvasPanel* Canvas, float X, float Y, bool Right, bool Bottom)
+    {
+        const float Horizontal = Right ? -1.f : 1.f;
+        const float Vertical = Bottom ? -1.f : 1.f;
+        const FAnchors Anchor(X, Y);
+        const TArray<FVector2D> Path = {
+            FVector2D(5, 20), FVector2D(5, 12), FVector2D(9, 7), FVector2D(15, 7),
+            FVector2D(19, 11), FVector2D(15, 15), FVector2D(11, 11), FVector2D(11, 3), FVector2D(28, 3)
+        };
+        for (int32 Index = 1; Index < Path.Num(); ++Index)
+            OrnamentStroke(Tree, Canvas, Anchor,
+                FVector2D(Path[Index - 1].X * Horizontal, Path[Index - 1].Y * Vertical),
+                FVector2D(Path[Index].X * Horizontal, Path[Index].Y * Vertical));
+    }
+
+    UBorder* PromptFrame(UWidgetTree* Tree, UWidget* Content)
+    {
+        auto* Holder = GlassFrame(Tree, Content, FMargin(0), FLinearColor(.015f, .025f, .04f, .08f));
+        auto* Canvas = Cast<UCanvasPanel>(Holder->GetContent());
+        // Decorative strokes never cover the prompt's mouse hit surface.
+        for (int32 Index = 0; Index < Canvas->GetChildrenCount(); ++Index)
+            if (Index != 1) Canvas->GetChildAt(Index)->SetVisibility(ESlateVisibility::HitTestInvisible);
+        PromptFlourish(Tree, Canvas, 0.f, 0.f, false, false);
+        PromptFlourish(Tree, Canvas, 1.f, 0.f, true, false);
+        PromptFlourish(Tree, Canvas, 0.f, 1.f, false, true);
+        PromptFlourish(Tree, Canvas, 1.f, 1.f, true, true);
+        for (float Edge : {0.f, 1.f})
+        {
+            auto* Diamond = Solid(Tree, FLinearColor(1.f, .84f, .48f, .92f));
+            Diamond->SetVisibility(ESlateVisibility::HitTestInvisible);
+            Diamond->SetRenderTransformAngle(45.f);
+            auto* DiamondSlot = Anchored(Canvas, Diamond, FAnchors(.5f, Edge), 13);
+            DiamondSlot->SetAlignment(FVector2D(.5f, .5f));
+            DiamondSlot->SetSize(FVector2D(4, 4));
+            OrnamentStroke(Tree, Canvas, FAnchors(.5f, Edge), FVector2D(-24, 0), FVector2D(-8, 0));
+            OrnamentStroke(Tree, Canvas, FAnchors(.5f, Edge), FVector2D(8, 0), FVector2D(24, 0));
+        }
         return Holder;
     }
 
@@ -306,7 +382,13 @@ public:
     virtual bool HandleMouseButtonDownEvent(FSlateApplication& App, const FPointerEvent& Event) override
     {
         (void)App; (void)Event;
-        if (Owner.IsValid() && Owner->CanRouteInput()) Owner->UsingGamepad = false;
+        if (Owner.IsValid()) Owner->UsingGamepad = false;
+        return false;
+    }
+    virtual bool HandleMouseMoveEvent(FSlateApplication& App, const FPointerEvent& Event) override
+    {
+        (void)App;
+        if (Owner.IsValid() && !Event.GetCursorDelta().IsNearlyZero()) Owner->UsingGamepad = false;
         return false;
     }
 };
@@ -413,13 +495,36 @@ void UReditusDialoguePresentationWidget::BuildLayout()
     // construction so a normal NPC conversation never flashes a footer.
     auto* Footer = WidgetTree->ConstructWidget<UHorizontalBox>();
     SequenceControls = Footer;
-    AdvanceButton = Button(WidgetTree, FText::FromString(TEXT("ENTER  Advance")), AdvanceLabel, 15);
-    AutoButton = Button(WidgetTree, FText::FromString(TEXT("F6  Auto")), AutoLabel, 15);
-    LogButton = Button(WidgetTree, FText::FromString(TEXT("F7  Log")), LogLabel, 15);
-    SkipButton = Button(WidgetTree, FText::FromString(TEXT("SHIFT  Hold skip")), SkipLabel, 15);
+    AdvanceButton = Button(WidgetTree, FText::FromString(TEXT("ENTER  Advance")), AdvanceLabel, 17);
+    AutoButton = Button(WidgetTree, FText::FromString(TEXT("F6  Auto")), AutoLabel, 17);
+    LogButton = Button(WidgetTree, FText::FromString(TEXT("F7  Log")), LogLabel, 17);
+    SkipButton = Button(WidgetTree, FText::FromString(TEXT("SHIFT  Hold skip")), SkipLabel, 17);
     for (auto* B : {AdvanceButton, AutoButton, LogButton, SkipButton})
     {
-        auto* S = Footer->AddChildToHorizontalBox(B); S->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); S->SetPadding(FMargin(4, 0));
+        FButtonStyle Style;
+        Style.SetNormal(FSlateColorBrush(FLinearColor::Transparent));
+        Style.SetHovered(FSlateColorBrush(FLinearColor(.05f, .20f, .24f, .18f)));
+        Style.SetPressed(FSlateColorBrush(FLinearColor(.08f, .27f, .30f, .24f)));
+        Style.SetDisabled(FSlateColorBrush(FLinearColor::Transparent));
+        Style.SetNormalPadding(FMargin(12, 8));
+        Style.SetPressedPadding(FMargin(13, 9, 11, 7));
+        B->SetStyle(Style);
+        // Draw the caption beside the hit surface so waiting buttons keep
+        // readable labels while retaining their normal disabled input state.
+        UWidget* Caption = B->GetContent();
+        B->SetContent(nullptr);
+        auto* Content = WidgetTree->ConstructWidget<UOverlay>();
+        auto* HitSlot = Content->AddChildToOverlay(B);
+        HitSlot->SetHorizontalAlignment(HAlign_Fill);
+        HitSlot->SetVerticalAlignment(VAlign_Fill);
+        Caption->SetVisibility(ESlateVisibility::HitTestInvisible);
+        auto* CaptionSlot = Content->AddChildToOverlay(Caption);
+        CaptionSlot->SetHorizontalAlignment(HAlign_Center);
+        CaptionSlot->SetVerticalAlignment(VAlign_Center);
+        auto* Prompt = PromptFrame(WidgetTree, Content);
+        auto* S = Footer->AddChildToHorizontalBox(Prompt);
+        S->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+        S->SetPadding(FMargin(4, 0));
     }
     AdvanceButton->OnClicked.AddDynamic(this, &UReditusDialoguePresentationWidget::Advance);
     AutoButton->OnClicked.AddDynamic(this, &UReditusDialoguePresentationWidget::ToggleAuto);
@@ -430,13 +535,10 @@ void UReditusDialoguePresentationWidget::BuildLayout()
     Footer->SetVisibility(ESlateVisibility::Collapsed);
 
     auto* ChoiceColumn = WidgetTree->ConstructWidget<UVerticalBox>();
-    auto* ChoiceTitle = Label(WidgetTree, FText::FromString(TEXT("\u2500\u2500   \u25c6   YOUR RESPONSE   \u25c6   \u2500\u2500")), 14, Gold, true);
-    ChoiceTitle->SetJustification(ETextJustify::Center);
-    ChoiceColumn->AddChildToVerticalBox(ChoiceTitle)->SetPadding(FMargin(5, 0, 5, 12));
     auto* ChoiceScroll = WidgetTree->ConstructWidget<UScrollBox>();
     ChoiceRows = WidgetTree->ConstructWidget<UVerticalBox>(); ChoiceScroll->AddChild(ChoiceRows);
     ChoiceColumn->AddChildToVerticalBox(ChoiceScroll)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-    ChoiceFrame = GlassFrame(WidgetTree, ChoiceColumn, FMargin(22, 18));
+    ChoiceFrame = GlassFrame(WidgetTree, ChoiceColumn, FMargin(18, 14), FLinearColor(.018f, .035f, .062f, .22f));
     auto* ChoiceSlot = Anchored(Canvas, ChoiceFrame, FAnchors(.18f, .48f, .82f, .48f), 15);
     ChoiceSlot->SetAlignment(FVector2D(0, .5f)); ChoiceSlot->SetOffsets(FMargin(0, 0, 0, 260));
     ChoiceFrame->SetVisibility(ESlateVisibility::Collapsed);
@@ -469,11 +571,14 @@ void UReditusDialoguePresentationWidget::BuildLayout()
 void UReditusDialoguePresentationWidget::NativeConstruct()
 {
     bPresentationReady = false;
+    bIsFocusable = true;
+    SetCursor(EMouseCursor::None);
     SetRenderOpacity(0.f);
     ApplyTextStyle();
     Super::NativeConstruct(); LastTime = FPlatformTime::Seconds();
-    bool Keyboard = true;
-    if (ReditusDialogueUI::ReadBool(UGameplayStatics::GetGameInstance(this), TEXT("UsingKeyboard"), Keyboard)) UsingGamepad = !Keyboard;
+    // Begin with keyboard prompts. Actual input selects the displayed device,
+    // including while the source dialogue is temporarily blocking interaction.
+    UsingGamepad = false;
     if (GetOwningPlayer()) NeedTriggerRelease = GetOwningPlayer()->GetInputAnalogKeyState(EKeys::Gamepad_RightTriggerAxis) > .2f;
     if (FSlateApplication::IsInitialized())
     {
@@ -515,17 +620,19 @@ ReditusDialoguePresentationPolicy::Snapshot UReditusDialoguePresentationWidget::
 {
     ReditusDialoguePresentationPolicy::Snapshot State;
     State.Active = CanRouteInput(); State.Blocked = !InputAllowed();
+    if (auto* System = ReditusDialogueUI::SequenceSkip(this))
+        State.Blocked = State.Blocked || System->IsHoldingSkip();
     State.Choices = Replies ? Replies->GetChildrenCount() : 0;
     State.ContinueReady = ReditusDialogueUI::Shown(ContinueContainer);
     State.Characters = ReditusDialogueUI::Plain(ReditusDialogueUI::TextOf(Body).ToString()).Len();
     const auto* N = ReditusDialogueUI::Node(Source.Get(), TEXT("CurrentNode"));
     const auto* P = ReditusDialogueUI::Node(Source.Get(), TEXT("CurrentPlayerNode"));
     State.Line = (uint64(uint32(N ? N->id : INDEX_NONE)) << 32) | uint32(P ? P->id : INDEX_NONE);
-    State.ScriptedSequence = !N || N->PlayLevelSequence;
-    auto* Sequence = ReditusDialogueUI::SequencePlayer(Source.Get());
-    State.InLevelSequence = (N && N->PlayLevelSequence)
-        || (IsValid(Sequence) && (Sequence->IsPlaying() || Sequence->IsPaused()));
-    if (auto* Sound = Cast<UAudioComponent>(ReditusQuestNPCReflection::ReadObject(Source.Get(), TEXT("Sound2D")))) State.VoicePlaying = Sound->IsPlaying();
+    State.HasDialogueNode = N != nullptr;
+    State.PlaySequenceCue = N && N->PlayLevelSequence;
+    State.InLevelSequence = ReditusDialogueUI::SequencePlayer(Source.Get()) != nullptr;
+    if (auto* Sound = Cast<UAudioComponent>(ReditusQuestNPCReflection::ReadObject(Source.Get(), TEXT("Sound2D"))))
+        State.VoicePlaying = IsValid(Sound) && Sound->IsPlaying();
     return State;
 }
 
@@ -544,8 +651,22 @@ void UReditusDialoguePresentationWidget::ApplyTextStyle()
             Text->SetShadowOffset(FVector2D(1, 2)); Text->SetShadowColorAndOpacity(FLinearColor(0, 0, 0, .9f));
         }
         Speaker->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 23)); Speaker->SetColorAndOpacity(FSlateColor(ReditusDialogueUI::Gold));
+        Speaker->SetJustification(ETextJustify::Left);
         StyledText = true;
     }
+}
+
+void UReditusDialoguePresentationWidget::RefreshSpeakerName()
+{
+    if (!Source.IsValid() || !Speaker) return;
+    const AActor* NPCActor = Source->NPCActor;
+    const auto* NPC = IsValid(NPCActor) ? NPCActor->FindComponentByClass<UReditusQuestNPCComponent>() : nullptr;
+    FText Name;
+    if (!NPC || !NPC->ReadFetchSpeakerName(Source.Get(), Name)) return;
+    if (!Speaker->GetText().EqualTo(Name)) Speaker->SetText(Name);
+    // The legacy portrait preset may hide its label for Node Type None. A
+    // fetch NPC's written name is independent of that optional portrait enum.
+    Speaker->SetVisibility(Name.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
 }
 
 void UReditusDialoguePresentationWidget::NativeTick(const FGeometry& Geometry, float DeltaTime)
@@ -553,6 +674,7 @@ void UReditusDialoguePresentationWidget::NativeTick(const FGeometry& Geometry, f
     Super::NativeTick(Geometry, DeltaTime);
     const double Now = FPlatformTime::Seconds(); const double Delta = FMath::Clamp(Now - LastTime, 0.0, .25); LastTime = Now;
     ApplyTextStyle();
+    RefreshSpeakerName();
     if (PortraitContainer) PortraitContainer->SetVisibility(ReditusDialogueUI::Shown(Portrait) ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
     if (DialogueTextContainer)
         if (auto* TextCanvasSlot = Cast<UCanvasPanelSlot>(DialogueTextContainer->Slot))
@@ -562,13 +684,22 @@ void UReditusDialoguePresentationWidget::NativeTick(const FGeometry& Geometry, f
     // portrait, name, replies and cinematic controls before the first reveal.
     const bool bFirstPresentation = !bPresentationReady;
     bPresentationReady = true;
+    if (bFirstPresentation) RestoreSourceFocus();
+    const auto State = ReadSnapshot();
+    if (State.Active)
+        if (auto* Controller = GetOwningPlayer()) Controller->bShowMouseCursor = false;
+    if (auto* System = ReditusDialogueUI::SequenceSkip(this))
+    {
+        if (auto* Sequence = ReditusDialogueUI::SequencePlayer(Source.Get()))
+            Playback.Auto = System->IsAutoAdvanceEnabled(Sequence);
+        if (State.InLevelSequence)
+            System->ObserveDialogue(Source.Get(), State.PlaySequenceCue && State.Choices == 0 && !Playback.Log);
+    }
     RefreshChoices(); UpdateLog(Delta); RefreshControls();
     if (bFirstPresentation) SetRenderOpacity(1.f);
-    const auto State = ReadSnapshot();
     if (Playback.Tick(Delta, State))
     {
-        // Automatic actions never call GamepadReply or select an answer.
-        ReditusQuestNPCReflection::CallNoArguments(Source.Get(), TEXT("SimulateNextClicked"));
+        ContinueDialogue();
     }
 }
 
@@ -590,7 +721,7 @@ void UReditusDialoguePresentationWidget::RestoreSourceFocus()
     // widget. Never steal focus back from the next screen after that transition.
     if (IsValid(Player) && Widget->IsInViewport() && ReditusDialogueUI::Shown(Widget)
         && ReditusQuestNPCReflection::ReadObject(Player, TEXT("DialogueWidget")) == Widget)
-        Widget->SetUserFocus(Player);
+        SetUserFocus(Player);
 }
 
 FReply UReditusDialoguePresentationWidget::NativeOnMouseButtonDown(const FGeometry& Geometry, const FPointerEvent& Event)
@@ -604,28 +735,61 @@ FReply UReditusDialoguePresentationWidget::NativeOnMouseButtonDown(const FGeomet
 
 void UReditusDialoguePresentationWidget::Advance()
 {
+    RestoreSourceFocus();
     if (!InputAllowed() || Playback.Log || !ReditusDialogueUI::Shown(ContinueContainer) || !Replies || Replies->GetChildrenCount() > 0) return;
-    Playback.ManualInput(); ReditusQuestNPCReflection::CallNoArguments(Source.Get(), TEXT("MenuConfirm")); RestoreSourceFocus();
+    Playback.ManualInput(); ContinueDialogue(true); RestoreSourceFocus();
+}
+
+void UReditusDialoguePresentationWidget::ContinueDialogue(bool Manual)
+{
+    auto* Dialogue = Source.Get();
+    if (!IsValid(Dialogue)) return;
+    if (auto* System = ReditusDialogueUI::SequenceSkip(this))
+        System->DialogueContinueRequested(Dialogue);
+    ReditusQuestNPCReflection::CallNoArguments(Dialogue, Manual ? TEXT("MenuConfirm") : TEXT("SimulateNextClicked"));
 }
 
 void UReditusDialoguePresentationWidget::ToggleAuto()
-{ if (CanRouteInput() && ReadSnapshot().InLevelSequence) Playback.Auto = !Playback.Auto; RestoreSourceFocus(); }
+{
+    RestoreSourceFocus();
+    if (CanRouteInput() && ReadSnapshot().InLevelSequence)
+    {
+        Playback.ToggleAuto();
+        if (auto* System = ReditusDialogueUI::SequenceSkip(this))
+            System->SetAutoAdvance(ReditusDialogueUI::SequencePlayer(Source.Get()), Playback.Auto);
+    }
+}
 
 void UReditusDialoguePresentationWidget::ToggleLog()
 {
+    RestoreSourceFocus();
     const auto State = ReadSnapshot();
-    if (!Playback.Log && (!State.InLevelSequence || !State.Active || State.Blocked || State.ScriptedSequence || (!State.ContinueReady && State.Choices == 0))) return;
+    if (!Playback.Log && (!State.InLevelSequence || !State.Active)) return;
     Playback.ToggleLog(); MouseHeld = false; UpdateHeld();
     if (LogLayer) LogLayer->SetVisibility(Playback.Log ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-    if (Playback.Log && LogScroll) LogScroll->ScrollToEnd(); RestoreSourceFocus();
+    if (Playback.Log && LogScroll) LogScroll->ScrollToEnd();
+    RestoreSourceFocus();
 }
 
 void UReditusDialoguePresentationWidget::UpdateHeld()
 { Playback.SetHeld(KeyHeld || TriggerHeld || MouseHeld); }
 void UReditusDialoguePresentationWidget::SkipPressed()
-{ if (CanRouteInput() && ReadSnapshot().InLevelSequence && !Playback.Log) { MouseHeld = true; UpdateHeld(); } RestoreSourceFocus(); }
+{
+    RestoreSourceFocus();
+    if (CanRouteInput() && ReadSnapshot().InLevelSequence && !Playback.Log)
+        if (auto* System = ReditusDialogueUI::SequenceSkip(this))
+        {
+            if (System->HasActiveSequence()) System->SetMouseHeld(true);
+            else System->ShowBlockedNotice();
+        }
+    RestoreSourceFocus();
+}
 void UReditusDialoguePresentationWidget::SkipReleased()
-{ MouseHeld = false; UpdateHeld(); }
+{
+    if (auto* System = ReditusDialogueUI::SequenceSkip(this)) System->SetMouseHeld(false);
+    MouseHeld = false;
+    UpdateHeld();
+}
 void UReditusDialoguePresentationWidget::InputInactive()
 {
     KeyHeld = false; TriggerHeld = false; MouseHeld = false;
@@ -637,13 +801,23 @@ void UReditusDialoguePresentationWidget::InputInactive()
 
 bool UReditusDialoguePresentationWidget::RouteKeyDown(const FKey& Key, bool Repeat)
 {
-    if (!CanRouteInput()) return false;
     UsingGamepad = Key.IsGamepadKey();
+    if (!CanRouteInput()) return false;
     if (!ReadSnapshot().InLevelSequence) return false;
     if (Key == EKeys::F6 || Key == EKeys::Gamepad_FaceButton_Top) { if (!Repeat) ToggleAuto(); return true; }
     if (Key == EKeys::F7 || Key == EKeys::Gamepad_FaceButton_Left) { if (!Repeat) ToggleLog(); return true; }
     if (Key == EKeys::LeftShift || Key == EKeys::RightShift || Key == EKeys::Gamepad_RightTrigger)
-    { if (!Repeat && !Playback.Log) { KeyHeld = true; UpdateHeld(); } return true; }
+    {
+        // Always consume cinematic skip input. Never fall through to the old
+        // controller RemoveDialogue action or turn this key into line advance.
+        if (!Playback.Log)
+            if (auto* System = ReditusDialogueUI::SequenceSkip(this))
+            {
+                if (System->HasActiveSequence()) System->HandleKey(Key, true, Repeat);
+                else if (!Repeat) System->ShowBlockedNotice();
+            }
+        return true;
+    }
     if (Playback.Log)
     {
         if (!Repeat && (Key == EKeys::Escape || Key == EKeys::Gamepad_FaceButton_Right)) ToggleLog();
@@ -651,7 +825,8 @@ bool UReditusDialoguePresentationWidget::RouteKeyDown(const FKey& Key, bool Repe
         if (LogScroll && (Key == EKeys::Down || Key == EKeys::Gamepad_DPad_Down)) LogScroll->SetScrollOffset(LogScroll->GetScrollOffset() + 60.f);
         return true; // Do not let the old widget confirm a hidden choice while the log is open.
     }
-    if (ReditusDialogueUI::ConfirmKey(Key) && !Repeat && InputAllowed()) Playback.ManualInput();
+    if (ReditusDialogueUI::ConfirmKey(Key) && ReadSnapshot().Choices == 0)
+    { if (!Repeat) Advance(); return true; }
     return false; // Existing keyboard/gamepad confirm and navigation retain their current route.
 }
 
@@ -659,7 +834,12 @@ bool UReditusDialoguePresentationWidget::RouteKeyUp(const FKey& Key)
 {
     const bool Active = CanRouteInput();
     if (Key == EKeys::LeftShift || Key == EKeys::RightShift || Key == EKeys::Gamepad_RightTrigger)
-    { const bool OwnedPress = KeyHeld; KeyHeld = false; UpdateHeld(); return Active && OwnedPress; }
+    {
+        bool OwnedPress = false;
+        if (auto* System = ReditusDialogueUI::SequenceSkip(this)) OwnedPress = System->HandleKey(Key, false);
+        KeyHeld = false; UpdateHeld();
+        return OwnedPress || (Active && ReadSnapshot().InLevelSequence);
+    }
     // Key releases must reach the legacy widget/controller, including its
     // IsSelectReplyKeyDown reset, even if the log opened after the key press.
     return false;
@@ -667,6 +847,8 @@ bool UReditusDialoguePresentationWidget::RouteKeyUp(const FKey& Key)
 
 bool UReditusDialoguePresentationWidget::RouteAnalog(const FKey& Key, float Value)
 {
+    // Ignore resting stick noise when choosing the prompt device.
+    if (Key.IsGamepadKey() && FMath::Abs(Value) > .55f) UsingGamepad = true;
     const bool Active = CanRouteInput();
     if (Key == EKeys::Gamepad_RightTriggerAxis)
     {
@@ -674,9 +856,14 @@ bool UReditusDialoguePresentationWidget::RouteAnalog(const FKey& Key, float Valu
         {
             TriggerHeld = false; NeedTriggerRelease = Value > .2f; UpdateHeld(); return false;
         }
-        if (Value < .2f) { TriggerHeld = false; NeedTriggerRelease = false; UpdateHeld(); }
-        else if (Active && Value > .55f && !NeedTriggerRelease && !Playback.Log) { TriggerHeld = true; UpdateHeld(); UsingGamepad = true; }
-        return Active && Value > .2f; // Let neutral/release values reach the underlying input state.
+        if (auto* System = ReditusDialogueUI::SequenceSkip(this))
+        {
+            if (System->HasActiveSequence()) System->HandleTrigger(Playback.Log ? 0.f : Value);
+            else if (Active && Value > .55f && !NeedTriggerRelease && !Playback.Log) System->ShowBlockedNotice();
+        }
+        NeedTriggerRelease = Value > .2f;
+        TriggerHeld = false; UpdateHeld();
+        return Active && Value > .2f;
     }
     if (Active && Playback.Log && Key == EKeys::Gamepad_LeftY && LogScroll && FMath::Abs(Value) > .2f)
         LogScroll->SetScrollOffset(FMath::Max(0.f, LogScroll->GetScrollOffset() - Value * 14.f));
@@ -714,6 +901,7 @@ void UReditusDialoguePresentationWidget::RefreshChoices()
             Proxy->Owner = this; Proxy->OriginalReply = Original; Proxy->Index = I;
             Proxy->Button = ReditusDialogueUI::Button(WidgetTree, FText::GetEmpty(), Proxy->Text, 21);
             Proxy->Text->SetAutoWrapText(true); Proxy->Text->SetJustification(ETextJustify::Left);
+            if (auto* TextSlot = Cast<UButtonSlot>(Proxy->Text->Slot)) TextSlot->SetHorizontalAlignment(HAlign_Fill);
             Proxy->Button->OnClicked.AddDynamic(Proxy, &UReditusDialogueChoiceProxy::Clicked);
             Proxy->Button->OnHovered.AddDynamic(Proxy, &UReditusDialogueChoiceProxy::Hovered);
             ChoiceRows->AddChildToVerticalBox(Proxy->Button)->SetPadding(FMargin(0, 3));
@@ -729,13 +917,16 @@ void UReditusDialoguePresentationWidget::RefreshChoices()
         const FString Prefix = Proxy->Index == Selected ? TEXT("\u25c6   ") : TEXT("\u00b7    ");
         const FString Text = Prefix + ReditusDialogueUI::Plain(ReditusDialogueUI::TextOf(ReplyText).ToString());
         if (Proxy->Text->GetText().ToString() != Text) Proxy->Text->SetText(FText::FromString(Text));
-        ReditusDialogueUI::ButtonStyle(Proxy->Button, Proxy->Index == Selected);
-        Proxy->Text->SetColorAndOpacity(FSlateColor(Proxy->Index == Selected ? ReditusDialogueUI::Accent : ReditusDialogueUI::Cream));
-        Proxy->Button->SetIsEnabled(InputAllowed() && !Playback.Log);
+        ReditusDialogueUI::ChoiceButtonStyle(Proxy->Button, Proxy->Index == Selected);
+        Proxy->Text->SetColorAndOpacity(FSlateColor(Proxy->Index == Selected ? FLinearColor(1.f, .91f, .62f, 1.f) : ReditusDialogueUI::Cream));
+        Proxy->Text->SetFont(FCoreStyle::GetDefaultFontStyle(Proxy->Index == Selected ? TEXT("Bold") : TEXT("Regular"), 21));
+        // Keep labels readable while the source waits for focus/input. The
+        // Clicked/Hovered handlers still enforce InputAllowed before any action.
+        Proxy->Button->SetIsEnabled(!Playback.Log);
     }
     ChoiceFrame->SetVisibility(Count > 0 ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
     if (auto* ChoiceCanvasSlot = Cast<UCanvasPanelSlot>(ChoiceFrame->Slot))
-        ChoiceCanvasSlot->SetOffsets(FMargin(0, 0, 0, FMath::Clamp(86.f + Count * 72.f, 158.f, 330.f)));
+        ChoiceCanvasSlot->SetOffsets(FMargin(0, 0, 0, FMath::Clamp(36.f + Count * 72.f, 108.f, 330.f)));
 }
 
 void UReditusDialoguePresentationWidget::RefreshControls()
@@ -756,17 +947,24 @@ void UReditusDialoguePresentationWidget::RefreshControls()
             if (LogLayer) LogLayer->SetVisibility(ESlateVisibility::Collapsed);
         }
     }
-    const bool Ready = State.Active && !State.Blocked && !State.ScriptedSequence;
-    AdvanceButton->SetIsEnabled(State.Active && !State.Blocked && !Playback.Log && State.ContinueReady && State.Choices == 0);
-    AutoButton->SetIsEnabled(State.Active);
-    LogButton->SetIsEnabled(Playback.Log || (Ready && (State.ContinueReady || State.Choices > 0)));
-    SkipButton->SetIsEnabled(Ready && !Playback.Log && State.Choices == 0);
+    const bool Ready = State.Active && !State.Blocked && State.HasDialogueNode && State.ContinueReady;
+    // Labels live outside the disabled button so the waiting state remains
+    // readable while the button itself keeps the original input gate.
+    const auto PromptState = [](UButton* Button, UTextBlock* Label, bool Available)
+    {
+        Button->SetIsEnabled(Available);
+        Label->SetColorAndOpacity(FSlateColor(Available ? FLinearColor::White : FLinearColor(.78f, .83f, .88f, 1.f)));
+    };
+    PromptState(AdvanceButton, AdvanceLabel, State.Active && !State.Blocked && !Playback.Log && State.ContinueReady && State.Choices == 0);
+    PromptState(AutoButton, AutoLabel, State.Active);
+    PromptState(LogButton, LogLabel, State.Active);
+    PromptState(SkipButton, SkipLabel, State.Active && !Playback.Log);
     const TCHAR* AutoState = !Playback.Auto ? TEXT("Off") : (State.Choices > 0 || Playback.Log || !Ready) ? TEXT("Paused") : TEXT("On");
     AutoLabel->SetText(FText::FromString(FString::Printf(TEXT("%s  Auto %s"), UsingGamepad ? TEXT("Y") : TEXT("F6"), AutoState)));
     AdvanceLabel->SetText(FText::FromString(UsingGamepad ? TEXT("A  Advance") : TEXT("ENTER  Advance")));
     LogLabel->SetText(FText::FromString(UsingGamepad ? TEXT("X  Log") : TEXT("F7  Log")));
     SkipLabel->SetText(FText::FromString(UsingGamepad ? TEXT("RT  Hold skip") : TEXT("SHIFT  Hold skip")));
-    AutoLabel->SetColorAndOpacity(FSlateColor(Playback.Auto ? ReditusDialogueUI::Gold : ReditusDialogueUI::Cream));
+    if (Playback.Auto) AutoLabel->SetColorAndOpacity(FSlateColor(FLinearColor(1.f, .87f, .47f, 1.f)));
     StatusLabel->SetText(FText::FromString(State.Choices > 0 ? TEXT("Awaiting your response") : Playback.IsSkipping() ? TEXT("Skipping dialogue") : TEXT("")));
 }
 

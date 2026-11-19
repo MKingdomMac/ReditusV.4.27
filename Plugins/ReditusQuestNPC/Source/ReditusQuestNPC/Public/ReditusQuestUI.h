@@ -16,6 +16,19 @@ class UReditusQuestJournalBinding;
 UENUM(BlueprintType)
 enum class EReditusQuestJournalPage : uint8 { MainQuests, SideQuests, CompletedQuests, FailedQuests };
 
+USTRUCT()
+struct FReditusQuestJournalEntry
+{
+    GENERATED_BODY()
+
+    UPROPERTY() FDataTableRowHandle QuestRow;
+    UPROPERTY() UClass* BlueprintQuest = nullptr;
+    FText Title;
+    FText Description;
+    int32 Progress = 0;
+    int32 Goal = 0;
+};
+
 UCLASS()
 class REDITUSQUESTNPC_API UReditusQuestJournalSelection : public UObject
 {
@@ -42,7 +55,7 @@ public:
     UFUNCTION() void Restored();
 private:
     UPROPERTY(Transient) TArray<UUserWidget*> RowWidgets;
-    UPROPERTY(Transient) TArray<FDataTableRowHandle> QuestRows;
+    UPROPERTY(Transient) TArray<FReditusQuestJournalEntry> Entries;
     UPROPERTY(Transient) TArray<UReditusQuestJournalSelection*> Clicks;
     EReditusQuestJournalPage Page = EReditusQuestJournalPage::MainQuests;
 };

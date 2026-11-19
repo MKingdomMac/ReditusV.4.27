@@ -7,7 +7,8 @@ public class ReditusQuestNPCEditor : ModuleRules
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PrivateDependencyModuleNames.AddRange(new string[] {
             "Core", "CoreUObject", "Engine", "UnrealEd", "AssetRegistry", "BlueprintGraph",
-            "KismetCompiler", "Paper2D", "UMG", "UMGEditor", "DialoguePlugin", "MinimapPlugin", "ReditusQuestNPC", "Json"
+            "KismetCompiler", "Paper2D", "UMG", "UMGEditor", "DialoguePlugin", "MinimapPlugin", "ReditusQuestNPC", "Json",
+            "AssetTools", "GraphEditor", "PropertyEditor", "Slate", "SlateCore", "InputCore"
         });
     }
 }

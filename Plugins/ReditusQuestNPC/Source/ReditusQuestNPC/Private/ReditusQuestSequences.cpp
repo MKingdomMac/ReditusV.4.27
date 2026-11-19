@@ -10,6 +10,36 @@
 #include "GameFramework/PlayerController.h"
 #include "UObject/UnrealType.h"
 
+bool UReditusQuestSubsystem::AreQuestTimersPaused() const
+{
+    UWorld* World = GetTickableGameObjectWorld();
+    if (!World || World->IsPaused() || PauseQuestTimers) return true;
+    if ((SequencePlayer && ActiveSequence.PauseQuestTimers)
+        || (QueueWorld.Get() == World && SequenceQueue.Num() > 0 && SequenceQueue[0].PauseQuestTimers))
+        return true;
+
+    // Level Blueprints, dialogue events and dynamically created actors all use
+    // a Level Sequence player. Include players started outside the quest runner.
+    for (TActorIterator<ALevelSequenceActor> It(World); It; ++It)
+    {
+        const auto* Player = It->GetSequencePlayer();
+        // The quest runner already has an authored pause setting for its player.
+        if (!IsValid(Player) || Player == SequencePlayer) continue;
+        if (Player->IsPlaying()) return true;
+        if (!Player->IsPaused()) continue;
+
+        // Dialogue can pause Sequencer mid-scene. Pause at End can also
+        // leave a completed scene paused on its final frame indefinitely.
+        if (!It->PlaybackSettings.bPauseAtEnd) return true;
+        const double Position = Player->GetCurrentTime().Time.AsDecimal();
+        const double End = Player->IsReversed() ? Player->GetStartTime().Time.AsDecimal()
+                                                : Player->GetEndTime().Time.AsDecimal();
+        const double FramesRemaining = Player->IsReversed() ? Position - End : End - Position;
+        if (FramesRemaining > 0.001) return true;
+    }
+    return false;
+}
+
 bool UReditusQuestSubsystem::CanSaveQuestState() const
 {
     return !bImporting && !bFlushing && !bApplyingNPCAction && PendingNPCBattles.Num() == 0 && !HasNPCStoryWork()

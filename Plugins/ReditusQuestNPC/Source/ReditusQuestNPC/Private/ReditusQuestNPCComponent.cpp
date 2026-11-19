@@ -1,4 +1,5 @@
 #include "ReditusQuestNPCComponent.h"
+#include "ReditusQuestCatalog.h"
 #include "ReditusQuestSubsystem.h"
 #include "ReditusQuestNPCPolicy.h"
 #include "ReditusQuestNPCReflection.h"
@@ -160,6 +161,8 @@ UDialogue* UReditusQuestNPCComponent::ChooseDialogue(APlayerController* Player, 
         case EReditusQuestState::Failed: Selected = Definition.FailedDialogue; break;
         default: break;
         }
+        // Graph defaults are opt-in through a catalogue row. Explicit NPC slots/rules always win.
+        if (!Selected) Selected = ReditusQuestCatalog::Conversation(Definition.QuestRow, Snapshot.State, Snapshot.StageID);
     }
     return Selected ? Selected : Definition.FallbackDialogue;
 }

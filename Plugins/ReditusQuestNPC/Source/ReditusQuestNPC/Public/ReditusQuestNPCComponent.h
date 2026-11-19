@@ -50,6 +50,8 @@ public:
     // Used by the generated shared fetch flow, not authored per-node graphs.
     ReditusFetchQuestFlow::Phase GetFetchQuestPhase(APlayerController* Player) const;
     bool ApplyFetchQuestAction(APlayerController* Player, ReditusFetchQuestFlow::Action Action);
+    // Supplies localized fetch-NPC name only to this component's active widget.
+    bool ReadFetchSpeakerName(const UDialogueUserWidget* Widget, FText& Name) const;
 
     // Assign a DT_QuestNPCs row. An unselected row uses InlineDefinition.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest NPC", meta=(RowType="ReditusQuestNPCDefinition"))

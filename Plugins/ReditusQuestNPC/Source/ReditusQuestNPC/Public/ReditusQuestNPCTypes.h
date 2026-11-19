@@ -59,27 +59,33 @@ enum class EReditusQuestAction : uint8
 };
 
 UENUM(BlueprintType)
-enum class EReditusQuestNPCDialogueMode : uint8 { DialogueAssets, FetchQuestText };
+enum class EReditusQuestNPCDialogueMode : uint8
+{
+    DialogueAssets,
+    FetchQuestText UMETA(DisplayName="Simple Quest Text", ToolTip="Shared text flow for single-stage item and monster-hunt quests, optionally with a Deadline timer.")
+};
 
 USTRUCT(BlueprintType)
 struct REDITUSQUESTNPC_API FReditusFetchQuestText
 {
     GENERATED_BODY()
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Fetch Quest Text", meta=(MultiLine=true))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Text", meta=(ToolTip="Name shown above this NPC's dialogue. Localizable Text; leave empty to use the NPC Display Name."))
+    FText SpeakerName;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Text", meta=(MultiLine=true))
     FText Offer = NSLOCTEXT("ReditusFetch", "Offer", "Could you bring me the supplies I need?");
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Fetch Quest Text", meta=(MultiLine=true))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Text", meta=(MultiLine=true))
     FText Reminder = NSLOCTEXT("ReditusFetch", "Reminder", "Please come back when you have the supplies.");
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Fetch Quest Text", meta=(MultiLine=true, DisplayName="Ready to Deliver"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Text", meta=(MultiLine=true, DisplayName="Ready to Deliver"))
     FText HandIn = NSLOCTEXT("ReditusFetch", "HandIn", "You have what I need. Would you like to hand it over?");
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Fetch Quest Text", meta=(MultiLine=true))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Text", meta=(MultiLine=true))
     FText Completed = NSLOCTEXT("ReditusFetch", "Completed", "Thank you for your help.");
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Fetch Quest Text", meta=(AdvancedDisplay))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Text", meta=(AdvancedDisplay))
     FText AcceptChoice = NSLOCTEXT("ReditusFetch", "AcceptChoice", "I'll help.");
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Fetch Quest Text", meta=(AdvancedDisplay))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Text", meta=(AdvancedDisplay))
     FText HandInChoice = NSLOCTEXT("ReditusFetch", "HandInChoice", "Here you go.");
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Fetch Quest Text", meta=(AdvancedDisplay))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Text", meta=(AdvancedDisplay))
     FText NotNowChoice = NSLOCTEXT("ReditusFetch", "NotNowChoice", "Not now.");
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Fetch Quest Text", meta=(AdvancedDisplay, MultiLine=true))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Text", meta=(AdvancedDisplay, MultiLine=true))
     FText Declined = NSLOCTEXT("ReditusFetch", "Declined", "All right. Speak to me when you're ready.");
 };
 
@@ -110,7 +116,7 @@ struct REDITUSQUESTNPC_API FReditusNPCDialogueRule
     GENERATED_BODY()
 
     // Optional override: otherwise use the NPC definition's quest.
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dialogue Rule", meta=(RowType="ReditusQuestDefinition"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dialogue Rule")
     FDataTableRowHandle QuestRow;
 
     UPROPERTY(BlueprintReadWrite, Category="Retired Quest System", meta=(DeprecatedProperty, DeprecationMessage="Use QuestRow. Legacy quest classes are ignored."))
@@ -186,7 +192,7 @@ struct REDITUSQUESTNPC_API FReditusQuestNPCDefinition : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Recruitment")
     bool RemoveNPCOnRecruitment = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest", meta=(RowType="ReditusQuestDefinition", DisplayName="Quest"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest", meta=(DisplayName="Quest", ToolTip="Select a quest row from DT_Quests or DT_QuestCatalog."))
     FDataTableRowHandle QuestRow;
 
     UPROPERTY(BlueprintReadWrite, Category="Retired Quest System", meta=(DeprecatedProperty, DeprecationMessage="Use QuestRow. Legacy quest classes are ignored."))
@@ -195,10 +201,10 @@ struct REDITUSQUESTNPC_API FReditusQuestNPCDefinition : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dialogue")
     EReditusQuestNPCDialogueMode DialogueMode = EReditusQuestNPCDialogueMode::DialogueAssets;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dialogue", meta=(EditCondition="DialogueMode == EReditusQuestNPCDialogueMode::FetchQuestText", EditConditionHides))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dialogue", meta=(DisplayName="Quest Text", EditCondition="DialogueMode == EReditusQuestNPCDialogueMode::FetchQuestText", EditConditionHides))
     FReditusFetchQuestText FetchQuestText;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dialogue", meta=(AdvancedDisplay, EditCondition="DialogueMode == EReditusQuestNPCDialogueMode::FetchQuestText", EditConditionHides))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dialogue", meta=(AdvancedDisplay, DisplayName="Portrait Speaker Type", ToolTip="Optional existing portrait preset. Set the written name under Quest Text > Speaker Name.", EditCondition="DialogueMode == EReditusQuestNPCDialogueMode::FetchQuestText", EditConditionHides))
     EDialogueNodeType FetchSpeakerType = EDialogueNodeType::DNT_None;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dialogue", meta=(EditCondition="DialogueMode == EReditusQuestNPCDialogueMode::DialogueAssets", EditConditionHides))
@@ -252,7 +258,7 @@ struct REDITUSQUESTNPC_API FReditusQuestObjectiveDefinition : public FTableRowBa
 {
     GENERATED_BODY()
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objective", meta=(RowType="ReditusQuestDefinition", DisplayName="Quest"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objective", meta=(DisplayName="Quest", ToolTip="Select a quest row from DT_Quests or DT_QuestCatalog."))
     FDataTableRowHandle QuestRow;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objective")

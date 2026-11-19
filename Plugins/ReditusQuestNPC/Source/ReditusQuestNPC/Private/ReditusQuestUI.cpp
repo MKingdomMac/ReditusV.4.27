@@ -14,6 +14,7 @@
 #include "Components/VerticalBoxSlot.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/Font.h"
+#include "Kismet/GameplayStatics.h"
 #include "Styling/CoreStyle.h"
 #include "UObject/UnrealType.h"
 
@@ -42,6 +43,86 @@ namespace
         auto* T = Tree->ConstructWidget<UTextBlock>(); T->SetText(FText::FromString(Value));
         T->SetFont(Font ? FSlateFontInfo(Font, Size) : FCoreStyle::GetDefaultFontStyle("Regular", Size));
         T->SetColorAndOpacity(Color); T->SetAutoWrapText(true); return T;
+    }
+
+    bool MatchesPage(EReditusQuestJournalPage Page, bool Main, bool Completed, bool Failed)
+    {
+        switch (Page)
+        {
+        case EReditusQuestJournalPage::MainQuests: return Main && !Completed && !Failed;
+        case EReditusQuestJournalPage::SideQuests: return !Main && !Completed && !Failed;
+        case EReditusQuestJournalPage::CompletedQuests: return Completed || Failed;
+        case EReditusQuestJournalPage::FailedQuests: return Failed;
+        }
+        return false;
+    }
+
+    void AddBlueprintQuest(TArray<FReditusQuestJournalEntry>& Entries, EReditusQuestJournalPage Page,
+        UClass* Quest, int32 Progress, bool Completed)
+    {
+        const auto* Defaults = IsValid(Quest) ? Quest->GetDefaultObject() : nullptr;
+        if (!Defaults) return;
+        const auto* Main = FindFProperty<FBoolProperty>(Quest, TEXT("IsMainQuest"));
+        const auto* Name = FindFProperty<FTextProperty>(Quest, TEXT("name"));
+        const auto* Description = FindFProperty<FTextProperty>(Quest, TEXT("description"));
+        const auto* Steps = FindFProperty<FIntProperty>(Quest, TEXT("steps"));
+        if (!Main || !Name || !Description || !Steps
+            || !MatchesPage(Page, Main->GetPropertyValue_InContainer(Defaults), Completed, false)) return;
+
+        FReditusQuestJournalEntry Entry;
+        Entry.BlueprintQuest = Quest;
+        Entry.Title = Name->GetPropertyValue_InContainer(Defaults);
+        Entry.Description = Description->GetPropertyValue_InContainer(Defaults);
+        Entry.Goal = FMath::Max(0, Steps->GetPropertyValue_InContainer(Defaults));
+        Entry.Progress = Completed ? Entry.Goal : FMath::Clamp(Progress, 0, Entry.Goal);
+        Entries.Add(MoveTemp(Entry));
+    }
+
+    void ReadBlueprintQuests(APlayerController* Player, EReditusQuestJournalPage Page,
+        TArray<FReditusQuestJournalEntry>& Entries)
+    {
+        if (!IsValid(Player) || Page == EReditusQuestJournalPage::FailedQuests) return;
+        // The original controller still owns these class-based quests and their saved progress.
+        if (Page == EReditusQuestJournalPage::CompletedQuests)
+        {
+            const auto* Property = FindFProperty<FArrayProperty>(Player->GetClass(), TEXT("completedQuests"));
+            const auto* ClassProperty = Property ? CastField<FClassProperty>(Property->Inner) : nullptr;
+            if (!ClassProperty) return;
+            const FScriptArrayHelper Completed(Property, Property->ContainerPtrToValuePtr<void>(Player));
+            TSet<UClass*> Seen;
+            for (int32 I = 0; I < Completed.Num(); ++I)
+            {
+                auto* Quest = Cast<UClass>(ClassProperty->GetObjectPropertyValue(Completed.GetRawPtr(I)));
+                if (!Quest || Seen.Contains(Quest)) continue;
+                Seen.Add(Quest);
+                AddBlueprintQuest(Entries, Page, Quest, 0, true);
+            }
+            return;
+        }
+        const auto* Property = FindFProperty<FMapProperty>(Player->GetClass(), TEXT("activeQuests"));
+        const auto* ClassProperty = Property ? CastField<FClassProperty>(Property->KeyProp) : nullptr;
+        const auto* Progress = Property ? CastField<FIntProperty>(Property->ValueProp) : nullptr;
+        if (!ClassProperty || !Progress) return;
+        FScriptMapHelper Active(Property, Property->ContainerPtrToValuePtr<void>(Player));
+        for (int32 I = 0; I < Active.GetMaxIndex(); ++I)
+        {
+            if (!Active.IsValidIndex(I)) continue;
+            auto* Quest = Cast<UClass>(ClassProperty->GetObjectPropertyValue(Active.GetKeyPtr(I)));
+            AddBlueprintQuest(Entries, Page, Quest, Progress->GetPropertyValue(Active.GetValuePtr(I)), false);
+        }
+    }
+
+    UClass* QuestRowClass(const FObjectProperty& Element)
+    {
+        UClass* RowClass = Element.PropertyClass;
+        if (RowClass && RowClass != UUserWidget::StaticClass()
+            && RowClass->IsChildOf(UUserWidget::StaticClass()) && !RowClass->HasAnyClassFlags(CLASS_Abstract))
+            return RowClass;
+
+        const TCHAR* Path = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/Dialogues/BP_QuestButton.BP_QuestButton_C");
+        UClass* StyledClass = LoadClass<UUserWidget>(nullptr, Path);
+        return StyledClass && RowClass && StyledClass->IsChildOf(RowClass)
+            && !StyledClass->HasAnyClassFlags(CLASS_Abstract) ? StyledClass : nullptr;
     }
 }
 
@@ -74,37 +155,53 @@ void UReditusQuestJournalBinding::Refresh()
 {
     auto* View = Journal.Get(); auto* Manager = System.Get(); if (!View || !Manager) return;
     auto* List = Find<UPanelWidget>(View, TEXT("QuestList")); if (!List) return;
-    const int32 PreviousIndex = Int(View, TEXT("selectedQuestIndex"));
-    const FDataTableRowHandle Previous = QuestRows.IsValidIndex(PreviousIndex) ? QuestRows[PreviousIndex] : FDataTableRowHandle();
-    List->ClearChildren(); RowWidgets.Empty(); QuestRows.Empty(); Clicks.Empty();
     auto* Array = FindFProperty<FArrayProperty>(View->GetClass(), TEXT("questUIs"));
-    auto* Element = Array ? CastField<FObjectPropertyBase>(Array->Inner) : nullptr;
-    if (!Array || !Element) return;
-    FScriptArrayHelper OldRows(Array, Array->ContainerPtrToValuePtr<void>(View)); OldRows.EmptyValues();
-    UClass* RowClass = Element->PropertyClass; // Existing typed questUIs property retains the styled BP class.
-    if (!RowClass || !RowClass->IsChildOf(UUserWidget::StaticClass()) || RowClass->HasAnyClassFlags(CLASS_Abstract)) return;
+    auto* Element = Array ? CastField<FObjectProperty>(Array->Inner) : nullptr;
+    auto* RowClass = Element ? QuestRowClass(*Element) : nullptr;
+    auto* Player = View->GetOwningPlayer();
+    if (!Player) Player = UGameplayStatics::GetPlayerController(View, 0);
+    if (!RowClass || !Player)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Could not refresh %s. Check its questUIs row widget type and owning player."), *View->GetName());
+        return;
+    }
+
+    TArray<FReditusQuestJournalEntry> Visible;
+    ReadBlueprintQuests(Player, Page, Visible);
+    for (const auto& Row : Manager->GetStartedQuests())
+    {
+        FReditusQuestDefinition Definition;
+        FReditusQuestSnapshot Snapshot;
+        TArray<FReditusQuestObjectiveStatus> Tasks;
+        if (!Manager->GetQuestDetails(Row, Definition, Snapshot, Tasks)
+            || !MatchesPage(Page, Definition.IsMainQuest, Snapshot.State == EReditusQuestState::Completed,
+                Snapshot.State == EReditusQuestState::Failed)) continue;
+        FReditusQuestJournalEntry Entry;
+        Entry.QuestRow = Row;
+        Entry.Title = Definition.Title;
+        Visible.Add(MoveTemp(Entry));
+    }
+
+    const int32 PreviousIndex = Int(View, TEXT("selectedQuestIndex"));
+    const auto Previous = Entries.IsValidIndex(PreviousIndex) ? Entries[PreviousIndex] : FReditusQuestJournalEntry();
+    List->ClearChildren(); RowWidgets.Reset(); Entries.Reset(); Clicks.Reset();
+    FScriptArrayHelper WidgetArray(Array, Array->ContainerPtrToValuePtr<void>(View));
+    WidgetArray.EmptyValues();
     Flag(View, TEXT("MainQuestsVisible"), Page == EReditusQuestJournalPage::MainQuests);
     Flag(View, TEXT("CompletedQuestsVisible"), Page == EReditusQuestJournalPage::CompletedQuests);
     const TCHAR* Heading = Page == EReditusQuestJournalPage::MainQuests ? TEXT("Main Quests")
         : Page == EReditusQuestJournalPage::SideQuests ? TEXT("Side Quests")
         : Page == EReditusQuestJournalPage::FailedQuests ? TEXT("Failed Quests") : TEXT("Finished Quests");
     Text(View, TEXT("QuestsDialogueTitle"), FText::FromString(Heading));
-    for (const auto& Row : Manager->GetStartedQuests())
+    for (const auto& Entry : Visible)
     {
-        FReditusQuestDefinition Definition; FReditusQuestSnapshot Snapshot; TArray<FReditusQuestObjectiveStatus> Tasks;
-        if (!Manager->GetQuestDetails(Row, Definition, Snapshot, Tasks)) continue;
-        const bool Done = Snapshot.State == EReditusQuestState::Completed || Snapshot.State == EReditusQuestState::Failed;
-        const bool Matches = Page == EReditusQuestJournalPage::CompletedQuests ? Done
-            : Page == EReditusQuestJournalPage::FailedQuests ? Snapshot.State == EReditusQuestState::Failed
-            : !Done && Definition.IsMainQuest == (Page == EReditusQuestJournalPage::MainQuests);
-        if (!Matches) continue;
-        auto* Item = CreateWidget<UUserWidget>(View->GetOwningPlayer(), RowClass); if (!Item) continue;
-        // Existing BP_QuestButton has a guarded Construct for its retired quest class.
-        // Set the new row title after Construct, keeping its artwork and button style.
-        List->AddChild(Item);
-        Text(Item, TEXT("QuestName"), Definition.Title);
-        const int32 Index = RowWidgets.Add(Item); QuestRows.Add(Row);
-        const int32 Stored = OldRows.AddValue(); Element->SetObjectPropertyValue(OldRows.GetRawPtr(Stored), Item);
+        auto* Item = CreateWidget<UUserWidget>(Player, RowClass);
+        if (!Item || !List->AddChild(Item)) continue;
+        Text(Item, TEXT("QuestName"), Entry.Title);
+        RowWidgets.Add(Item);
+        const int32 Index = Entries.Add(Entry);
+        const int32 Stored = WidgetArray.AddValue();
+        Element->SetObjectPropertyValue(WidgetArray.GetRawPtr(Stored), Item);
         if (auto* Button = Find<UButton>(Item, TEXT("QuestButton")))
         {
             auto* Click = NewObject<UReditusQuestJournalSelection>(this); Click->Binding = this; Click->Index = Index;
@@ -112,16 +209,16 @@ void UReditusQuestJournalBinding::Refresh()
         }
     }
     if (auto* Empty = Find<UWidget>(View, TEXT("EmptyText")))
-        Empty->SetVisibility(QuestRows.Num() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
-    int32 Selected = QuestRows.IndexOfByKey(Previous);
-    if (Selected == INDEX_NONE) Selected = FMath::Clamp(PreviousIndex, 0, FMath::Max(0, QuestRows.Num() - 1));
-    Select(Selected);
+        Empty->SetVisibility(Entries.Num() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+    const int32 Selected = Entries.IndexOfByPredicate([&Previous](const FReditusQuestJournalEntry& Entry)
+    { return Entry.BlueprintQuest == Previous.BlueprintQuest && Entry.QuestRow == Previous.QuestRow; });
+    Select(Selected == INDEX_NONE ? PreviousIndex : Selected);
 }
 
 void UReditusQuestJournalBinding::Select(int32 Index)
 {
     auto* View = Journal.Get(); auto* Manager = System.Get(); if (!View || !Manager) return;
-    Index = FMath::Clamp(Index, 0, FMath::Max(0, QuestRows.Num() - 1));
+    Index = FMath::Clamp(Index, 0, FMath::Max(0, Entries.Num() - 1));
     Int(View, TEXT("selectedQuestIndex"), Index);
     for (int32 I = 0; I < RowWidgets.Num(); ++I) Highlight(RowWidgets[I], I == Index);
     if (auto* P = FindFProperty<FObjectPropertyBase>(View->GetClass(), TEXT("highlightedQuest")))
@@ -130,10 +227,21 @@ void UReditusQuestJournalBinding::Select(int32 Index)
     Text(View, TEXT("QuestName"), FText::GetEmpty()); Text(View, TEXT("QuestDescription"), FText::GetEmpty());
     Text(View, TEXT("ProgressDetails"), FText::GetEmpty());
     if (auto* Overlay = Find<UWidget>(View, TEXT("ProgressOverlay")))
-        Overlay->SetVisibility(QuestRows.Num() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-    if (!QuestRows.IsValidIndex(Index)) return;
+        Overlay->SetVisibility(Entries.Num() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+    if (!Entries.IsValidIndex(Index)) return;
+    if (auto* Scroll = Find<UScrollBox>(View, TEXT("QuestList"))) Scroll->ScrollWidgetIntoView(RowWidgets[Index]);
+    const auto& Entry = Entries[Index];
+    if (Entry.BlueprintQuest)
+    {
+        Text(View, TEXT("QuestName"), Entry.Title);
+        Text(View, TEXT("QuestDescription"), Entry.Description);
+        if (auto* Bar = Find<UProgressBar>(View, TEXT("QuestBar")))
+            Bar->SetPercent(Entry.Goal > 0 ? float(Entry.Progress) / float(Entry.Goal) : 0.f);
+        Text(View, TEXT("ProgressDetails"), FText::FromString(FString::Printf(TEXT("%d/%d"), Entry.Progress, Entry.Goal)));
+        return;
+    }
     FReditusQuestDefinition Definition; FReditusQuestSnapshot Snapshot; TArray<FReditusQuestObjectiveStatus> Tasks;
-    if (!Manager->GetQuestDetails(QuestRows[Index], Definition, Snapshot, Tasks)) return;
+    if (!Manager->GetQuestDetails(Entry.QuestRow, Definition, Snapshot, Tasks)) return;
     Text(View, TEXT("QuestName"), Definition.Title);
     FText Description = Definition.Description;
     const auto AppendLine = [](const FText& A, const FText& B)
@@ -149,7 +257,7 @@ void UReditusQuestJournalBinding::Select(int32 Index)
         Args.Add(TEXT("Current"), FText::AsNumber(Task.Count)); Args.Add(TEXT("Goal"), FText::AsNumber(Task.Objective.RequiredCount));
         Description = AppendLine(Description, FText::Format(NSLOCTEXT("ReditusQuests", "ObjectiveProgress", "{Marker} {Objective}  {Current}/{Goal}"), Args));
     }
-    for (const auto& Choice : Manager->GetQuestChoices(QuestRows[Index]))
+    for (const auto& Choice : Manager->GetQuestChoices(Entry.QuestRow))
         for (const auto& Stage : Definition.Stages) for (const auto& Authored : Stage.Choices)
             if (Authored.ChoiceID == Choice.ChoiceID) for (const auto& Option : Authored.Options)
                 if (Option.OptionID == Choice.OptionID)
@@ -157,12 +265,11 @@ void UReditusQuestJournalBinding::Select(int32 Index)
     if (Snapshot.State == EReditusQuestState::ReadyToDeliver) Description = AppendLine(Description, NSLOCTEXT("ReditusQuests", "ReadyToTurnIn", "Ready to turn in."));
     if (Snapshot.State == EReditusQuestState::Completed) Description = AppendLine(Description, NSLOCTEXT("ReditusQuests", "QuestCompletedDetail", "Completed."));
     if (Snapshot.State == EReditusQuestState::Failed) Description = AppendLine(Description, NSLOCTEXT("ReditusQuests", "QuestTimeExpired", "Time expired."));
-    const FText Rewards = Manager->GetQuestRewardSummary(QuestRows[Index]);
+    const FText Rewards = Manager->GetQuestRewardSummary(Entry.QuestRow);
     if (!Rewards.IsEmpty()) Description = FText::Format(FText::FromString(TEXT("{0}\n\n{1}")), Description, Rewards);
     Text(View, TEXT("QuestDescription"), Description);
     if (auto* Bar = Find<UProgressBar>(View, TEXT("QuestBar"))) Bar->SetPercent(Goal > 0 ? float(Count / Goal) : 0);
     Text(View, TEXT("ProgressDetails"), FText::FromString(FString::Printf(TEXT("%.0f/%.0f"), Count, Goal)));
-    if (auto* Scroll = Find<UScrollBox>(View, TEXT("QuestList"))) Scroll->ScrollWidgetIntoView(RowWidgets[Index]);
 }
 
 TSharedRef<SWidget> UReditusQuestNotificationsWidget::RebuildWidget()

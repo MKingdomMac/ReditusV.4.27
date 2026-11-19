@@ -1,0 +1,84 @@
+CURRENT SETUP: Version 2.5.0 adds repeatable battle/sequence/dialogue follow-ups and defers automatic removal to the final successful end. Use START_HERE_NPC_REMOVAL_AND_SCENES.md and README_FIRST.md for current setup. The older basic integration below remains a reference for the central battle/save adapter.
+
+REDITUS NPC OUTCOMES — 2.1.0 — UE4.27
+
+Cold install/build first, using START_HERE_NEW_QUESTS.txt.
+Your current dialogue appearance and quest-journal layout are preserved.
+
+FIRST: select the PLACED NPC in your map, then its QuestNPC component.
+Set Persistent NPC ID to a unique, permanent name such as HeremusGate_Rover01.
+Set a different ID for every NPC. Copying a placed NPC also copies this ID:
+change the copy's ID before testing. IDs must remain unique across maps too.
+Ordinary talking NPCs can leave it None if no persistent outcome is needed.
+For runtime-spawned NPCs, assign a stable ID from your spawner/save data before
+Finish Spawning (deferred spawn); never generate a fresh ID on every reload.
+
+RECRUITMENT
+In that NPC's Inline Definition (or its selected DT_QuestNPCs row), set:
+  Recruited Character = DT_PartyMembers / HeremusRover (or your actual unit)
+  Recruitment Starting Level = desired level
+  Add Recruit To Active Party If Space = true
+  Remove NPC On Recruitment = true
+Add a Reditus NPC Action event, Action = Recruit, to the actual successful
+recruitment dialogue branch. Do not put it on decline/failure/common close.
+It calls the existing UnlockCharacterAtLevel and active-party facade, verifies
+ownership, reports RecruitUnit once, and remembers this NPC's removal.
+A full active party leaves the unit in the recruited roster; it is not lost.
+The quest subsystem's Active Party Limit defaults to 4: set it to your real cap.
+
+If your existing robot recruitment UI already adds the robot, KEEP that flow.
+At its confirmed-success branch, AFTER it adds the unit, call:
+  Get Quest System > Confirm Quest Recruitment
+  Character ID = the recruited DT_PartyMembers row name
+  NPC ID = overworld NPC's Persistent NPC ID (None if there is no NPC to remove)
+  Remove NPC = true/false as appropriate
+Do not also run the new Recruit action on the same successful recruitment.
+Merely closing the old recruitment widget or choosing its old Join enum does
+not prove that the unit was actually added.
+
+BATTLES
+Set the NPC definition's Encounter ID (e.g. NPCChallenge), and optionally
+Remove NPC On Battle Victory. Add Reditus NPC Action / Start Battle to the
+Fight branch. It waits for dialogue cleanup, then requests the encounter.
+Bind ONE On NPC Battle Requested handler in your existing battle/controller
+flow. Use Request.EncounterID to select your existing encounter setup and
+retain Request.RequestID. The plugin does not guess your encounter-spawn API.
+When that battle ends, call Resolve NPC Battle with the same Request ID and
+Won, Lost, Escaped, or Cancelled. Resolve Cancelled if battle startup fails.
+Only Won reports WinBattle and applies optional permanent NPC removal.
+Resolve before the existing post-battle save flow, not after it.
+If winning unlocks recruitment, leave Remove NPC On Battle Victory OFF and
+remove it after recruitment succeeds instead.
+
+PERMANENT REMOVAL
+Use the QuestNPC component's Remove NPC Permanently node when your story
+chooses to remove the NPC. It remembers the ID, finishes an active conversation,
+then hides/removes the actor and minimap icon. Do not replace this with a plain
+Destroy Actor node: unload/despawn/ordinary destruction must not imply a story
+outcome. New instances check the remembered state when the map loads.
+
+SAVING IS REQUIRED FOR RESTART PERSISTENCE
+NPC removal and recruitment receipts are inside Reditus Quest Save Data.
+Keep the QuestState variable and Write/Read Quest State To/From Save hookups
+in your CURRENT Blueprint save system. Save the existing roster/party in the
+same file/operation. The plugin does not create an independent save slot or
+save to disk automatically. In-session map reload works from game-instance
+state; quitting/restarting requires your save/load connections.
+On loading, restore roster/player state first, then import QuestState.
+New Game clears quest/NPC state. Reload the map to recreate any previously
+destroyed map actors when starting a new game or loading an earlier save.
+Do not save between the roster change and its Confirm Quest Recruitment call.
+Can Save Quest State blocks native NPC actions and unresolved NPC battles.
+
+EXISTING CONTENT
+Fresh setup no longer generates recruitment/battle tutorial quest rows.
+Your existing authored rows and robot dialogue assets remain available.
+Recruitment and battle result APIs retain their current behavior.
+See README_FIRST.md for current setup and installation cleanup.
+
+TESTING
+Save after successful recruitment/removal. Reload the map: NPC stays gone and
+party/roster remains. Reload the save after restarting the game and check again.
+Test decline, failed recruit, full party, duplicate callbacks, battle loss/escape,
+and loading an earlier save through a fresh map. Unreal build/gameplay checks
+are still required; offline tests do not execute Blueprint or engine callbacks.

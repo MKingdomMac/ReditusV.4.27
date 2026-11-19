@@ -1,3 +1,4 @@
+#include "ReditusQuestCatalog.h"
 #include "ReditusQuestSubsystem.h"
 #include "ReditusQuestItemRouting.h"
 #include "GameFramework/PlayerController.h"
@@ -48,8 +49,7 @@ bool UReditusQuestSubsystem::BuildStepDelivery(FDataTableRowHandle Quest, FName 
 {
     Delivery = FReditusQuestDelivery();
     const auto* Record = Runtime.FindRecord(StepKey(Key(Quest)));
-    const auto* Row = Quest.DataTable && Quest.DataTable->GetRowStruct() == FReditusQuestDefinition::StaticStruct()
-        ? Quest.DataTable->FindRow<FReditusQuestDefinition>(Quest.RowName, TEXT("Quest step action"), false) : nullptr;
+    const auto* Row = ReditusQuestCatalog::Definition(Quest);
     if (!Record || !Row || ActionID.IsNone()
         || !Runtime.CanApplyAction(Record->Key, Record->StageId, StepID(ActionID))) return false;
     for (const auto& Stage : Row->Stages) if (StepID(Stage.StageID) == Record->StageId)

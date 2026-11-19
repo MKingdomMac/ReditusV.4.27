@@ -26,7 +26,7 @@ void UReditusQuestActionEvent::RecieveEventTriggered_Implementation(APlayerContr
     }
     else if (Action == EReditusQuestAction::TurnInQuest)
     {
-        if (!System->TurnInQuest(Quest, ConsideringPlayer))
+        if (!System->TurnInDialogueQuest(Quest, ConsideringPlayer))
             UE_LOG(LogTemp, Warning, TEXT("Turn In Quest did not finish %s / %s. Check Ready to Deliver state, current item ownership, pending receipts and the central reward handler."), *GetNameSafe(Quest.DataTable), *Quest.RowName.ToString());
     }
     else if (Action == EReditusQuestAction::RetryFailedQuest) System->RetryFailedQuest(Quest);

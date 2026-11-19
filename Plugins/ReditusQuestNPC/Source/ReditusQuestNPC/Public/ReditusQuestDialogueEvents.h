@@ -20,7 +20,7 @@ public:
     UPROPERTY(BlueprintReadWrite, Category="Retired Quest System")
     TSubclassOf<AActor> QuestOverride;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Action", meta=(RowType="ReditusQuestDefinition"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Action")
     FDataTableRowHandle QuestRowOverride;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objective Event", meta=(EditCondition="Action == EReditusQuestAction::ReportObjectiveEvent", EditConditionHides))
@@ -52,7 +52,7 @@ public:
     UPROPERTY(BlueprintReadWrite, Category="Retired Quest System")
     TSubclassOf<AActor> QuestOverride;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Condition", meta=(RowType="ReditusQuestDefinition"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Condition")
     FDataTableRowHandle QuestRowOverride;
 
     // Optional additional stage requirement for Active dialogue branches.
@@ -90,7 +90,7 @@ class REDITUSQUESTNPC_API UReditusQuestChoiceCondition : public UDialogueConditi
 {
     GENERATED_BODY()
 public:
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Saved Choice", meta=(RowType="ReditusQuestDefinition")) FDataTableRowHandle QuestRowOverride;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Saved Choice") FDataTableRowHandle QuestRowOverride;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Saved Choice") FName ChoiceID;
     // Empty means any selected option.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Saved Choice") FName OptionID;
@@ -102,7 +102,7 @@ class REDITUSQUESTNPC_API UReditusQuestStepAppliedCondition : public UDialogueCo
 {
     GENERATED_BODY()
 public:
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Step Action", meta=(RowType="ReditusQuestDefinition")) FDataTableRowHandle QuestRowOverride;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Step Action") FDataTableRowHandle QuestRowOverride;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Step Action") FName ActionID;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Step Action") bool ExpectedApplied = true;
     virtual bool IsConditionMet_Implementation(APlayerController* ConsideringPlayer, AActor* NPCActor) override;

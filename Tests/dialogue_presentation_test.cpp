@@ -5,7 +5,7 @@ using namespace ReditusDialoguePresentationPolicy;
 
 Snapshot Ready()
 {
-    Snapshot S; S.Active=true;S.Blocked=false;S.ContinueReady=true;S.InLevelSequence=true;S.Line=1;S.Characters=30;return S;
+    Snapshot S; S.Active=true;S.Blocked=false;S.ContinueReady=true;S.HasDialogueNode=true;S.InLevelSequence=true;S.Line=1;S.Characters=30;return S;
 }
 bool Run(Controls& C,const Snapshot& S,int Ticks=100)
 {
@@ -46,7 +46,7 @@ int main()
         auto Blocked=Ready();
         if(Reason==0)Blocked.Blocked=true;
         if(Reason==1)Blocked.Active=false;
-        if(Reason==2)Blocked.ScriptedSequence=true;
+        if(Reason==2)Blocked.HasDialogueNode=false;
         if(Reason==3)Blocked.ContinueReady=false;
         Controls C;C.Auto=true;C.SetHeld(true);assert(!Run(C,Blocked));
     }
@@ -69,8 +69,57 @@ int main()
     Confirm.Tick(.01,S);Confirm.ManualInput();assert(!Run(Confirm,S));S.Line++;
     assert(Run(Confirm,S));
 
-    assert(Controls::ReadingSeconds(0)>=1.4);
-    assert(Controls::ReadingSeconds(40000)<=12);
+    // A voiced line follows its voice, including a short pause after speech.
+    Controls SpokenClock;
+    auto Voiced = Ready();
+    Voiced.Characters = 1000;
+    Voiced.VoicePlaying = true;
+    SpokenClock.ToggleAuto();
+    assert(!Run(SpokenClock, Voiced, 100));
+    Voiced.VoicePlaying = false;
+    assert(!Run(SpokenClock, Voiced, 2));
+    assert(SpokenClock.Tick(.1, Voiced));
+    assert(!Run(SpokenClock, Voiced));
+
+    // An unvoiced next line gets its own reading time, without carrying voice state.
+    ++Voiced.Line;
+    assert(!Run(SpokenClock, Voiced, 7));
+    assert(Run(SpokenClock, Voiced, 35));
+
+    Controls Silent;
+    auto Unvoiced = Ready();
+    Unvoiced.Characters = 0;
+    assert(!Run(Silent, Unvoiced)); // Auto off can leave a line on screen indefinitely.
+    Silent.ToggleAuto();
+    assert(!Run(Silent, Unvoiced, 9)); // Turning Auto on starts a fresh delay.
+    assert(Run(Silent, Unvoiced, 10));
+
+    // A voice heard before Auto was selected is still followed by a fresh pause.
+    Controls LateAuto;
+    auto LateSpeech = Ready();
+    LateSpeech.VoicePlaying = true;
+    assert(!Run(LateAuto, LateSpeech, 10));
+    LateSpeech.VoicePlaying = false;
+    assert(!Run(LateAuto, LateSpeech, 20));
+    LateAuto.ToggleAuto();
+    assert(!Run(LateAuto, LateSpeech, 2));
+    assert(LateAuto.Tick(.1, LateSpeech));
+
+    // A protected cinematic cue must release its own continue gate first.
+    Controls ProtectedSpeech;
+    auto ProtectedLine = Ready();
+    ProtectedLine.ContinueReady = false;
+    ProtectedLine.VoicePlaying = true;
+    ProtectedSpeech.ToggleAuto();
+    assert(!Run(ProtectedSpeech, ProtectedLine, 20));
+    ProtectedLine.VoicePlaying = false;
+    assert(!Run(ProtectedSpeech, ProtectedLine, 20));
+    ProtectedLine.ContinueReady = true;
+    assert(!Run(ProtectedSpeech, ProtectedLine, 2));
+    assert(ProtectedSpeech.Tick(.1, ProtectedLine));
+
+    assert(Controls::ReadingSeconds(0)>=1.0);
+    assert(Controls::ReadingSeconds(40000)<=4.0);
     assert(Controls::ReadingSeconds(120)>Controls::ReadingSeconds(20));
     return 0;
 }

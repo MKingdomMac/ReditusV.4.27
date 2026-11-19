@@ -69,11 +69,13 @@ private:
 
     void BuildLayout();
     void ApplyTextStyle();
+    void RefreshSpeakerName();
     void RefreshChoices();
     void RefreshControls();
     void UpdateLog(double Delta);
     void UpdateHeld();
     void RestoreSourceFocus();
+    void ContinueDialogue(bool Manual = false);
     bool CallReply(int32 Index);
     bool InputAllowed() const;
     ReditusDialoguePresentationPolicy::Snapshot ReadSnapshot() const;

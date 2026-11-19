@@ -6,6 +6,11 @@
 
 bool UReditusQuestSubsystem::TurnInFetchQuest(FDataTableRowHandle Quest, APlayerController* Player)
 {
+    return TurnInDialogueQuest(Quest, Player);
+}
+
+bool UReditusQuestSubsystem::TurnInDialogueQuest(FDataTableRowHandle Quest, APlayerController* Player)
+{
     if (bApplyingNPCAction || bAllowBuiltInFetchDelivery) return false;
     TGuardValue<bool> Allow(bAllowBuiltInFetchDelivery, true);
     return TurnInQuest(Quest, Player);

@@ -1,4 +1,5 @@
 #include "ReditusQuestSubsystem.h"
+#include "ReditusQuestCatalog.h"
 #include "ReditusQuestUI.h"
 #include "ReditusQuestClock.h"
 #include "ReditusQuestMarkerPolicy.h"
@@ -10,6 +11,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "UObject/StructOnScope.h"
 #include "UObject/UnrealType.h"
+#include <algorithm>
 
 DEFINE_LOG_CATEGORY_STATIC(LogReditusQuests, Log, All);
 
@@ -45,9 +47,7 @@ namespace
     }
     const FReditusQuestDefinition* Definition(FDataTableRowHandle Row)
     {
-        return Row.DataTable && !Row.RowName.IsNone()
-            && Row.DataTable->GetRowStruct() == FReditusQuestDefinition::StaticStruct()
-            ? Row.DataTable->FindRow<FReditusQuestDefinition>(Row.RowName, TEXT("New Quest"), false) : nullptr;
+        return ReditusQuestCatalog::Definition(Row);
     }
     bool ValidItemRow(FDataTableRowHandle Row)
     { EReditusQuestItemKind Kind; return ReditusQuestItemRouting::ResolveKind(Row, Kind); }
@@ -75,6 +75,8 @@ namespace
 
 FString UReditusQuestSubsystem::Key(FDataTableRowHandle Quest)
 {
+    if (Quest.DataTable && Quest.DataTable->GetRowStruct() == FReditusQuestCatalogRow::StaticStruct())
+        Quest = ReditusQuestCatalog::Canonical(Quest);
     return Quest.DataTable && !Quest.RowName.IsNone()
         ? (Quest.DataTable->GetPathName() + TEXT(":") + Quest.RowName.ToString()).ToLower() : FString();
 }
@@ -89,7 +91,7 @@ UReditusQuestSubsystem* UReditusQuestSubsystem::GetQuestSystem(const UObject* Wo
 bool UReditusQuestSubsystem::EnsureDefinition(FDataTableRowHandle Quest, FString& Error, TSet<FString>& Visiting)
 {
     const FString ID = Key(Quest);
-    if (ID.IsEmpty()) { Error = TEXT("Select a DT_Quests row handle."); return false; }
+    if (ID.IsEmpty()) { Error = TEXT("Select a valid compiled quest catalogue row or DT_Quests row."); return false; }
     if (Runtime.FindDefinition(Narrow(ID))) return true;
     const auto* Row = Definition(Quest);
     if (!Row) { Error = TEXT("Quest row is missing or uses the wrong row structure: ") + ID; return false; }
@@ -98,91 +100,15 @@ bool UReditusQuestSubsystem::EnsureDefinition(FDataTableRowHandle Quest, FString
         || !ValidItems(Row->Rewards.Items) || !ValidItems(Row->TurnInItems))
     { Error = TEXT("Invalid reward/cost counts or duplicate item IDs: ") + ID; return false; }
     Visiting.Add(ID);
-    ReditusQuestRuntime::Definition D;
-    D.Key = Narrow(ID); D.Version = Row->DefinitionVersion;
-    D.HasRewards = Row->Rewards.Gold > 0 || Row->Rewards.Experience > 0
-        || Row->Rewards.Items.Num() > 0 || Row->TurnInItems.Num() > 0;
     for (const auto& Required : Row->RequiredCompletedQuests)
-    {
         if (!EnsureDefinition(Required, Error, Visiting)) { Visiting.Remove(ID); return false; }
-        D.Prerequisites.push_back(Narrow(Key(Required)));
-    }
-    for (const auto& Stage : Row->Stages)
-    {
-        ReditusQuestRuntime::Stage S; S.Id = Identifier(Stage.StageID);
-        S.Timer = static_cast<ReditusQuestRuntime::TimerMode>(Stage.Timer.Mode);
-        S.Seconds = Stage.Timer.Mode == EReditusQuestTimerMode::None ? 0 : Stage.Timer.DurationSeconds;
-        if (Stage.StageID.IsNone()) S.Id.clear();
-        S.Next = Stage.NextStageID.IsNone() ? std::string() : Identifier(Stage.NextStageID);
-        S.Finish = Stage.FinishAfterStage;
-        for (const auto& Choice : Stage.Choices)
-        {
-            ReditusQuestRuntime::Choice C; C.Id = Choice.ChoiceID.IsNone() ? std::string() : Identifier(Choice.ChoiceID);
-            for (const auto& Option : Choice.Options)
-            {
-                ReditusQuestRuntime::ChoiceOption O;
-                O.Id = Option.OptionID.IsNone() ? std::string() : Identifier(Option.OptionID); O.Value = Option.Value;
-                C.Options.push_back(O);
-            }
-            S.Choices.push_back(C);
-        }
-        for (const auto& Action : Stage.Actions)
-        {
-            if (!ValidItems(Action.ItemsToRemove) || !ValidItems(Action.Rewards.Items)
-                || Action.Rewards.Gold < 0 || Action.Rewards.Experience < 0)
-            { Visiting.Remove(ID); Error = TEXT("Invalid step action cost/reward: ") + ID; return false; }
-            for (const auto& Cost : Action.ItemsToRemove) for (const auto& Task : Stage.Objectives)
-                if (Task.Kind == EReditusQuestObjectiveKind::CollectItem
-                    && Task.ItemRow.DataTable == Cost.ItemRow.DataTable && Task.ItemRow.RowName == Cost.ItemRow.RowName)
-                { Visiting.Remove(ID); Error = TEXT("Use the StepAction objective for a handoff; do not also require possession of its consumed item in the same stage: ") + ID; return false; }
-            if (!Action.GoldRewardChoiceID.IsNone())
-            {
-                bool Found = false;
-                for (const auto& Earlier : Row->Stages)
-                {
-                    for (const auto& Choice : Earlier.Choices) if (Choice.ChoiceID == Action.GoldRewardChoiceID)
-                    {
-                        Found = true;
-                        for (const auto& Option : Choice.Options) if (Option.Value < 0) Found = false;
-                    }
-                    if (&Earlier == &Stage) break;
-                }
-                if (!Found || Action.Rewards.Gold != 0)
-                { Visiting.Remove(ID); Error = TEXT("GoldRewardChoiceID must refer to a current/earlier nonnegative choice, with fixed Gold = 0: ") + ID; return false; }
-            }
-            S.Actions.push_back(Action.ActionID.IsNone() ? std::string() : Identifier(Action.ActionID));
-        }
-        for (const auto& Route : Stage.Routes)
-        {
-            ReditusQuestRuntime::Route R;
-            R.ChoiceId = Route.ChoiceID.IsNone() ? std::string() : Identifier(Route.ChoiceID);
-            R.OptionId = Route.OptionID.IsNone() ? std::string() : Identifier(Route.OptionID);
-            R.Next = Route.NextStageID.IsNone() ? std::string() : Identifier(Route.NextStageID); R.Finish = Route.Finish;
-            S.Routes.push_back(R);
-        }
-        for (const auto& Objective : Stage.Objectives)
-        {
-            ReditusQuestRuntime::Task T;
-            T.Id = Objective.ObjectiveID.IsNone() ? std::string() : Identifier(Objective.ObjectiveID);
-            T.Target = Objective.TargetID.IsNone() ? std::string() : Identifier(Objective.TargetID);
-            if (Objective.Kind == EReditusQuestObjectiveKind::CollectItem)
-            {
-                if (!ValidItemRow(Objective.ItemRow))
-                { Visiting.Remove(ID); Error = TEXT("CollectItem objective needs a valid row from the game's item tables: ") + ID; return false; }
-                T.Target = Narrow(Key(Objective.ItemRow));
-            }
-            if (Objective.Kind == EReditusQuestObjectiveKind::TimerElapsed) T.Target = "__timer";
-            T.Type = static_cast<ReditusQuestRuntime::Kind>(Objective.Kind);
-            T.Required = Objective.RequiredCount; T.Optional = Objective.Optional;
-            S.Tasks.push_back(T);
-        }
-        D.Stages.push_back(S);
-    }
+    ReditusQuestRuntime::Definition D;
+    if (!ReditusQuestCatalog::BuildDefinition(*Row, ID, D, Error)) { Visiting.Remove(ID); return false; }
     std::string Why;
     const bool Valid = Runtime.AddDefinition(D, Why);
     Visiting.Remove(ID);
     if (!Valid) { Error = ID + TEXT(": ") + Wide(Why); return false; }
-    QuestRows.Add(ID, Quest); return true;
+    QuestRows.Add(ID, ReditusQuestCatalog::Canonical(Quest)); return true;
 }
 
 bool UReditusQuestSubsystem::Prepare(FDataTableRowHandle Quest)
@@ -697,11 +623,15 @@ void UReditusQuestSubsystem::Tick(float DeltaTime)
                 JournalBindings.RemoveAt(I);
             }
     }
-    const bool SequencePauses = (SequencePlayer && ActiveSequence.PauseQuestTimers)
-        || (SequenceQueue.Num() > 0 && SequenceQueue[0].PauseQuestTimers);
-    std::set<std::string> PendingDeliveryQuests;
-    for (const auto& Delivery : Deliveries) PendingDeliveryQuests.insert(Narrow(Delivery.Key));
-    if (!PauseQuestTimers && !SequencePauses && Runtime.Tick(World->GetDeltaSeconds(), PendingDeliveryQuests)) FlushChanges();
+    const auto& Records = Runtime.GetRecords();
+    const bool HasActiveTimer = std::any_of(Records.begin(), Records.end(), [](const auto& Pair)
+    { return Pair.second.Status == ReditusQuestRuntime::State::Active && Pair.second.TimerRemaining > 0; });
+    if (HasActiveTimer && !AreQuestTimersPaused())
+    {
+        std::set<std::string> PendingDeliveryQuests;
+        for (const auto& Delivery : Deliveries) PendingDeliveryQuests.insert(Narrow(Delivery.Key));
+        if (Runtime.Tick(World->GetDeltaSeconds(), PendingDeliveryQuests)) FlushChanges();
+    }
     if ((!NotificationView.IsValid() || NotificationView->GetWorld() != World) && GetQuestTimers().Num() > 0)
     {
         if (auto* PC = UGameplayStatics::GetPlayerController(GetGameInstance(), 0))
@@ -728,6 +658,7 @@ void UReditusQuestSubsystem::Deinitialize()
 TArray<FReditusQuestTimerStatus> UReditusQuestSubsystem::GetQuestTimers() const
 {
     TArray<FReditusQuestTimerStatus> Result;
+    bool TimersPaused = false;
     for (const auto& Pair : Runtime.GetRecords())
     {
         if (Pair.second.Status != ReditusQuestRuntime::State::Active) continue;
@@ -744,8 +675,8 @@ TArray<FReditusQuestTimerStatus> UReditusQuestSubsystem::GetQuestTimers() const
                 Status.RemainingSeconds = float(Pair.second.TimerRemaining);
                 Status.ElapsedSeconds = FMath::Max(0.f, Stage.Timer.DurationSeconds - Status.RemainingSeconds);
                 Status.CountUp = Stage.Timer.CountUp;
-                Status.Paused = PauseQuestTimers || Deliveries.Contains(Wide(Pair.first)) || (SequencePlayer && ActiveSequence.PauseQuestTimers)
-                    || (SequenceQueue.Num() > 0 && SequenceQueue[0].PauseQuestTimers);
+                if (Result.Num() == 0) TimersPaused = AreQuestTimersPaused();
+                Status.Paused = TimersPaused || Deliveries.Contains(Wide(Pair.first));
                 const auto Time = ReditusQuestClock::Display(Status.CountUp ? Status.ElapsedSeconds : Status.RemainingSeconds, Status.CountUp);
                 Status.DisplayTime = UTF8_TO_TCHAR(Time.c_str()); Result.Add(Status);
             }

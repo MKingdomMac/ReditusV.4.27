@@ -25,6 +25,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Objective")
     FReditusQuestObjectiveDefinition InlineDefinition;
 
+    // Reuse the normal reward receipt when this destination finishes the quest.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Objective", meta=(DisplayName="Turn In Quest on Arrival"))
+    bool bTurnInQuestOnArrival = false;
+
     UPROPERTY(BlueprintReadOnly, Category="Retired Marker Settings", meta=(DeprecatedProperty, DeprecationMessage="Ignored: use DT_Quests and MinimapPlugin."))
     UTexture2D* MainQuestIcon = nullptr;
 

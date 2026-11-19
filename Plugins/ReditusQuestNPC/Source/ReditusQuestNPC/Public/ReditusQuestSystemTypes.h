@@ -100,7 +100,7 @@ struct REDITUSQUESTNPC_API FReditusQuestTimerDefinition
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Timer") bool ShowOnScreen = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Timer") FText Label;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Timer") TArray<FReditusQuestSequence> OnTimeoutSequences;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Timer", meta=(RowType="ReditusQuestDefinition"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Timer")
     TArray<FDataTableRowHandle> StartQuestsOnTimeout;
 };
 
@@ -206,7 +206,7 @@ struct REDITUSQUESTNPC_API FReditusQuestTaskDefinition
     UPROPERTY(BlueprintReadWrite, Category="Legacy Item Routing") EReditusQuestItemKind ItemKind = EReditusQuestItemKind::Misc;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objective", meta=(ClampMin="1")) int32 RequiredCount = 1;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objective") bool Optional = false;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objective", meta=(RowType="ReditusQuestDefinition"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Objective")
     TArray<FDataTableRowHandle> StartQuestsOnCompletion;
 };
 
@@ -228,7 +228,7 @@ struct REDITUSQUESTNPC_API FReditusQuestStageDefinition
     EReditusQuestMarkerVisibility NPCMarkerVisibility = EReditusQuestMarkerVisibility::InheritQuest;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cinematics") TArray<FReditusQuestSequence> OnEnterSequences;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cinematics") TArray<FReditusQuestSequence> OnCompleteSequences;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Stage", meta=(RowType="ReditusQuestDefinition"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Stage")
     TArray<FDataTableRowHandle> StartQuestsOnCompletion;
 };
 
@@ -242,13 +242,13 @@ struct REDITUSQUESTNPC_API FReditusQuestDefinition : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest Markers") FReditusQuestMarkerRules Markers;
     // Increment when changing stage/objective structure after publishing saves.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest", meta=(ClampMin="1")) int32 DefinitionVersion = 1;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Availability", meta=(RowType="ReditusQuestDefinition"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Availability")
     TArray<FDataTableRowHandle> RequiredCompletedQuests;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Quest") TArray<FReditusQuestStageDefinition> Stages;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Turn In") TArray<FReditusQuestItemAmount> TurnInItems;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rewards") FReditusQuestRewards Rewards;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cinematics") TArray<FReditusQuestSequence> OnCompleteSequences;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Follow Up", meta=(RowType="ReditusQuestDefinition"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Follow Up")
     TArray<FDataTableRowHandle> StartQuestsOnCompletion;
 };
 

@@ -6,6 +6,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/Actor.h"
 #include "TimerManager.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 
 UReditusQuestObjectiveComponent::UReditusQuestObjectiveComponent()
@@ -89,11 +90,32 @@ bool UReditusQuestObjectiveComponent::ReportObjectiveReached(FName UniqueEventID
     TArray<FReditusQuestObjectiveStatus> Objectives;
     if (!Definition || !System || UniqueEventID.IsNone()
         || !System->GetQuestDetails(Definition->QuestRow, QuestDefinition, Snapshot, Objectives)
-        || Snapshot.State != EReditusQuestState::Active
+        || (Snapshot.State != EReditusQuestState::Active
+            && !(bTurnInQuestOnArrival && Snapshot.State == EReditusQuestState::ReadyToDeliver))
         || (!Definition->StageID.IsNone() && Definition->StageID != Snapshot.StageID)) return false;
+
+    const FDataTableRowHandle Quest = Definition->QuestRow;
     for (const auto& Objective : Objectives)
-        if (Objective.CurrentStage && Objective.Objective.ObjectiveID == Definition->ObjectiveID && !Objective.Complete)
-            return System->ReportQuestEvent(Objective.Objective.Kind, Objective.Objective.TargetID, UniqueEventID);
+    {
+        if (!Objective.CurrentStage || Objective.Objective.ObjectiveID != Definition->ObjectiveID) continue;
+        const bool TurnIn = bTurnInQuestOnArrival && Objective.Objective.Kind == EReditusQuestObjectiveKind::ReachLocation;
+        if (Snapshot.State == EReditusQuestState::ReadyToDeliver)
+        {
+            // Allow a later overlap to retry a cancelled delivery without
+            // reporting a second arrival or bypassing the existing receipt.
+            if (!TurnIn || !Objective.Complete) return false;
+        }
+        else
+        {
+            if (Objective.Complete
+                || !System->ReportQuestEvent(Objective.Objective.Kind, Objective.Objective.TargetID, UniqueEventID))
+                return false;
+            if (!TurnIn || !System->ReadQuest(Quest, Snapshot)
+                || Snapshot.State != EReditusQuestState::ReadyToDeliver)
+                return true;
+        }
+        return System->TurnInDialogueQuest(Quest, UGameplayStatics::GetPlayerController(System->GetGameInstance(), 0));
+    }
     return false;
 }
 

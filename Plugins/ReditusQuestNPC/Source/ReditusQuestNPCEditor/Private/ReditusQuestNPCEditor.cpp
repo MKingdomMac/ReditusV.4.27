@@ -2,6 +2,7 @@
 #include "ReditusQuestObjectiveComponent.h"
 #include "ReditusQuestNPCTypes.h"
 #include "ReditusQuestSystemTypes.h"
+#include "ReditusQuestGraphFactory.h"
 #include "DialogueUserWidget.h"
 #include "Dom/JsonObject.h"
 #include "MapIconComponent.h"
@@ -264,59 +265,6 @@ namespace ReditusQuestNPCEditor
         if (!Quests) return;
         if (NewTable)
         {
-            FDataTableRowHandle Introduction; Introduction.DataTable = Quests; Introduction.RowName = TEXT("Test_Introduction");
-            FDataTableRowHandle FollowUp; FollowUp.DataTable = Quests; FollowUp.RowName = TEXT("Test_FollowUp");
-            FReditusQuestDefinition First;
-            First.Title = FText::FromString(TEXT("A New Beginning"));
-            First.Description = FText::FromString(TEXT("Speak to the guide, then reach the marked destination."));
-            First.IsMainQuest = true;
-            FReditusQuestStageDefinition Talk;
-            Talk.StageID = TEXT("SpeakToGuide"); Talk.Description = FText::FromString(TEXT("Speak to the guide."));
-            FReditusQuestTaskDefinition TalkTask;
-            TalkTask.ObjectiveID = TEXT("TalkToGuide"); TalkTask.TargetID = TEXT("TestGuide");
-            TalkTask.Description = Talk.Description;
-            Talk.Objectives.Add(TalkTask); First.Stages.Add(Talk);
-            FReditusQuestStageDefinition Reach;
-            Reach.StageID = TEXT("FindDestination"); Reach.Description = FText::FromString(TEXT("Reach the destination."));
-            FReditusQuestTaskDefinition ReachTask;
-            ReachTask.ObjectiveID = TEXT("ReachMarker"); ReachTask.TargetID = TEXT("TestDestination");
-            ReachTask.Kind = EReditusQuestObjectiveKind::ReachLocation; ReachTask.Description = Reach.Description;
-            Reach.Objectives.Add(ReachTask); First.Stages.Add(Reach);
-            First.StartQuestsOnCompletion.Add(FollowUp);
-            FReditusQuestDefinition Second;
-            Second.Title = FText::FromString(TEXT("The Next Step"));
-            Second.Description = FText::FromString(TEXT("An example quest received after completing another quest."));
-            Second.RequiredCompletedQuests.Add(Introduction);
-            FReditusQuestStageDefinition Custom;
-            Custom.StageID = TEXT("NextTask");
-            FReditusQuestTaskDefinition CustomTask;
-            CustomTask.ObjectiveID = TEXT("TestSignal"); CustomTask.TargetID = TEXT("FollowUpTest");
-            CustomTask.Kind = EReditusQuestObjectiveKind::Custom;
-            CustomTask.Description = FText::FromString(TEXT("Report the follow-up test event."));
-            Custom.Objectives.Add(CustomTask); Second.Stages.Add(Custom);
-            Quests->AddRow(Introduction.RowName, First); Quests->AddRow(FollowUp.RowName, Second);
-            FReditusQuestDefinition WaitQuest;
-            WaitQuest.Title = FText::FromString(TEXT("Wait One Minute"));
-            WaitQuest.Description = FText::FromString(TEXT("Timer example: wait 60 seconds, then turn in from any Blueprint."));
-            FReditusQuestStageDefinition WaitStage; WaitStage.StageID = TEXT("WaitForSignal");
-            WaitStage.Description = FText::FromString(TEXT("Wait for the signal."));
-            WaitStage.Timer.Mode = EReditusQuestTimerMode::Wait; WaitStage.Timer.DurationSeconds = 60;
-            WaitStage.Timer.Label = WaitStage.Description;
-            FReditusQuestTaskDefinition WaitTask; WaitTask.ObjectiveID = TEXT("Wait60");
-            WaitTask.Kind = EReditusQuestObjectiveKind::TimerElapsed; WaitTask.Description = WaitStage.Description;
-            WaitStage.Objectives.Add(WaitTask); WaitQuest.Stages.Add(WaitStage);
-            Quests->AddRow(TEXT("Test_Wait60"), WaitQuest);
-            FReditusQuestDefinition DeadlineQuest;
-            DeadlineQuest.Title = FText::FromString(TEXT("Reach the Gate"));
-            DeadlineQuest.Description = FText::FromString(TEXT("Timer example: reach TestGate within five minutes."));
-            FReditusQuestStageDefinition DeadlineStage; DeadlineStage.StageID = TEXT("ReachGateInTime");
-            DeadlineStage.Description = FText::FromString(TEXT("Reach the gate before time runs out."));
-            DeadlineStage.Timer.Mode = EReditusQuestTimerMode::Deadline; DeadlineStage.Timer.DurationSeconds = 300;
-            DeadlineStage.Timer.Label = DeadlineStage.Description;
-            FReditusQuestTaskDefinition GateTask; GateTask.ObjectiveID = TEXT("ReachGate");
-            GateTask.Kind = EReditusQuestObjectiveKind::ReachLocation; GateTask.TargetID = TEXT("TestGate");
-            GateTask.Description = DeadlineStage.Description; DeadlineStage.Objectives.Add(GateTask);
-            DeadlineQuest.Stages.Add(DeadlineStage); Quests->AddRow(TEXT("Test_Deadline300"), DeadlineQuest);
             FReditusQuestDefinition HuntQuest;
             HuntQuest.Title = FText::FromString(TEXT("Defeat the Death Boar"));
             HuntQuest.Description = FText::FromString(TEXT("Example boss objective. Report its confirmed defeat, not cleanup/destruction."));
@@ -343,35 +291,11 @@ namespace ReditusQuestNPCEditor
                 }
             Quests->MarkPackageDirty();
         }
-        // Add new upgrade examples only when missing. Never replace authored rows.
-        if (!Quests->GetRowMap().Contains(TEXT("Test_RecruitRobot")))
-        {
-            FReditusQuestDefinition Recruit;
-            Recruit.Title = FText::FromString(TEXT("Recruit a Robot"));
-            Recruit.Description = FText::FromString(TEXT("Recruit the Heremus Rover through its successful dialogue or existing recruitment handler."));
-            FReditusQuestStageDefinition Stage; Stage.StageID = TEXT("RecruitRobot"); Stage.Description = Recruit.Description;
-            FReditusQuestTaskDefinition Task; Task.ObjectiveID = TEXT("RecruitRover");
-            Task.Kind = EReditusQuestObjectiveKind::RecruitUnit; Task.TargetID = TEXT("HeremusRover"); Task.Description = Recruit.Description;
-            Stage.Objectives.Add(Task); Recruit.Stages.Add(Stage);
-            Quests->AddRow(TEXT("Test_RecruitRobot"), Recruit); Quests->MarkPackageDirty();
-        }
-        if (!Quests->GetRowMap().Contains(TEXT("Test_NPCChallenge")))
-        {
-            FReditusQuestDefinition Challenge;
-            Challenge.Title = FText::FromString(TEXT("Win the Challenge"));
-            Challenge.Description = FText::FromString(TEXT("Win the NPC encounter; escaping, losing or cancelling does not complete it."));
-            FReditusQuestStageDefinition Stage; Stage.StageID = TEXT("WinChallenge"); Stage.Description = Challenge.Description;
-            FReditusQuestTaskDefinition Task; Task.ObjectiveID = TEXT("WinEncounter");
-            Task.Kind = EReditusQuestObjectiveKind::WinBattle; Task.TargetID = TEXT("NPCChallenge"); Task.Description = Challenge.Description;
-            Stage.Objectives.Add(Task); Challenge.Stages.Add(Stage);
-            Quests->AddRow(TEXT("Test_NPCChallenge"), Challenge); Quests->MarkPackageDirty();
-        }
         CreateAssets();
         UE_LOG(LogReditusQuestNPCEditor, Display, TEXT("DT_Quests is ready. Select its row through the NPC's Quest row handle. Existing authored rows were preserved. Save All."));
     }
 }
 
-void CreateReditusQuestStepExamples();
 
 class FReditusQuestNPCEditorModule : public IModuleInterface
 {
@@ -379,10 +303,10 @@ class FReditusQuestNPCEditorModule : public IModuleInterface
     TUniquePtr<FAutoConsoleCommand> ExportCommand;
     TUniquePtr<FAutoConsoleCommand> QuestCommand;
     TUniquePtr<FAutoConsoleCommand> JournalCommand;
-    TUniquePtr<FAutoConsoleCommand> StepExamplesCommand;
 public:
     virtual void StartupModule() override
     {
+        RegisterReditusQuestGraphEditor();
         CreateCommand = MakeUnique<FAutoConsoleCommand>(TEXT("Reditus.CreateQuestNPC"),
             TEXT("Create separate reusable NPC/objective Blueprints and their definition tables."),
             FConsoleCommandDelegate::CreateStatic(&ReditusQuestNPCEditor::CreateAssets));
@@ -392,16 +316,14 @@ public:
         JournalCommand = MakeUnique<FAutoConsoleCommand>(TEXT("Reditus.IntegrateQuestJournal"),
             TEXT("Back up and connect existing BP_QuestDetails to the new quest system; keep Designer layout."),
             FConsoleCommandDelegate::CreateStatic(&IntegrateReditusQuestJournal));
-        StepExamplesCommand = MakeUnique<FAutoConsoleCommand>(TEXT("Reditus.CreateQuestStepExamples"),
-            TEXT("Add missing branching extortion examples; preserve authored rows and dialogue assets."),
-            FConsoleCommandDelegate::CreateStatic(&CreateReditusQuestStepExamples));
         QuestCommand = MakeUnique<FAutoConsoleCommand>(TEXT("Reditus.CreateQuestSystem"),
-            TEXT("Create DT_Quests with example quests; preserve existing definitions and NPCs."),
+            TEXT("Create DT_Quests with simple hunt/fetch examples; preserve existing definitions and NPCs."),
             FConsoleCommandDelegate::CreateStatic(&ReditusQuestNPCEditor::CreateQuestSystem));
     }
     virtual void ShutdownModule() override
     {
-        StepExamplesCommand.Reset(); JournalCommand.Reset(); QuestCommand.Reset(); ExportCommand.Reset(); CreateCommand.Reset();
+        UnregisterReditusQuestGraphEditor();
+        JournalCommand.Reset(); QuestCommand.Reset(); ExportCommand.Reset(); CreateCommand.Reset();
     }
 };
 
