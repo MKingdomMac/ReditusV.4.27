@@ -67,6 +67,107 @@ namespace
         return FText::Format(NSLOCTEXT("ReditusHUD", "ResourcePair", "{0}/{1}"), Number(Current), Number(Maximum));
     }
 
+    template <typename Effect>
+    constexpr auto ProtectedEnemyEffect(int) -> decltype(Effect::Protected)
+    {
+        return Effect::Protected;
+    }
+
+    template <typename Effect>
+    constexpr Effect ProtectedEnemyEffect(...)
+    {
+        return Effect::Count;
+    }
+
+    struct FEnemyEffectArtwork
+    {
+        EReditusEnemyEffect Effect;
+        uint8 GlyphIndex;
+        const TCHAR* Label;
+    };
+
+    const FEnemyEffectArtwork* FindEnemyEffectArtwork(uint8 Kind)
+    {
+        using E = EReditusEnemyEffect;
+        const E Effect = static_cast<E>(Kind);
+        if (Effect == E::Count) return nullptr;
+
+        // Glyph indices refer to the artwork slots in ReditusHUDSkin.
+        static constexpr FEnemyEffectArtwork Artwork[] = {
+            {E::Staggered, 0, TEXT("STAGGERED")},
+            {E::Poison, 1, TEXT("POISON")},
+            {E::Stun, 2, TEXT("STUN")},
+            {E::Blind, 3, TEXT("BLIND")},
+            {E::Sleep, 4, TEXT("SLEEP")},
+            {E::Confusion, 5, TEXT("CONFUSION")},
+            {E::Charm, 6, TEXT("CHARMED")},
+            {E::Berserk, 7, TEXT("BERSERK")},
+            {E::Taunt, 8, TEXT("TAUNTED")},
+            {E::Exhausted, 9, TEXT("EXHAUSTED")},
+            {E::Swallowed, 10, TEXT("SWALLOWED")},
+            {E::Regen, 11, TEXT("REGEN")},
+            {E::GuardUp, 12, TEXT("GUARD UP")},
+            {ProtectedEnemyEffect<E>(0), 13, TEXT("PROTECTED")},
+            {E::AccuracyUp, 14, TEXT("ACCURACY UP")},
+            {E::CriticalUp, 15, TEXT("CRITICAL UP")},
+            {E::Counter, 16, TEXT("COUNTER")},
+            {E::AmpBlock, 22, TEXT("AMP BLOCK")},
+        };
+        for (const FEnemyEffectArtwork& Entry : Artwork)
+        {
+            if (Entry.Effect == Effect) return &Entry;
+        }
+        return nullptr;
+    }
+
+    constexpr float OdinFullChargeSeconds = 3.f;
+    const FName UpdateOdinSkillHoldName(TEXT("UpdateOdinSkillHold"));
+    const FName ReleaseOdinSkillHoldName(TEXT("ReleaseOdinSkillHold"));
+
+    UObject* ReadChargeObject(UObject* Owner, FName Name)
+    {
+        const auto* Property = IsValid(Owner) ? FindFProperty<FObjectPropertyBase>(Owner->GetClass(), Name) : nullptr;
+        return Property ? Property->GetObjectPropertyValue_InContainer(Owner) : nullptr;
+    }
+
+    UObject* PendingOdinSkill(APlayerController* Player)
+    {
+        if (!IsValid(Player)) return nullptr;
+        const UEnum* Enum = nullptr;
+        int64 Value = INDEX_NONE;
+        const auto* Property = FindFProperty<FProperty>(Player->GetClass(), TEXT("Skill Input Control"));
+        if (const auto* EnumProperty = CastField<FEnumProperty>(Property))
+        {
+            Enum = EnumProperty->GetEnum();
+            Value = EnumProperty->GetUnderlyingProperty()->GetSignedIntPropertyValue(
+                EnumProperty->ContainerPtrToValuePtr<void>(Player));
+        }
+        else if (const auto* ByteProperty = CastField<FByteProperty>(Property))
+        {
+            Enum = ByteProperty->Enum;
+            Value = ByteProperty->GetPropertyValue_InContainer(Player);
+        }
+        if (!Enum || Enum->GetFName() != TEXT("E_SkillsRequiringInput")) return nullptr;
+
+        const FString Entry = Enum->GetNameStringByValue(Value);
+        if (Entry != TEXT("NewEnumerator0") && Entry != TEXT("NewEnumerator2") && Entry != TEXT("NewEnumerator3"))
+            return nullptr;
+
+        UObject* BattleController = ReadChargeObject(Player, TEXT("battleController"));
+        UObject* Attacker = ReadChargeObject(BattleController, TEXT("currentAttackingUnit"));
+        UObject* Skill = ReadChargeObject(Attacker, TEXT("SpecialInputSkill"));
+        return IsValid(Skill) ? Skill : nullptr;
+    }
+
+    bool HasOdinChargeEvents(APlayerController* Player)
+    {
+        const UFunction* Update = Player->FindFunction(UpdateOdinSkillHoldName);
+        const UFunction* Release = Player->FindFunction(ReleaseOdinSkillHoldName);
+        return Update && Update->NumParms == 1 && Update->ParmsSize == sizeof(float) &&
+            FindFProperty<FFloatProperty>(Update, TEXT("HeldSeconds")) &&
+            Release && Release->NumParms == 0;
+    }
+
     /** Captures only the owning battle's keys inside the game widget path.
      * Menus and gameplay clicks share the same RequestCommand route.
      */
@@ -74,11 +175,15 @@ namespace
     {
     public:
         explicit FHUDInputObserver(UReditusBattleHUDWidget* InHUD) : HUD(InHUD) {}
-        virtual void Tick(const float, FSlateApplication&, TSharedRef<ICursor>) override {}
+        virtual void Tick(const float, FSlateApplication&, TSharedRef<ICursor>) override
+        {
+            if (OdinChargeKey.IsValid()) AdvanceOdinCharge(false);
+        }
         virtual bool HandleKeyDownEvent(FSlateApplication&, const FKeyEvent& Event) override
         {
             if (!CanObserve(Event.GetUserIndex())) return false;
             if (!Event.IsRepeat()) HUD->ObserveKey(Event.GetKey());
+            if (CaptureOdinChargePress(Event)) return true;
             if (HUD->bCaptureBattleInput && HUD->HasGameInputFocus())
                 return HUD->HandleBattleKeyDown(Event.GetKey(),Event.IsRepeat());
             if (HUD->bCaptureBattleInput && HUD->HasGameInputFocus(true))
@@ -88,6 +193,12 @@ namespace
         virtual bool HandleKeyUpEvent(FSlateApplication&, const FKeyEvent& Event) override
         {
             if (!CanObserve(Event.GetUserIndex())) return false;
+            const FKey Key = Event.GetKey();
+            if (OdinKeysDown.Remove(Key) > 0)
+            {
+                if (Key == OdinChargeKey) AdvanceOdinCharge(true);
+                return true;
+            }
             const bool Owned=HUD->HandleBattleKeyUp(Event.GetKey());
             return Owned && HUD->bCaptureBattleInput && HUD->HasGameInputFocus(true);
         }
@@ -115,6 +226,66 @@ namespace
     private:
         TWeakObjectPtr<UReditusBattleHUDWidget> HUD;
         TMap<FKey,float> PreviousAxes;
+        TSet<FKey> OdinKeysDown;
+        FKey OdinChargeKey;
+        TWeakObjectPtr<UObject> ChargedSkill;
+        float OdinChargeStartedAt = 0.f;
+
+        bool CaptureOdinChargePress(const FKeyEvent& Event)
+        {
+            const FKey Key = Event.GetKey();
+            // These are the keys displayed by the existing ATB skill prompt.
+            if (Key != EKeys::E && Key != EKeys::Gamepad_FaceButton_Right) return false;
+            if (Event.IsRepeat() && OdinKeysDown.Contains(Key)) return true;
+            if (!Event.IsRepeat()) OdinKeysDown.Remove(Key);
+            if (!HUD->bCaptureBattleInput || !HUD->HasGameInputFocus(true)) return false;
+
+            APlayerController* Player = HUD->GetOwningPlayer();
+            UObject* PendingSkill = PendingOdinSkill(Player);
+            if (!PendingSkill || !HasOdinChargeEvents(Player) || !Player->GetWorld()) return false;
+
+            // A key held from target confirmation has to be pressed again.
+            if (Event.IsRepeat()) return true;
+            OdinKeysDown.Add(Key);
+            if (ChargedSkill.Get() != PendingSkill)
+            {
+                ChargedSkill = PendingSkill;
+                OdinChargeKey = Key;
+                OdinChargeStartedAt = Player->GetWorld()->GetTimeSeconds();
+                AdvanceOdinCharge(false);
+            }
+            return true;
+        }
+
+        void AdvanceOdinCharge(bool bReleased)
+        {
+            APlayerController* Player = HUD.IsValid() ? HUD->GetOwningPlayer() : nullptr;
+            UObject* Skill = ChargedSkill.Get();
+            UWorld* World = IsValid(Player) ? Player->GetWorld() : nullptr;
+            if (!World || !Skill || !HUD->bCaptureBattleInput ||
+                !HUD->HasGameInputFocus(true) || PendingOdinSkill(Player) != Skill)
+            {
+                OdinChargeKey = FKey();
+                ChargedSkill.Reset();
+                return;
+            }
+
+            float HeldSeconds = FMath::Clamp(World->GetTimeSeconds() - OdinChargeStartedAt, 0.f, OdinFullChargeSeconds);
+            const bool bFinish = bReleased || HeldSeconds >= OdinFullChargeSeconds;
+            if (UFunction* Update = Player->FindFunction(UpdateOdinSkillHoldName))
+                Player->ProcessEvent(Update, &HeldSeconds);
+            if (bFinish)
+            {
+                // Keep the physical key claimed through its release even if
+                // a full charge has already fired the spell.
+                OdinChargeKey = FKey();
+                ChargedSkill.Reset();
+                if (PendingOdinSkill(Player) == Skill)
+                    if (UFunction* Release = Player->FindFunction(ReleaseOdinSkillHoldName))
+                        Player->ProcessEvent(Release, nullptr);
+            }
+        }
+
         bool CanObserve(uint32 UserIndex) const
         {
             if (!HUD.IsValid() || !HUD->IsInViewport()) return false;
@@ -159,6 +330,12 @@ UReditusBattleHUDWidget::UReditusBattleHUDWidget(const FObjectInitializer& Initi
     };
     Glyph(EKeys::Gamepad_FaceButton_Bottom.GetFName(), TEXT("XboxOne_A"));
     Glyph(EKeys::Gamepad_FaceButton_Right.GetFName(), TEXT("XboxOne_B"));
+    static ConstructorHelpers::FObjectFinderOptional<UTexture2D> OdinKeyboardEGlyph(
+        TEXT("/Game/PushableActorProject/Blueprints/BasicPush/Texture/UI/T_PushKeyboard_E.T_PushKeyboard_E"));
+    if (UTexture2D* KeyboardETexture = OdinKeyboardEGlyph.Get())
+    {
+        GlyphTextures.Add(EKeys::E.GetFName(), KeyboardETexture);
+    }
     Glyph(EKeys::Gamepad_FaceButton_Left.GetFName(), TEXT("XboxOne_X"));
     Glyph(EKeys::Gamepad_FaceButton_Top.GetFName(), TEXT("XboxOne_Y"));
     Glyph(EKeys::Gamepad_LeftShoulder.GetFName(), TEXT("XboxOne_LB"));
@@ -253,7 +430,6 @@ void UReditusBattleHUDWidget::InitializeSkin()
         ResolvedStaminaBrush=BuildBrush(ReditusHUDSkin::StaminaFigure(),FMargin(0.f));
     ResolvedStaminaBrush.DrawAs=ESlateBrushDrawType::Image;
     ResolvedStaminaBrush.ImageSize=FVector2D(24.f,24.f);
-    static_assert(static_cast<int32>(EReditusEnemyEffect::Count)==18,"Enemy status artwork order changed");
     for (int32 Kind=0; Kind<23; ++Kind)
     {
         FSlateBrush Glyph=BuildBrush(ReditusHUDSkin::EnemyBadgeGlyph(Kind),FMargin(0.f));
@@ -428,8 +604,13 @@ void UReditusBattleHUDWidget::BuildLayout()
     TargetContent->AddChildToVerticalBox(TargetName);
     TargetDetails=WidgetTree->ConstructWidget<UVerticalBox>();
     TargetContent->AddChildToVerticalBox(TargetDetails);
+    TargetConfirm=MakeButton(EReditusHUDCommand::Attack,NSLOCTEXT("ReditusHUD","ConfirmTarget","CONFIRM"));
+    FButtonStyle TargetConfirmStyle=TargetConfirm.Button->WidgetStyle;
+    TargetConfirmStyle.Normal=SelectedFrameBrush;
+    TargetConfirm.Button->SetStyle(TargetConfirmStyle);
+    TargetContent->AddChildToVerticalBox(TargetConfirm.Button)->SetPadding(FMargin(0.f,6.f,0.f,0.f));
     TargetFrame=MakeFrame(TargetContent,FMargin(14.f,8.f));
-    TargetFrame->SetVisibility(ESlateVisibility::HitTestInvisible);
+    TargetFrame->SetVisibility(ESlateVisibility::Collapsed);
     UCanvasPanelSlot* TargetPlacement=DesignCanvas->AddChildToCanvas(TargetFrame);
     TargetPlacement->SetPosition(FVector2D(16.f,16.f));
     TargetPlacement->SetAutoSize(true);
@@ -453,6 +634,16 @@ void UReditusBattleHUDWidget::BuildLayout()
     ActionName=MakeText(FText::GetEmpty(),25);
     ActionName->SetColorAndOpacity(FSlateColor(Gold));
     ActionContent->AddChildToHorizontalBox(ActionName)->SetVerticalAlignment(VAlign_Center);
+    OdinChargeGlyph = WidgetTree->ConstructWidget<UImage>();
+    OdinChargeGlyph->SetVisibility(ESlateVisibility::Collapsed);
+    UHorizontalBoxSlot* OdinGlyphPlacement = ActionContent->AddChildToHorizontalBox(OdinChargeGlyph);
+    OdinGlyphPlacement->SetVerticalAlignment(VAlign_Center);
+    OdinGlyphPlacement->SetPadding(FMargin(8.f, 0.f));
+
+    OdinChargeTail = MakeText(NSLOCTEXT("ReditusHUD", "OdinChargeTail", "TO CHARGE"), 25);
+    OdinChargeTail->SetColorAndOpacity(FSlateColor(Gold));
+    OdinChargeTail->SetVisibility(ESlateVisibility::Collapsed);
+    ActionContent->AddChildToHorizontalBox(OdinChargeTail)->SetVerticalAlignment(VAlign_Center);
     ActionFrame=MakeFrame(ActionContent,FMargin(14.f,6.f));
     UCanvasPanelSlot* ActionPlacement=DesignCanvas->AddChildToCanvas(ActionFrame);
     ActionPlacement->SetAnchors(FAnchors(0.5f,0.f));
@@ -864,7 +1055,15 @@ void UReditusBattleHUDWidget::SetEnemyStatusViews(const TArray<FReditusEnemyHUDV
             BadgeSlot->SetAlignment(FVector2D(.5f,1.f));
         }
         const bool bSelected=View.bTargeted;
-        const bool bHasStrip=View.MaxStamina>0 || View.Effects.Num()>0;
+        TArray<uint8> Icons;
+        for (const FReditusEnemyHUDEffect& Effect : View.Effects)
+        {
+            if (const FEnemyEffectArtwork* Artwork = FindEnemyEffectArtwork(Effect.Kind))
+            {
+                Icons.Add(Artwork->GlyphIndex);
+            }
+        }
+        const bool bHasStrip=View.MaxStamina>0 || Icons.Num()>0;
         const FVector2D TargetIconDimensions(TargetIconSize,TargetIconSize);
         if (Badge.Diamond->Brush.ImageSize!=TargetIconDimensions)
         {
@@ -884,8 +1083,6 @@ void UReditusBattleHUDWidget::SetEnemyStatusViews(const TArray<FReditusEnemyHUDV
             Badge.Notch->SetBrush(Notch);
         }
 
-        TArray<uint8> Icons;
-        for (const auto& Effect:View.Effects) Icons.Add(Effect.Kind);
         if (Badge.Stamina==View.Stamina && Badge.MaxStamina==View.MaxStamina && Badge.Icons==Icons) continue;
         Badge.Stamina=View.Stamina;
         Badge.MaxStamina=View.MaxStamina;
@@ -913,7 +1110,7 @@ void UReditusBattleHUDWidget::SetEnemyStatusViews(const TArray<FReditusEnemyHUDV
         }
         else for (int32 Pip=0; Pip<View.MaxStamina; ++Pip)
             Add(MakeEnemyGlyph(Pip<View.Stamina ? 17 : 18,14.f));
-        if (View.Effects.Num()>0 && View.MaxStamina>0)
+        if (Badge.Icons.Num()>0 && View.MaxStamina>0)
         {
             UImage* Divider=WidgetTree->ConstructWidget<UImage>();
             FSlateColorBrush Brush(FLinearColor(.46f,.36f,.20f,1.f));
@@ -921,21 +1118,22 @@ void UReditusBattleHUDWidget::SetEnemyStatusViews(const TArray<FReditusEnemyHUDV
             Divider->SetBrush(Brush);
             Add(Divider,5.f);
         }
-        for (int32 I=0; I<FMath::Min(3,View.Effects.Num()); ++I)
-            Add(MakeEnemyGlyph(View.Effects[I].Kind==static_cast<uint8>(EReditusEnemyEffect::AmpBlock) ? 22 : View.Effects[I].Kind,16.f));
-        if (View.Effects.Num()>3)
-            Add(MakeText(FText::FromString(FString::Printf(TEXT("+%d"),View.Effects.Num()-3)),12),0.f);
+        for (int32 I=0; I<FMath::Min(3,Badge.Icons.Num()); ++I)
+            Add(MakeEnemyGlyph(Badge.Icons[I],16.f));
+        if (Badge.Icons.Num()>3)
+            Add(MakeText(FText::FromString(FString::Printf(TEXT("+%d"),Badge.Icons.Num()-3)),12),0.f);
     }
     RefreshTargetDisplay();
 }
 
 void UReditusBattleHUDWidget::RefreshTargetDisplay()
 {
-    if (!TargetFrame || !TargetName || !TargetDetails) return;
-    const bool bShow=bTargetSelectionActive && !IsMenuOpen() && !TargetLabel.IsEmpty();
-    TargetFrame->SetVisibility(bShow ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+    if (!TargetFrame || !TargetName || !TargetDetails || !TargetConfirm.Button) return;
+    const bool bShow=bTargetSelectionActive && !IsMenuOpen();
+    TargetFrame->SetVisibility(bShow ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
     if (!bShow) return;
-    TargetName->SetText(TargetLabel);
+    TargetName->SetText(TargetLabel.IsEmpty() ? NSLOCTEXT("ReditusHUD","SelectTarget","SELECT TARGET") : TargetLabel);
+    TargetConfirm.Button->SetIsEnabled(CanExecuteCommand(EReditusHUDCommand::Attack));
     const auto* View=EnemyStatusViews.FindByPredicate([this](const FReditusEnemyHUDView& Data){return Data.Unit==TargetEnemy.Get();});
     if (!View)
     {
@@ -958,17 +1156,15 @@ void UReditusBattleHUDWidget::RefreshTargetDisplay()
     if (View->MaxStamina>0)
         TargetDetails->AddChildToVerticalBox(MakeText(FText::Format(NSLOCTEXT("ReditusHUD","EnemyStamina","STAMINA   {0} / {1}"),
             FText::AsNumber(View->Stamina),FText::AsNumber(View->MaxStamina)),17));
-    static const TCHAR* Labels[]={TEXT("STAGGERED"),TEXT("POISON"),TEXT("STUN"),TEXT("BLIND"),TEXT("SLEEP"),
-        TEXT("CONFUSION"),TEXT("CHARMED"),TEXT("BERSERK"),TEXT("TAUNTED"),TEXT("EXHAUSTED"),TEXT("SWALLOWED"),
-        TEXT("REGEN"),TEXT("GUARD UP"),TEXT("PROTECTED"),TEXT("ACCURACY UP"),TEXT("CRITICAL UP"),TEXT("COUNTER"),TEXT("AMP BLOCK")};
     for (const auto& Effect:View->Effects)
     {
-        if (Effect.Kind>=UE_ARRAY_COUNT(Labels)) continue;
+        const FEnemyEffectArtwork* Artwork = FindEnemyEffectArtwork(Effect.Kind);
+        if (!Artwork) continue;
         UHorizontalBox* Row=WidgetTree->ConstructWidget<UHorizontalBox>();
-        auto* Icon=Row->AddChildToHorizontalBox(MakeEnemyGlyph(Effect.Kind==static_cast<uint8>(EReditusEnemyEffect::AmpBlock) ? 22 : Effect.Kind,16.f));
+        auto* Icon=Row->AddChildToHorizontalBox(MakeEnemyGlyph(Artwork->GlyphIndex,16.f));
         Icon->SetPadding(FMargin(0.f,0.f,7.f,0.f));
         Icon->SetVerticalAlignment(VAlign_Center);
-        FText Name=FText::FromString(Labels[Effect.Kind]);
+        FText Name=FText::FromString(Artwork->Label);
         if (Effect.Turns>0)
             Name=FText::Format(Effect.Turns==1 ? NSLOCTEXT("ReditusHUD","EnemyEffectTurn","{0}   {1} TURN") :
                 NSLOCTEXT("ReditusHUD","EnemyEffectTurns","{0}   {1} TURNS"),Name,FText::AsNumber(Effect.Turns));
@@ -1024,10 +1220,53 @@ void UReditusBattleHUDWidget::SetActionAnnouncement(FText Label,const FSlateBrus
     ActionLabel=Label;
     ActionElementBrush=ElementIcon;
     bActionVisible=bVisible && !Label.IsEmpty();
-    if (ActionName) ActionName->SetText(ActionLabel);
+    APlayerController* Player = GetOwningPlayer();
+    const bool bShowOdinCharge = bCaptureBattleInput && !bInputSuspended &&
+        PendingOdinSkill(Player) && HasOdinChargeEvents(Player);
+    const bool bChargeUsesXbox = InputDevice == EReditusHUDInputDevice::Xbox;
+    const FKey OdinPromptKey = bChargeUsesXbox ? EKeys::Gamepad_FaceButton_Right : EKeys::E;
+    UTexture2D* OdinChargeTexture = bShowOdinCharge ? GlyphTextures.FindRef(OdinPromptKey.GetFName()) : nullptr;
+    const bool bShowChargeGlyph = OdinChargeGlyph && OdinChargeTail && IsValid(OdinChargeTexture);
+    const ESlateVisibility ChargeGlyphVisibility = bShowChargeGlyph
+        ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed;
+
+    if (OdinChargeGlyph)
+    {
+        if (bShowChargeGlyph && OdinChargeGlyph->Brush.GetResourceObject() != OdinChargeTexture)
+        {
+            FSlateBrush ChargeBrush;
+            ChargeBrush.SetResourceObject(OdinChargeTexture);
+            ChargeBrush.DrawAs = ESlateBrushDrawType::Image;
+            const float Aspect = static_cast<float>(OdinChargeTexture->GetSizeX()) /
+                FMath::Max(1, OdinChargeTexture->GetSizeY());
+            ChargeBrush.ImageSize = FVector2D(28.f * Aspect, 28.f);
+            OdinChargeGlyph->SetBrush(ChargeBrush);
+        }
+        OdinChargeGlyph->SetVisibility(ChargeGlyphVisibility);
+    }
+    if (OdinChargeTail)
+    {
+        OdinChargeTail->SetVisibility(ChargeGlyphVisibility);
+    }
+
+    FText OdinChargeAnnouncementText = ActionLabel;
+    if (bShowChargeGlyph)
+    {
+        OdinChargeAnnouncementText = NSLOCTEXT("ReditusHUD", "OdinChargeLead", "HOLD");
+    }
+    else if (bShowOdinCharge)
+    {
+        OdinChargeAnnouncementText = bChargeUsesXbox
+            ? NSLOCTEXT("ReditusHUD", "OdinChargeGamepad", "HOLD B TO CHARGE")
+            : NSLOCTEXT("ReditusHUD", "OdinChargeKeyboard", "HOLD E TO CHARGE");
+    }
+    if (ActionName)
+    {
+        ActionName->SetText(OdinChargeAnnouncementText);
+    }
     if (ActionElement) ActionElement->SetBrush(ActionElementBrush);
     if (ActionElementBox) ActionElementBox->SetVisibility(ActionElementBrush.GetResourceObject() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-    if (ActionFrame) ActionFrame->SetVisibility(bActionVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+    if (ActionFrame) ActionFrame->SetVisibility(bActionVisible || bShowOdinCharge ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 }
 
 void UReditusBattleHUDWidget::ClearActionAnnouncement()
@@ -1452,7 +1691,7 @@ void UReditusBattleHUDWidget::RefreshPartyStatuses(FCard& Card,const FReditusBat
     TArray<FReditusEnemyHUDEffect> Effects;
     const auto Add=[&Effects](const FReditusEnemyHUDEffect& Effect)
     {
-        if (Effect.Kind>=static_cast<uint8>(EReditusEnemyEffect::Count) || Effect.Turns==0) return;
+        if (Effect.Turns==0 || !FindEnemyEffectArtwork(Effect.Kind)) return;
         if (auto* Existing=Effects.FindByPredicate([&Effect](const FReditusEnemyHUDEffect& Other){return Other.Kind==Effect.Kind;}))
             Existing->Turns=FMath::Max(Existing->Turns,Effect.Turns);
         else Effects.Add(Effect);
@@ -1460,7 +1699,6 @@ void UReditusBattleHUDWidget::RefreshPartyStatuses(FCard& Card,const FReditusBat
     if (bAlive)
     {
         for (const auto& Effect:Data.StatusEffects) Add(Effect);
-        // Retain compatibility with callers supplying the old AMP-only snapshot.
         if (Data.AmpBlockTurns>0)
         {
             FReditusEnemyHUDEffect Amp;
@@ -1474,40 +1712,40 @@ void UReditusBattleHUDWidget::RefreshPartyStatuses(FCard& Card,const FReditusBat
     if (Card.DisplayedEffects==Effects) return;
     Card.DisplayedEffects=Effects;
     Card.StatusIconRow->ClearChildren();
-    static const TCHAR* Names[]={TEXT("STAGGERED"),TEXT("POISON"),TEXT("STUN"),TEXT("BLIND"),TEXT("SLEEP"),
-        TEXT("CONFUSION"),TEXT("CHARMED"),TEXT("BERSERK"),TEXT("TAUNTED"),TEXT("EXHAUSTED"),TEXT("SWALLOWED"),
-        TEXT("REGEN"),TEXT("GUARD UP"),TEXT("PROTECTED"),TEXT("ACCURACY UP"),TEXT("CRITICAL UP"),TEXT("COUNTER"),TEXT("AMP BLOCK")};
-    static_assert(UE_ARRAY_COUNT(Names)==static_cast<int32>(EReditusEnemyEffect::Count),"Party status labels are incomplete");
+
     FString Summary;
     const int32 Visible=Effects.Num()<=4 ? Effects.Num() : 3;
     for (int32 Index=0; Index<Effects.Num(); ++Index)
     {
         const auto& Effect=Effects[Index];
-        FText Description=FText::FromString(Names[Effect.Kind]);
+        const auto& Artwork=*FindEnemyEffectArtwork(Effect.Kind);
+        FText Description=Text(Artwork.Label);
         if (Effect.Turns>0)
             Description=FText::Format(Effect.Turns==1 ? NSLOCTEXT("ReditusHUD","PartyEffectCycle","{0} - {1} CYCLE") :
                 NSLOCTEXT("ReditusHUD","PartyEffectCycles","{0} - {1} CYCLES"),Description,FText::AsNumber(Effect.Turns));
         if (!Summary.IsEmpty()) Summary+=TEXT("\n");
         Summary+=Description.ToString();
         if (Index>=Visible) continue;
+
         auto* Column=WidgetTree->ConstructWidget<UVerticalBox>();
         Column->SetVisibility(ESlateVisibility::HitTestInvisible);
-        auto* Icon=Column->AddChildToVerticalBox(MakeEnemyGlyph(
-            Effect.Kind==static_cast<uint8>(EReditusEnemyEffect::AmpBlock) ? 22 : Effect.Kind,16.f));
-        Icon->SetHorizontalAlignment(HAlign_Center);
+        Column->AddChildToVerticalBox(MakeEnemyGlyph(Artwork.GlyphIndex,16.f))->SetHorizontalAlignment(HAlign_Center);
         if (Effect.Turns>0)
         {
-            auto* Cycles=MakeText(Effect.Turns>99 ? Text(TEXT("99+")) : FText::AsNumber(Effect.Turns),11);
-            Cycles->SetJustification(ETextJustify::Center);
-            auto* CountSlot=Column->AddChildToVerticalBox(Cycles);
+            auto* Count=MakeText(Effect.Turns>99 ? Text(TEXT("99+")) : FText::AsNumber(Effect.Turns),11);
+            Count->SetJustification(ETextJustify::Center);
+            auto* CountSlot=Column->AddChildToVerticalBox(Count);
             CountSlot->SetHorizontalAlignment(HAlign_Center);
             CountSlot->SetPadding(FMargin(0.f,-1.f,0.f,0.f));
         }
         auto* Box=WidgetTree->ConstructWidget<USizeBox>();
         Box->SetVisibility(ESlateVisibility::HitTestInvisible);
-        Box->SetWidthOverride(21.f); Box->SetHeightOverride(29.f); Box->AddChild(Column);
+        Box->SetWidthOverride(21.f);
+        Box->SetHeightOverride(29.f);
+        Box->AddChild(Column);
         auto* StatusSlot=Card.StatusIconRow->AddChildToHorizontalBox(Box);
-        StatusSlot->SetVerticalAlignment(VAlign_Top); StatusSlot->SetPadding(FMargin(0.f,0.f,2.f,0.f));
+        StatusSlot->SetVerticalAlignment(VAlign_Top);
+        StatusSlot->SetPadding(FMargin(0.f,0.f,2.f,0.f));
     }
     if (Effects.Num()>Visible)
     {
@@ -1515,7 +1753,6 @@ void UReditusBattleHUDWidget::RefreshPartyStatuses(FCard& Card,const FReditusBat
         More->SetVisibility(ESlateVisibility::HitTestInvisible);
         Card.StatusIconRow->AddChildToHorizontalBox(More)->SetVerticalAlignment(VAlign_Center);
     }
-    // The existing card button owns hover/clicks; icons do not intercept input.
     if (Card.Select) Card.Select->SetToolTipText(FText::FromString(Summary));
 }
 
@@ -1539,13 +1776,13 @@ void UReditusBattleHUDWidget::Refresh()
         Card.Frame->SetBrushColor(FLinearColor::White);
         Card.Frame->SetRenderOpacity(!Occupied ? 0.16f : Alive ? 1.f : 0.62f);
         Card.SelectionGlow->SetVisibility(Alive && !Data.bStaggered && I==SelectedIndex ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+        RefreshPartyStatuses(Card,Data,Alive);
         if (!Occupied) continue;
         Card.Name->SetText(Data.DisplayName);
         Card.Name->SetColorAndOpacity(FSlateColor(Alive ? Gold : Dull));
         Card.ReadyLabel->SetText(Text(TEXT("KO")));
         Card.ReadyLabel->SetColorAndOpacity(FSlateColor(Alive ? Gold : FLinearColor::White));
         Card.ReadyLabel->SetVisibility(!Alive ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-        RefreshPartyStatuses(Card,Data,Alive);
         FSlateBrush Portrait;
         Portrait.DrawAs = ESlateBrushDrawType::Image;
         Portrait.ImageSize = FVector2D(128.f,128.f);
@@ -1586,19 +1823,16 @@ void UReditusBattleHUDWidget::Refresh()
     }
     const FReditusBattleHUDUnit* Data = Selected();
     const bool MenuVisible=IsMenuOpen();
-    const bool ShowCommands=!MenuVisible && CanExecuteCommand(EReditusHUDCommand::Attack);
+    const bool ShowCommands=!MenuVisible && !bTargetSelectionActive && CanExecuteCommand(EReditusHUDCommand::Attack);
     const int32 Offset=bAlternateCommands ? 4 : 0;
     if (bCommandsEnabled && !IsMenuOpen() && Buttons.IsValidIndex(SelectedCommand) && !CanExecuteCommand(Buttons[SelectedCommand].Command))
         for (int32 I=Offset; I<Offset+4; ++I) if (CanExecuteCommand(Buttons[I].Command)) { SelectedCommand=I; break; }
     for (int32 I=0; I<Buttons.Num(); ++I)
     {
         FButtonView& View=Buttons[I];
-        const bool Visible=bTargetSelectionActive ? View.Command==EReditusHUDCommand::Attack :
-            (I>=4)==bAlternateCommands && (View.Command!=EReditusHUDCommand::Hack || (Data && Data->bCanHack));
+        const bool Visible=(I>=4)==bAlternateCommands && (View.Command!=EReditusHUDCommand::Hack || (Data && Data->bCanHack));
         View.Button->SetVisibility(Visible ? ESlateVisibility::Visible : ESlateVisibility::Hidden);
         View.Button->SetIsEnabled(CanExecuteCommand(View.Command));
-        if (View.Command==EReditusHUDCommand::Attack)
-            View.Label->SetText(bTargetSelectionActive ? Text(TEXT("CONFIRM")) : CommandLabel(View.Command));
         View.Label->SetColorAndOpacity(FSlateColor(I==SelectedCommand ? Gold : FLinearColor::White));
         FButtonStyle Style=View.Button->WidgetStyle;
         Style.Normal=I==SelectedCommand ? SelectedFrameBrush : SilverFrameBrush;
@@ -1607,7 +1841,7 @@ void UReditusBattleHUDWidget::Refresh()
     for (FButtonView& View : UtilityButtons)
     {
         if (View.Command!=EReditusHUDCommand::CycleBattleSpeed)
-            View.Button->SetVisibility(ShowCommands && !bTargetSelectionActive ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+            View.Button->SetVisibility(ShowCommands ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
         View.Button->SetIsEnabled(CanExecuteCommand(View.Command));
         if (View.Command==EReditusHUDCommand::Overdrive)
         {
@@ -1725,6 +1959,7 @@ void UReditusBattleHUDWidget::RefreshGlyphs()
     };
     for (FButtonView& View : Buttons) Apply(View,true);
     for (FButtonView& View : UtilityButtons) Apply(View,true);
+    if (TargetConfirm.Button) Apply(TargetConfirm,true);
     for (int32 I=0; I<ListButtons.Num(); ++I)
     {
         FButtonView& View=ListButtons[I];

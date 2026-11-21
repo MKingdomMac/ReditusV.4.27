@@ -2,33 +2,37 @@
 #include "ReditusQuestRuntime.h"
 #include "ReditusQuestItemRouting.h"
 
-namespace
+namespace ReditusQuestCatalog
 {
-    std::string Narrow(const FString& V) { return std::string(TCHAR_TO_UTF8(*V)); }
-    std::string Identifier(FName V) { return Narrow(V.ToString().ToLower()); }
-    FString Key(FDataTableRowHandle Row)
+    // Keep these helpers local to the catalogue when UBT combines source files.
+    namespace
     {
-        if (Row.DataTable && Row.DataTable->GetRowStruct() == FReditusQuestCatalogRow::StaticStruct())
-            Row = ReditusQuestCatalog::Canonical(Row);
-        return Row.DataTable && !Row.RowName.IsNone()
-            ? (Row.DataTable->GetPathName() + TEXT(":") + Row.RowName.ToString()).ToLower() : FString();
-    }
-    bool ValidItemRow(FDataTableRowHandle Row)
-    { EReditusQuestItemKind Kind; return ReditusQuestItemRouting::ResolveKind(Row, Kind); }
-    bool ValidItems(const TArray<FReditusQuestItemAmount>& Items)
-    {
-        TSet<FString> IDs;
-        for (const auto& Item : Items)
+        std::string Narrow(const FString& V) { return std::string(TCHAR_TO_UTF8(*V)); }
+        std::string Identifier(FName V) { return Narrow(V.ToString().ToLower()); }
+        FString Key(FDataTableRowHandle Row)
         {
-            EReditusQuestItemKind Kind;
-            if (!ReditusQuestItemRouting::ResolveKind(Item.ItemRow, Kind) || Item.Amount <= 0) return false;
-            const FString InventoryID = (FString::FromInt(int32(Kind)) + TEXT(":") + Item.ItemRow.RowName.ToString()).ToLower();
-            if (IDs.Contains(InventoryID)) return false;
-            IDs.Add(InventoryID);
+            if (Row.DataTable && Row.DataTable->GetRowStruct() == FReditusQuestCatalogRow::StaticStruct())
+                Row = ReditusQuestCatalog::Canonical(Row);
+            return Row.DataTable && !Row.RowName.IsNone()
+                ? (Row.DataTable->GetPathName() + TEXT(":") + Row.RowName.ToString()).ToLower() : FString();
         }
-        return true;
+        bool ValidItemRow(FDataTableRowHandle Row)
+        { EReditusQuestItemKind Kind; return ReditusQuestItemRouting::ResolveKind(Row, Kind); }
+        bool ValidItems(const TArray<FReditusQuestItemAmount>& Items)
+        {
+            TSet<FString> IDs;
+            for (const auto& Item : Items)
+            {
+                EReditusQuestItemKind Kind;
+                if (!ReditusQuestItemRouting::ResolveKind(Item.ItemRow, Kind) || Item.Amount <= 0) return false;
+                const FString InventoryID = (FString::FromInt(int32(Kind)) + TEXT(":") + Item.ItemRow.RowName.ToString()).ToLower();
+                if (IDs.Contains(InventoryID)) return false;
+                IDs.Add(InventoryID);
+            }
+            return true;
+        }
     }
- }
+}
 
 bool ReditusQuestCatalog::BuildDefinition(const FReditusQuestDefinition& Source, const FString& ID,
     ReditusQuestRuntime::Definition& D, FString& Error)

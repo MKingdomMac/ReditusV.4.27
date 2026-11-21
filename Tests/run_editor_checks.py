@@ -26,6 +26,11 @@ for marker, path in [
 source = (runtime / 'Private/ReditusQuestSubsystem.cpp').read_text()
 key = 'FString UReditusQuestSubsystem::Key(' + source.split('FString UReditusQuestSubsystem::Key(', 1)[1].split('\nUReditusQuestSubsystem*', 1)[0]
 catalog = catalog.replace('// ACTUAL_QUEST_KEY', key)
+# Compile the subsystem helpers alongside the actual definition compiler, as a unity build can do.
+string_helpers = '\n'.join(line for line in source.splitlines()
+                           if line.startswith(('    std::string Narrow(', '    std::string Identifier(')))
+item_helpers = '    bool ValidItemRow(' + source.split('    bool ValidItemRow(', 1)[1].split('    bool SameItems(', 1)[0]
+catalog = catalog.replace('// ACTUAL_SUBSYSTEM_HELPERS', 'namespace\n{\n' + string_helpers + '\n' + item_helpers + '}\n')
 
 compat = (tests / 'quest_editor_ue427_compat_test.cpp').read_text()
 compiler = (editor / 'Private/ReditusQuestGraphCompiler.cpp').read_text()
@@ -35,6 +40,9 @@ opening = '                    FString Error; auto* Catalog =' + toolkit.split('
 graph = (editor / 'Private/ReditusQuestGraph.cpp').read_text()
 refresh = 'void UReditusQuestGraphNode::RefreshPins()' + graph.split('void UReditusQuestGraphNode::RefreshPins()', 1)[1].split('void UReditusQuestGraphNode::PostEditChangeProperty(', 1)[0]
 compat = compat.replace('// ACTUAL_MUTABLE_CATALOG_LOOKUP', lookup).replace('// ACTUAL_OPEN_CATALOG', opening).replace('// ACTUAL_REFRESH_PINS', refresh)
+factory = (editor / 'Private/ReditusQuestGraphFactory.cpp').read_text()
+storage = next(line.strip() for line in factory.splitlines() if line.strip().startswith('TSharedPtr<FQuestAssetActions> '))
+compat = compat.replace('// ACTUAL_ASSET_ACTIONS_STORAGE', 'static ' + storage)
 
 for name, text in [('quest_graph_policy_test', (tests / 'quest_graph_policy_test.cpp').read_text()),
                    ('quest_catalog_test', catalog), ('quest_editor_ue427_compat_test', compat)]:
@@ -42,7 +50,9 @@ for name, text in [('quest_graph_policy_test', (tests / 'quest_graph_policy_test
         cpp = Path(temporary) / (name + '.cpp')
         binary = Path(temporary) / name
         cpp.write_text(text)
+        shadow_check = ['-Werror=shadow'] if name == 'quest_editor_ue427_compat_test' else []
         subprocess.run([os.environ.get('CXX', 'g++'), '-std=c++14', '-Wall', '-Wextra', '-Werror', '-pedantic',
+                        *shadow_check,
                         '-fsanitize=undefined', '-fno-sanitize-recover=all',
                         '-I', str(runtime / 'Public'), '-I', str(editor / 'Private'), str(cpp), '-o', str(binary)], check=True)
         subprocess.run([str(binary)], check=True)

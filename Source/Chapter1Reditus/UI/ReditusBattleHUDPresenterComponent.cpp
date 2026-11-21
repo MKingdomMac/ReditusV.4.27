@@ -1261,7 +1261,7 @@ void UReditusBattleHUDPresenterComponent::ClearATBListTargeting()
     for (const auto& Icon:Icons) SetTargetIcon(Icon.Get(),false);
 }
 
-bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FName ID,EReditusHUDCommand Command)
+bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FName ID,EReditusHUDCommand Command,bool bFromNativeMenu)
 {
 #if REDITUS_HUD_HAS_ATB
     const auto* ATB=RunningATB(GetOwner());
@@ -1269,18 +1269,25 @@ bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FNa
     const FHUDTableRow Row(Command==EReditusHUDCommand::Items ? ItemDescriptions : SkillDescriptions,ID);
     if (!CanUseATBListEntry(Unit,Command,Row)) return false;
     const auto Targets=ListTargets(GetOwner(),Unit,Command,Row,DisplaySlots,Player);
+    if (!IsValid(Targets.Initial)) return false;
+    // An enemy group needs confirmation even when only one enemy is alive.
+    const bool bCanSkipTargeting=Targets.bGroup ? Targets.Mode==TEXT("AllLivingAllies") : Targets.Units.Num()==1;
+    if (bFromNativeMenu && Command==EReditusHUDCommand::Overdrive && bCanSkipTargeting)
+    {
+        return SubmitATBListAction(Unit,ID,Command,Row.Class(TEXT("LegacySkill")),Targets.Units,Targets.Mode);
+    }
+
     AActor* PreviousTarget=Cast<AActor>(ObjectValue(Unit,TEXT("currentTarget")));
-    if (!IsValid(Targets.Initial) || !SetObjectValue(Unit,TEXT("currentTarget"),Targets.Initial) ||
-        !SetSelectionValue(Unit,1))
+    if (!SetObjectValue(Unit,TEXT("currentTarget"),Targets.Initial) || !SetSelectionValue(Unit,1))
     {
         if (bLogCommandRouting) UE_LOG(LogReditusBattleHUD,Log,TEXT("No valid battle targets for %s"),*ID.ToString());
         return false;
     }
 
     ClearATBListTargeting();
-    // A legacy menu can have shown an icon before this draft existed. Its
-    // target is not in DraftIcons, so explicitly clear it before showing self.
-    if (!Targets.Mode.IsNone() && PreviousTarget!=Targets.Initial) SetTargetIcon(PreviousTarget,false);
+    // Clear the old legacy target icon before displaying a new group or ally.
+    if ((Targets.bGroup || !Targets.Mode.IsNone()) && PreviousTarget!=Targets.Initial)
+        SetTargetIcon(PreviousTarget,false);
     bDraftActive=true;
     bDraftGroup=Targets.bGroup;
     bExplicitTarget=false;
@@ -1432,31 +1439,62 @@ bool UReditusBattleHUDPresenterComponent::RouteATBListTargetInput(FName ActionNa
         RestoreATBListCommands(Unit);
         return true;
     }
+    TArray<AActor*> ConfirmedTargets;
+    if (Targets.bGroup) ConfirmedTargets=Targets.Units;
+    else ConfirmedTargets.Add(Target);
+    SubmitATBListAction(Unit,DraftActionID,DraftCommand,
+        Row.Class(bItem ? TEXT("UsableItemLegacyLaunch") : TEXT("LegacySkill")),ConfirmedTargets,Targets.Mode);
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool UReditusBattleHUDPresenterComponent::SubmitATBListAction(AActor* Unit,FName ID,EReditusHUDCommand Command,
+    UClass* LegacyClass,const TArray<AActor*>& TargetUnits,FName TargetMode)
+{
+#if REDITUS_HUD_HAS_ATB
+    AActor* Controller=GetOwner();
+    auto* ATB=RunningATB(Controller);
+    if (!ATB || !IsValid(Unit) || TargetUnits.Num()==0) return false;
+
     FReditusATBAction Action;
     Action.Unit=Unit;
-    Action.ActionID=DraftActionID;
-    Action.Kind=bItem ? EReditusATBActionKind::Item :
-        DraftCommand==EReditusHUDCommand::Overdrive ? EReditusATBActionKind::Overdrive : EReditusATBActionKind::Skill;
-    Action.LegacyClass=Row.Class(bItem ? TEXT("UsableItemLegacyLaunch") : TEXT("LegacySkill"));
-    Action.TargetMode=Targets.Mode;
-    if (Targets.bGroup) Action.Targets=Targets.Units;
-    else Action.Targets.Add(Target);
+    Action.ActionID=ID;
+    Action.Kind=Command==EReditusHUDCommand::Items ? EReditusATBActionKind::Item :
+        Command==EReditusHUDCommand::Overdrive ? EReditusATBActionKind::Overdrive : EReditusATBActionKind::Skill;
+    Action.LegacyClass=LegacyClass;
+    Action.TargetMode=TargetMode;
+    Action.Targets=TargetUnits;
     Action.AmpCommitted=FMath::Max(0,static_cast<int32>(Number(Unit,TEXT("CurrentAmpPointsInPlay"))));
     int32 ActionToken=INDEX_NONE;
-    if (ATB->SubmitAction(Action,ActionToken))
+    if (!ATB->SubmitAction(Action,ActionToken))
     {
-        ClearATBListTargeting();
-        SetSelectionValue(Unit,0);
-        SetBoolValue(Unit,TEXT("Confirmed"),true);
-        SetBoolValue(Unit,TEXT("TargetSet"),false);
-        if (auto* FX=Cast<USceneComponent>(ObjectValue(Unit,TEXT("PS_GPS_Selection_02")))) FX->SetVisibility(false);
-        CallNoArgumentEvent(GetOwner(),TEXT("PickNextATBCommandUnit"));
-        if (bLogCommandRouting) UE_LOG(LogReditusBattleHUD,Log,TEXT("Queued %s for %s (token %d)"),
-            *Action.ActionID.ToString(),*GetNameSafe(Unit),ActionToken);
-    }
-    else
         UE_LOG(LogReditusBattleHUD,Warning,TEXT("ATB rejected %s for %s before queueing"),
             *Action.ActionID.ToString(),*GetNameSafe(Unit));
+        return false;
+    }
+
+    if (!bDraftActive)
+    {
+        // A direct Overdrive can leave an icon on the move list's old target.
+        SetTargetIcon(Cast<AActor>(ObjectValue(Unit,TEXT("currentTarget"))),false);
+        SetObjectValue(Unit,TEXT("currentTarget"),TargetUnits[0]);
+        bExplicitTarget=false;
+    }
+    ClearATBListTargeting();
+    SetSelectionValue(Unit,0);
+    SetBoolValue(Unit,TEXT("Confirmed"),true);
+    SetBoolValue(Unit,TEXT("TargetSet"),false);
+    if (auto* FX=Cast<USceneComponent>(ObjectValue(Unit,TEXT("PS_GPS_Selection_02")))) FX->SetVisibility(false);
+    if (IsValid(HUD) && HUD->IsMenuOpen())
+    {
+        ClearNativeMenu();
+        HUD->CloseListMenu();
+    }
+    CallNoArgumentEvent(Controller,TEXT("PickNextATBCommandUnit"));
+    if (bLogCommandRouting) UE_LOG(LogReditusBattleHUD,Log,TEXT("Queued %s for %s (token %d)"),
+        *Action.ActionID.ToString(),*GetNameSafe(Unit),ActionToken);
     return true;
 #else
     return false;
@@ -1485,7 +1523,7 @@ void UReditusBattleHUDPresenterComponent::HandleNativeMenuChosen(AActor* Unit,FN
     if (RunningATB(GetOwner()))
     {
         if (!Items || LiveItemCount(Player,NativeMenuDataIDs[Index],1)>0)
-            BeginATBListTargeting(Unit,NativeMenuDataIDs[Index],NativeMenuCommand);
+            BeginATBListTargeting(Unit,NativeMenuDataIDs[Index],NativeMenuCommand,true);
         return;
     }
 #endif

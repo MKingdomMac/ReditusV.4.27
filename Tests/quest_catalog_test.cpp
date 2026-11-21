@@ -70,8 +70,21 @@ namespace ReditusQuestItemRouting
 }
 // ACTUAL_CATALOG
 // ACTUAL_DEFINITION_COMPILER
+// ACTUAL_SUBSYSTEM_HELPERS
 struct UReditusQuestSubsystem{static FString Key(FDataTableRowHandle Quest);};
 // ACTUAL_QUEST_KEY
+
+static void CheckSubsystemHelpers(FDataTableRowHandle Item)
+{
+    assert(Narrow(FString("quest")) == "quest");
+    assert(Identifier(FName("Approach")) == "approach");
+    assert(ValidItemRow(Item));
+    FReditusQuestItemAmount Reward;
+    Reward.ItemRow = Item;
+    Reward.Amount = 1;
+    assert(ValidItems({Reward}));
+    assert(!ValidItems({Reward, Reward}));
+}
 
 int main()
 {
@@ -83,6 +96,7 @@ int main()
     FReditusQuestTaskDefinition Kill;Kill.ObjectiveID="Kill";Kill.Kind=EReditusQuestObjectiveKind::DefeatEnemy;Kill.TargetID="DeathBoar";
     Stage.Objectives.push_back(Kill);Hunt.Stages.push_back(Stage);Simple.Rows["Test_DefeatBoss"]=&Hunt;
     FDataTableRowHandle Direct{&Simple,"Test_DefeatBoss"};assert(Definition(Direct)==&Hunt);
+    CheckSubsystemHelpers(Direct);
     FReditusQuestCatalogRow Alias;Alias.Kind=EReditusQuestCatalogKind::SimpleRow;Alias.SimpleQuest=Direct;
     Catalog.Rows["HuntAlias"]=&Alias;FDataTableRowHandle AliasHandle{&Catalog,"HuntAlias"};
     assert(Canonical(AliasHandle)==Direct&&Definition(AliasHandle)==&Hunt);

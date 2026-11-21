@@ -48,22 +48,22 @@ namespace
                 MakeShared<FReditusQuestEditorToolkit>()->Init(Asset, Host);
         }
     };
-    TSharedPtr<FQuestAssetActions> Actions;
+    TSharedPtr<FQuestAssetActions> QuestGraphAssetTypeActions;
 }
 
 void RegisterReditusQuestGraphEditor()
 {
     auto& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
     const auto Category = AssetTools.RegisterAdvancedAssetCategory(TEXT("Reditus"), LOCTEXT("Category", "Reditus"));
-    Actions = MakeShared<FQuestAssetActions>(Category);
-    AssetTools.RegisterAssetTypeActions(Actions.ToSharedRef());
+    QuestGraphAssetTypeActions = MakeShared<FQuestAssetActions>(Category);
+    AssetTools.RegisterAssetTypeActions(QuestGraphAssetTypeActions.ToSharedRef());
 }
 
 void UnregisterReditusQuestGraphEditor()
 {
-    if (Actions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
-        FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get().UnregisterAssetTypeActions(Actions.ToSharedRef());
-    Actions.Reset();
+    if (QuestGraphAssetTypeActions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
+        FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get().UnregisterAssetTypeActions(QuestGraphAssetTypeActions.ToSharedRef());
+    QuestGraphAssetTypeActions.Reset();
 }
 
 #undef LOCTEXT_NAMESPACE

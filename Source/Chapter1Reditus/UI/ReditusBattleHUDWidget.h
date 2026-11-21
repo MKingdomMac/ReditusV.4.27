@@ -207,7 +207,7 @@ private:
         UImage* Portrait = nullptr;
         UTextBlock* Name = nullptr;
         UTextBlock* ReadyLabel = nullptr;
-        /** Compact live buff/debuff icons above this character's gauges. */
+        /** Live buff and debuff icons with the remaining turn counts. */
         UHorizontalBox* StatusIconRow = nullptr;
         TArray<FReditusEnemyHUDEffect> DisplayedEffects;
         UTextBlock* HP = nullptr;
@@ -263,6 +263,8 @@ private:
     int32 DisplayedEnemyMaxStamina = INDEX_NONE;
     UPROPERTY(Transient) UBorder* ActionFrame = nullptr;
     UPROPERTY(Transient) UTextBlock* ActionName = nullptr;
+    UPROPERTY(Transient) UImage* OdinChargeGlyph = nullptr;
+    UPROPERTY(Transient) UTextBlock* OdinChargeTail = nullptr;
     UPROPERTY(Transient) UImage* ActionElement = nullptr;
     UPROPERTY(Transient) USizeBox* ActionElementBox = nullptr;
     UPROPERTY(Transient) FSlateBrush ActionElementBrush;
@@ -290,6 +292,7 @@ private:
     TArray<FButtonView> Buttons;
     TArray<FButtonView> ListButtons;
     TArray<FButtonView> UtilityButtons;
+    FButtonView TargetConfirm;
     TSharedPtr<IInputProcessor> InputObserver;
     int32 SelectedIndex = INDEX_NONE;
     int32 SelectedCommand = 0;

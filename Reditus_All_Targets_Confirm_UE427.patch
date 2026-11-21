@@ -1,0 +1,122 @@
+diff --git a/Source/Chapter1Reditus/UI/ReditusBattleHUDPresenterComponent.cpp b/Source/Chapter1Reditus/UI/ReditusBattleHUDPresenterComponent.cpp
+--- a/Source/Chapter1Reditus/UI/ReditusBattleHUDPresenterComponent.cpp
++++ b/Source/Chapter1Reditus/UI/ReditusBattleHUDPresenterComponent.cpp
+@@ -1270,7 +1270,9 @@
+     if (!CanUseATBListEntry(Unit,Command,Row)) return false;
+     const auto Targets=ListTargets(GetOwner(),Unit,Command,Row,DisplaySlots,Player);
+     if (!IsValid(Targets.Initial)) return false;
+-    if (bFromNativeMenu && Command==EReditusHUDCommand::Overdrive && (Targets.bGroup || Targets.Units.Num()==1))
++    // An enemy group needs confirmation even when only one enemy is alive.
++    const bool bCanSkipTargeting=Targets.bGroup ? Targets.Mode==TEXT("AllLivingAllies") : Targets.Units.Num()==1;
++    if (bFromNativeMenu && Command==EReditusHUDCommand::Overdrive && bCanSkipTargeting)
+     {
+         return SubmitATBListAction(Unit,ID,Command,Row.Class(TEXT("LegacySkill")),Targets.Units,Targets.Mode);
+     }
+@@ -1283,9 +1285,9 @@
+     }
+ 
+     ClearATBListTargeting();
+-    // A legacy menu can have shown an icon before this draft existed. Its
+-    // target is not in DraftIcons, so explicitly clear it before showing self.
+-    if (!Targets.Mode.IsNone() && PreviousTarget!=Targets.Initial) SetTargetIcon(PreviousTarget,false);
++    // Clear the old legacy target icon before displaying a new group or ally.
++    if ((Targets.bGroup || !Targets.Mode.IsNone()) && PreviousTarget!=Targets.Initial)
++        SetTargetIcon(PreviousTarget,false);
+     bDraftActive=true;
+     bDraftGroup=Targets.bGroup;
+     bExplicitTarget=false;
+@@ -1475,8 +1477,7 @@
+ 
+     if (!bDraftActive)
+     {
+-        // The move list can have left an icon on an old target. Fixed-target
+-        // Overdrives queue directly from that list without making a draft.
++        // A direct Overdrive can leave an icon on the move list's old target.
+         SetTargetIcon(Cast<AActor>(ObjectValue(Unit,TEXT("currentTarget"))),false);
+         SetObjectValue(Unit,TEXT("currentTarget"),TargetUnits[0]);
+         bExplicitTarget=false;
+diff --git a/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.cpp b/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.cpp
+--- a/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.cpp
++++ b/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.cpp
+@@ -428,8 +428,13 @@
+     TargetContent->AddChildToVerticalBox(TargetName);
+     TargetDetails=WidgetTree->ConstructWidget<UVerticalBox>();
+     TargetContent->AddChildToVerticalBox(TargetDetails);
++    TargetConfirm=MakeButton(EReditusHUDCommand::Attack,NSLOCTEXT("ReditusHUD","ConfirmTarget","CONFIRM"));
++    FButtonStyle TargetConfirmStyle=TargetConfirm.Button->WidgetStyle;
++    TargetConfirmStyle.Normal=SelectedFrameBrush;
++    TargetConfirm.Button->SetStyle(TargetConfirmStyle);
++    TargetContent->AddChildToVerticalBox(TargetConfirm.Button)->SetPadding(FMargin(0.f,6.f,0.f,0.f));
+     TargetFrame=MakeFrame(TargetContent,FMargin(14.f,8.f));
+-    TargetFrame->SetVisibility(ESlateVisibility::HitTestInvisible);
++    TargetFrame->SetVisibility(ESlateVisibility::Collapsed);
+     UCanvasPanelSlot* TargetPlacement=DesignCanvas->AddChildToCanvas(TargetFrame);
+     TargetPlacement->SetPosition(FVector2D(16.f,16.f));
+     TargetPlacement->SetAutoSize(true);
+@@ -931,11 +936,12 @@
+ 
+ void UReditusBattleHUDWidget::RefreshTargetDisplay()
+ {
+-    if (!TargetFrame || !TargetName || !TargetDetails) return;
+-    const bool bShow=bTargetSelectionActive && !IsMenuOpen() && !TargetLabel.IsEmpty();
+-    TargetFrame->SetVisibility(bShow ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
++    if (!TargetFrame || !TargetName || !TargetDetails || !TargetConfirm.Button) return;
++    const bool bShow=bTargetSelectionActive && !IsMenuOpen();
++    TargetFrame->SetVisibility(bShow ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
+     if (!bShow) return;
+-    TargetName->SetText(TargetLabel);
++    TargetName->SetText(TargetLabel.IsEmpty() ? NSLOCTEXT("ReditusHUD","SelectTarget","SELECT TARGET") : TargetLabel);
++    TargetConfirm.Button->SetIsEnabled(CanExecuteCommand(EReditusHUDCommand::Attack));
+     const auto* View=EnemyStatusViews.FindByPredicate([this](const FReditusEnemyHUDView& Data){return Data.Unit==TargetEnemy.Get();});
+     if (!View)
+     {
+@@ -1586,19 +1592,16 @@
+     }
+     const FReditusBattleHUDUnit* Data = Selected();
+     const bool MenuVisible=IsMenuOpen();
+-    const bool ShowCommands=!MenuVisible && CanExecuteCommand(EReditusHUDCommand::Attack);
++    const bool ShowCommands=!MenuVisible && !bTargetSelectionActive && CanExecuteCommand(EReditusHUDCommand::Attack);
+     const int32 Offset=bAlternateCommands ? 4 : 0;
+     if (bCommandsEnabled && !IsMenuOpen() && Buttons.IsValidIndex(SelectedCommand) && !CanExecuteCommand(Buttons[SelectedCommand].Command))
+         for (int32 I=Offset; I<Offset+4; ++I) if (CanExecuteCommand(Buttons[I].Command)) { SelectedCommand=I; break; }
+     for (int32 I=0; I<Buttons.Num(); ++I)
+     {
+         FButtonView& View=Buttons[I];
+-        const bool Visible=bTargetSelectionActive ? View.Command==EReditusHUDCommand::Attack :
+-            (I>=4)==bAlternateCommands && (View.Command!=EReditusHUDCommand::Hack || (Data && Data->bCanHack));
++        const bool Visible=(I>=4)==bAlternateCommands && (View.Command!=EReditusHUDCommand::Hack || (Data && Data->bCanHack));
+         View.Button->SetVisibility(Visible ? ESlateVisibility::Visible : ESlateVisibility::Hidden);
+         View.Button->SetIsEnabled(CanExecuteCommand(View.Command));
+-        if (View.Command==EReditusHUDCommand::Attack)
+-            View.Label->SetText(bTargetSelectionActive ? Text(TEXT("CONFIRM")) : CommandLabel(View.Command));
+         View.Label->SetColorAndOpacity(FSlateColor(I==SelectedCommand ? Gold : FLinearColor::White));
+         FButtonStyle Style=View.Button->WidgetStyle;
+         Style.Normal=I==SelectedCommand ? SelectedFrameBrush : SilverFrameBrush;
+@@ -1607,7 +1610,7 @@
+     for (FButtonView& View : UtilityButtons)
+     {
+         if (View.Command!=EReditusHUDCommand::CycleBattleSpeed)
+-            View.Button->SetVisibility(ShowCommands && !bTargetSelectionActive ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
++            View.Button->SetVisibility(ShowCommands ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+         View.Button->SetIsEnabled(CanExecuteCommand(View.Command));
+         if (View.Command==EReditusHUDCommand::Overdrive)
+         {
+@@ -1725,6 +1728,7 @@
+     };
+     for (FButtonView& View : Buttons) Apply(View,true);
+     for (FButtonView& View : UtilityButtons) Apply(View,true);
++    if (TargetConfirm.Button) Apply(TargetConfirm,true);
+     for (int32 I=0; I<ListButtons.Num(); ++I)
+     {
+         FButtonView& View=ListButtons[I];
+diff --git a/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.h b/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.h
+--- a/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.h
++++ b/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.h
+@@ -290,6 +290,7 @@
+     TArray<FButtonView> Buttons;
+     TArray<FButtonView> ListButtons;
+     TArray<FButtonView> UtilityButtons;
++    FButtonView TargetConfirm;
+     TSharedPtr<IInputProcessor> InputObserver;
+     int32 SelectedIndex = INDEX_NONE;
+     int32 SelectedCommand = 0;

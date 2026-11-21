@@ -88,7 +88,7 @@ namespace
             const auto* Property = FindFProperty<FArrayProperty>(Player->GetClass(), TEXT("completedQuests"));
             const auto* ClassProperty = Property ? CastField<FClassProperty>(Property->Inner) : nullptr;
             if (!ClassProperty) return;
-            const FScriptArrayHelper Completed(Property, Property->ContainerPtrToValuePtr<void>(Player));
+            FScriptArrayHelper Completed(Property, Property->ContainerPtrToValuePtr<void>(Player));
             TSet<UClass*> Seen;
             for (int32 I = 0; I < Completed.Num(); ++I)
             {

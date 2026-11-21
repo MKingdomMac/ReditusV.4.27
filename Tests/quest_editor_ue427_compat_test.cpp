@@ -1,8 +1,25 @@
-// Actual editor code compiled against the UE4.27 const-table and pin API contracts.
+// Actual editor code compiled against UE4.27 catalogue, pin and unity-build contracts.
 #include <cassert>
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace
+{
+    struct FQuestAssetActions {};
+    template<class T> using TSharedPtr = std::shared_ptr<T>;
+}
+
+// GCC's shadow diagnostic models the MSVC error with file-scope storage.
+// ACTUAL_ASSET_ACTIONS_STORAGE
+
+static void CheckInputHeaderName()
+{
+    // Simulate an input header included after the graph factory in a unity file.
+    const int Actions = 1;
+    assert(Actions == 1);
+}
 
 #define TEXT(V) V
 using FString=std::string;
@@ -95,6 +112,7 @@ int UReditusQuestGraphNode::NextID=0;
 
 int main()
 {
+    CheckInputHeaderName();
     Fallback.Type=FReditusQuestCatalogRow::StaticStruct();Fallback.Path="/Game/DT_QuestCatalog.DT_QuestCatalog";
     Asset Quest;Quest.QuestID="Hunt";FString Error;UDataTable* Mutable=nullptr;
     assert(ReditusQuestGraphCompiler::Lookup(&Quest,Error,Mutable)&&Mutable==&Fallback);

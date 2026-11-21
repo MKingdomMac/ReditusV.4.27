@@ -32,7 +32,8 @@ struct FScriptArrayHelper
     FScriptArrayHelper(const FArrayProperty*, const void* Array)
         : Entries(*static_cast<const std::vector<UClass*>*>(Array)) {}
     int32 Num() const { return int32(Entries.size()); }
-    const void* GetRawPtr(int32 Index) const { return &Entries.at(Index); }
+    // UE4.27 requires a non-const helper to get the element pointer.
+    const void* GetRawPtr(int32 Index) { return &Entries.at(Index); }
 };
 
 template<class T> struct TSet : std::set<T>
