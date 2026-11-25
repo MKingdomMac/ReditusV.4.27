@@ -21,6 +21,7 @@ public:
     double DefenseDelta() const;
     uint64 GetAggroFocusOrder(const AActor* InBattle) const;
     bool BlocksAmpGain() const;
+    bool HasActiveBuff(FName ID) const;
 
     /** Internal ATB gate. A suppressed award consumes one turn at Cycle End. */
     UFUNCTION()

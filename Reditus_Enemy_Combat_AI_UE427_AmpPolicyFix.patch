@@ -1,0 +1,129 @@
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
+index 7b555c1dd71fe1ed50faf8587ab5ce65f65126af..33dcbaa8761ea1e2f51ee026d1fd41be11808067 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
+@@ -306,26 +306,28 @@ int32 UReditusEnemyCombatAIComponent::ResolveEnemyAmpForAction(bool bRegularAtta
+     const int32 Available = ReadInt(Enemy, TEXT("TotalAmpPoints"));
+     if (Available <= 0) return 0;
+     const UClass* ChosenClass = SkillClass.Get();
+-    const auto SelectAmount = [&](const TArray<FReditusEnemyAIAmpRule>& Rules)
++    const auto SelectAmount = [&](const TArray<FReditusEnemyAIAmpRule>& Rules, bool& bMatchesMove)
+     {
+         for (const auto& Rule : Rules)
+         {
+-            if ((Rule.Action == EReditusEnemyAIAmpAction::RegularAttack) != bRegularAttack || Rule.Points <= 0 ||
+-                (!Rule.bSpendUpToAvailable && Rule.Points > Available)) continue;
++            if ((Rule.Action == EReditusEnemyAIAmpAction::RegularAttack) != bRegularAttack || Rule.Points <= 0) continue;
+             if (!bRegularAttack)
+             {
+                 const UClass* RuleClass = Rule.SkillClass.Get();
+                 const bool bAnySkill = Rule.SkillID.IsNone() && !RuleClass;
+                 if (!bAnySkill && !MatchesSkill(SkillID, ChosenClass, Rule.SkillID, RuleClass)) continue;
+             }
++            bMatchesMove = true;
++            if (!Rule.bSpendUpToAvailable && Rule.Points > Available) continue;
+             if (Rule.AnyOf.Num() > 0 && !MatchesAnyConditionGroup(Enemy, Rule.AnyOf)) continue;
+             return FMath::Min(Available, Rule.Points);
+         }
+         return 0;
+     };
+ 
+-    const int32 LocalAmount = SelectAmount(LocalAmpRules);
+-    return LocalAmount > 0 || !Profile ? LocalAmount : SelectAmount(Profile->AmpRules);
++    bool bMatchesMove = false;
++    const int32 LocalAmount = SelectAmount(LocalAmpRules, bMatchesMove);
++    return bMatchesMove || !Profile ? LocalAmount : SelectAmount(Profile->AmpRules, bMatchesMove);
+ }
+ 
+ bool UReditusEnemyCombatAIComponent::MeetsSkillCondition(const FReditusEnemyAISkillRule& Rule) const
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h
+index ccc04a16b02e05671857a291e9f5a11f0f64a646..ede13fb5eb5696769be3da18b86cd3cfc274ae14 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h
+@@ -239,6 +239,7 @@ public:
+     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy AI|AMP")
+     EReditusEnemyAIAmpPolicy AmpPolicy = EReditusEnemyAIAmpPolicy::UseProfile;
+ 
++    /** Matching local rules take priority for that move, including when they are saving AMP. */
+     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy AI|AMP", meta=(TitleProperty="Action"))
+     TArray<FReditusEnemyAIAmpRule> LocalAmpRules;
+ 
+diff --git a/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp b/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
+index e886f93fee00345b95cbab3fa19d20a9c3b546db..dccb7202ed4534d507eaa3ea0f6e7422cb670124 100644
+--- a/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
++++ b/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
+@@ -45,11 +45,10 @@ namespace
+         return Value && Value->GetPropertyValue_InContainer(Object);
+     }
+ 
+-    int32 GetProfiledEnemyAmp(const FReditusATBAction& Action)
++    bool TryResolveProfiledEnemyAmp(const FReditusATBAction& Action, int32& Amount)
+     {
++        if (!IsValid(Action.Unit) || IsLegacyPlayer(Action.Unit)) return false;
+         const bool bRegularAttack = Action.Kind == EReditusATBActionKind::Attack;
+-        if ((!bRegularAttack && Action.Kind != EReditusATBActionKind::Skill) || Action.AmpCommitted > 0 ||
+-            !IsValid(Action.Unit) || IsLegacyPlayer(Action.Unit)) return 0;
+ 
+         TInlineComponentArray<UActorComponent*> Components;
+         Action.Unit->GetComponents(Components);
+@@ -57,8 +56,14 @@ namespace
+         {
+             if (!IsValid(Component)) continue;
+             UFunction* Function = Component->FindFunction(TEXT("ResolveEnemyAmpForAction"));
+-            if (!Function || Function->NumParms != 4 || !Function->HasAnyFunctionFlags(FUNC_Native) ||
++            if (!Function || !Function->HasAnyFunctionFlags(FUNC_Native) ||
+                 Function->GetOuter()->GetPathName() != TEXT("/Script/ReditusTableBuffs.ReditusEnemyCombatAIComponent")) continue;
++
++            // This component owns AMP for the enemy's actions, including a zero allocation.
++            Amount = 0;
++            if ((!bRegularAttack && Action.Kind != EReditusATBActionKind::Skill) || Function->NumParms != 4)
++                return true;
++
+             const auto* Attack = FindFProperty<FBoolProperty>(Function, TEXT("bRegularAttack"));
+             const auto* SkillID = FindFProperty<FNameProperty>(Function, TEXT("SkillID"));
+             const auto* SkillClass = FindFProperty<FClassProperty>(Function, TEXT("SkillClass"));
+@@ -69,7 +74,7 @@ namespace
+                     !Property->HasAnyPropertyFlags(CPF_OutParm | CPF_ReturnParm);
+             };
+             if (!IsInput(Attack) || !IsInput(SkillID) || !IsInput(SkillClass) ||
+-                SkillClass->MetaClass != AActor::StaticClass() || !Result) continue;
++                SkillClass->MetaClass != AActor::StaticClass() || !Result) return true;
+ 
+             FStructOnScope Params(Function);
+             void* Memory = Params.GetStructMemory();
+@@ -77,9 +82,10 @@ namespace
+             SkillID->SetPropertyValue_InContainer(Memory, Action.ActionID);
+             SkillClass->SetObjectPropertyValue_InContainer(Memory, Action.LegacyClass.Get());
+             Component->ProcessEvent(Function, Memory);
+-            return FMath::Max(0, Result->GetPropertyValue_InContainer(Memory));
++            Amount = FMath::Max(0, Result->GetPropertyValue_InContainer(Memory));
++            return true;
+         }
+-        return 0;
++        return false;
+     }
+ 
+     void SpendProfiledEnemyAmp(FReditusATBAction& Action)
+@@ -809,7 +815,8 @@ bool UReditusATBComponent::SubmitAction(const FReditusATBAction& Action,int32& A
+     ActionToken=INDEX_NONE;
+     const int32* Identity=UnitIDs.Find(Action.Unit);
+     if (!Identity || !CanIssueCommands(Action.Unit) || !FMath::IsFinite(PreparationOverride)) return false;
+-    const int32 ProfiledEnemyAmp = GetProfiledEnemyAmp(Action);
++    int32 CommittedAmp = FMath::Max(0, Action.AmpCommitted);
++    const bool bProfiledEnemy = TryResolveProfiledEnemyAmp(Action, CommittedAmp);
+     const float Preparation=PreparationOverride>=0.f ? PreparationOverride : GetPreparationTime(Action);
+     const int32 Token=Scheduler->Submit(*Identity,Preparation);
+     if (Token<0) return false;
+@@ -828,10 +835,10 @@ bool UReditusATBComponent::SubmitAction(const FReditusATBAction& Action,int32& A
+         else if (SkillType==3) Saved.TargetMode=TEXT("AllLivingAllies");
+     }
+     Saved.ActionToken=Token; Saved.CycleToken=Scheduler->Find(*Identity)->Cycle;
+-    Saved.bManagedEnemyAmp = ProfiledEnemyAmp > 0;
++    Saved.bManagedEnemyAmp = bProfiledEnemy && CommittedAmp > 0;
+     Saved.ManagedEnemyAmpSpent = 0;
+     Saved.ManagedEnemyAmpParticle.Reset();
+-    Saved.AmpCommitted = Saved.bManagedEnemyAmp ? ProfiledEnemyAmp : FMath::Max(0, Saved.AmpCommitted);
++    Saved.AmpCommitted = CommittedAmp;
+     PendingActions.Add(Token,Saved); ActionToken=Token;
+     return true;
+ }

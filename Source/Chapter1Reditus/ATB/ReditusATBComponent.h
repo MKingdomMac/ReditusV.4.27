@@ -9,6 +9,9 @@
 #include "ReditusATBComponent.generated.h"
 
 class AActor;
+class UParticleSystem;
+class UParticleSystemComponent;
+class USoundBase;
 
 UENUM(BlueprintType)
 enum class EReditusATBPhase : uint8
@@ -106,6 +109,14 @@ struct CHAPTER1REDITUS_API FReditusATBAction
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interruption") bool bInterruptibleDuringExecution = false;
     UPROPERTY(BlueprintReadOnly, Category="Action") int32 ActionToken = INDEX_NONE;
     UPROPERTY(BlueprintReadOnly, Category="Action") int32 CycleToken = INDEX_NONE;
+
+    // Native bookkeeping for AMP chosen by the enemy AI profile.
+    bool bManagedEnemyAmp = false;
+    bool bExecutionDispatched = false;
+    int32 ManagedEnemyAmpSpent = 0;
+    int32 EnemyAmpBeat = 0;
+    double EnemyAmpBeatTimeRemaining = 0.0;
+    TWeakObjectPtr<UParticleSystemComponent> ManagedEnemyAmpParticle;
 };
 
 USTRUCT(BlueprintType)
@@ -158,6 +169,12 @@ public:
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Legacy") bool bFinishSynchronousLegacyCycleStart = true;
     /** Single living-ally commands recheck their target at execution; revival keeps its dead-target rule. */
     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Targets") bool bRetargetLostLivingAlly = true;
+    /** Battle seconds to hold each enemy AMP pulse before proceeding. */
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Enemy AMP",meta=(ClampMin="0.05"))
+    float EnemyAmpBeatSeconds = 0.28f;
+    /** Fractional bonus to positive damage for each point the enemy spent on this action. */
+    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Enemy AMP",meta=(ClampMin="0.0"))
+    float EnemyAmpDamageBonusPerPoint = 0.25f;
 
     /** Run regen/poison/status checks once; acknowledge using Complete Cycle Start. */
     UPROPERTY(BlueprintAssignable,Category="Reditus|ATB") FReditusATBCycleEvent OnCycleStartRequested;
@@ -203,6 +220,9 @@ public:
     UFUNCTION(BlueprintCallable,Category="Reditus|ATB") bool CancelPendingAction(AActor* Unit);
     UFUNCTION(BlueprintCallable,Category="Reditus|ATB") bool CompleteCycleEnd(AActor* Unit,int32 CycleToken);
     UFUNCTION(BlueprintPure,Category="Reditus|ATB") float GetPreparationTime(const FReditusATBAction& Action) const;
+    /** Scale the existing hit result in BP_BattleController.DealDamage. */
+    UFUNCTION(BlueprintPure,Category="Reditus|ATB|Enemy AMP")
+    static int32 ScaleEnemyAmpDamage(AActor* BattleController, AActor* Attacker, int32 Damage);
 
 private:
     TUniquePtr<ReditusATBCore::Scheduler> Scheduler;
@@ -211,6 +231,8 @@ private:
     UPROPERTY(Transient) TMap<AActor*,FReditusATBTimingEffectList> TimingEffects;
     UPROPERTY(Transient) TMap<int32,FReditusATBAction> PendingActions;
     UPROPERTY(Transient) TArray<TWeakObjectPtr<UReditusRollingHPComponent>> RollingUnits;
+    UPROPERTY() TArray<UParticleSystem*> EnemyAmpParticleTemplates;
+    UPROPERTY() USoundBase* EnemyAmpSound = nullptr;
     TSet<int32> ExecutionInterruptRequests;
     bool bRunning = false;
     bool bStopping = false;
@@ -227,4 +249,6 @@ private:
     void AdvanceFrozenStaggerRecovery();
     void FinishSynchronousCycleStart(AActor* Unit,int32 CycleToken);
     bool RevalidateActionTargets(FReditusATBAction& Action) const;
+    bool AdvanceEnemyAmpBuildup(FReditusATBAction& Action, double Elapsed);
+    void DispatchActionWhenReady(int32 ActionToken, double Elapsed);
 };

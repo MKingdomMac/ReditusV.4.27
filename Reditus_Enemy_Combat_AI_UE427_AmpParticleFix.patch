@@ -1,0 +1,151 @@
+diff --git a/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp b/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
+index 40cf4b34e61a4a09814d8152aa982a1fd7040d21..e886f93fee00345b95cbab3fa19d20a9c3b546db 100644
+--- a/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
++++ b/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
+@@ -2,8 +2,12 @@
+ #include "ReditusATBCore.h"
+ #include "ReditusAmpRules.h"
+ #include "Components/SceneComponent.h"
++#include "Engine/World.h"
+ #include "GameFramework/Actor.h"
++#include "Kismet/GameplayStatics.h"
++#include "Particles/ParticleSystem.h"
+ #include "Particles/ParticleSystemComponent.h"
++#include "UObject/ConstructorHelpers.h"
+ #include "UObject/UnrealType.h"
+ #include "UObject/StructOnScope.h"
+ 
+@@ -218,6 +222,33 @@ namespace
+         if (IsValid(Particle)) Particle->DestroyComponent();
+     }
+ 
++    UParticleSystemComponent* SpawnEnemyAmpParticle(const FReditusATBAction& Action,
++        const TArray<UParticleSystem*>& Templates)
++    {
++        if (Action.ManagedEnemyAmpSpent <= 0 || Templates.Num() == 0 || !IsValid(Action.Unit)) return nullptr;
++        const UWorld* World = Action.Unit->GetWorld();
++        if (!World || !World->IsGameWorld() || World->bIsTearingDown || World->GetNetMode() == NM_DedicatedServer)
++            return nullptr;
++
++        UParticleSystem* Template = Templates[FMath::Min(Action.ManagedEnemyAmpSpent, Templates.Num()) - 1];
++        if (!IsValid(Template)) Template = Templates[0];
++        if (!IsValid(Template)) return nullptr;
++
++        const auto* Sprite = FindFProperty<FObjectPropertyBase>(Action.Unit->GetClass(), TEXT("Pixel2D"));
++        auto* Anchor = Sprite ? Cast<USceneComponent>(Sprite->GetObjectPropertyValue_InContainer(Action.Unit)) : nullptr;
++        if (!IsValid(Anchor)) Anchor = Action.Unit->GetRootComponent();
++        if (!IsValid(Anchor)) return nullptr;
++        return UGameplayStatics::SpawnEmitterAttached(Template, Anchor, NAME_None, FVector::ZeroVector,
++            FRotator::ZeroRotator, FVector(1.f), EAttachLocation::KeepRelativeOffset, true);
++    }
++
++    void ClearEnemyAmpParticle(FReditusATBAction& Action)
++    {
++        UParticleSystemComponent* Particle = Action.ManagedEnemyAmpParticle.Get();
++        Action.ManagedEnemyAmpParticle.Reset();
++        if (IsValid(Particle)) Particle->DestroyComponent();
++    }
++
+     void ClearStaggeredCommand(AActor* Unit,bool bActionRunning)
+     {
+         if (!IsValid(Unit)) return;
+@@ -283,6 +314,14 @@ UReditusATBComponent::UReditusATBComponent()
+ {
+     PrimaryComponentTick.bCanEverTick=true;
+     Scheduler=MakeUnique<ReditusATBCore::Scheduler>();
++
++    static ConstructorHelpers::FObjectFinderOptional<UParticleSystem> OneAmp(
++        TEXT("/Game/Particles/GoodParticleStatus/Particles/Buff_Status/PS_GPS_Buff_Nebula.PS_GPS_Buff_Nebula"));
++    static ConstructorHelpers::FObjectFinderOptional<UParticleSystem> TwoAmp(
++        TEXT("/Game/Particles/GoodParticleStatus/Particles/Buff_Status/PS_GPS_Buff_Nebula1.PS_GPS_Buff_Nebula1"));
++    static ConstructorHelpers::FObjectFinderOptional<UParticleSystem> ThreeAmp(
++        TEXT("/Game/Particles/GoodParticleStatus/Particles/Buff_Status/PS_GPS_Buff_Nebula2.PS_GPS_Buff_Nebula2"));
++    EnemyAmpParticleTemplates = {OneAmp.Get(), TwoAmp.Get(), ThreeAmp.Get()};
+ }
+ UReditusATBComponent::~UReditusATBComponent() = default;
+ 
+@@ -352,6 +391,7 @@ void UReditusATBComponent::UnregisterUnit(AActor* Unit)
+             }
+         }
+     ClearAmpParticle(Unit);
++    ClearEnemyAmpParticle(Removed);
+     if (bCancelled) OnActionCancelled.Broadcast(Removed,bHadStarted);
+ }
+ bool UReditusATBComponent::StartATB()
+@@ -385,8 +425,9 @@ void UReditusATBComponent::StopATB()
+             Health->FinishBattle();
+         }
+     for (const FReditusATBUnitView& State : Before) ClearAmpParticle(State.Unit);
+-    for (const FReditusATBAction& Action : Cancelled)
++    for (FReditusATBAction& Action : Cancelled)
+     {
++        ClearEnemyAmpParticle(Action);
+         bool bHadStarted=false;
+         for (const FReditusATBUnitView& State : Before)
+             if (State.Unit==Action.Unit) bHadStarted=State.Phase==EReditusATBPhase::Executing || State.Phase==EReditusATBPhase::CycleEnd;
+@@ -789,6 +830,7 @@ bool UReditusATBComponent::SubmitAction(const FReditusATBAction& Action,int32& A
+     Saved.ActionToken=Token; Saved.CycleToken=Scheduler->Find(*Identity)->Cycle;
+     Saved.bManagedEnemyAmp = ProfiledEnemyAmp > 0;
+     Saved.ManagedEnemyAmpSpent = 0;
++    Saved.ManagedEnemyAmpParticle.Reset();
+     Saved.AmpCommitted = Saved.bManagedEnemyAmp ? ProfiledEnemyAmp : FMath::Max(0, Saved.AmpCommitted);
+     PendingActions.Add(Token,Saved); ActionToken=Token;
+     return true;
+@@ -798,8 +840,11 @@ bool UReditusATBComponent::CompleteAction(int32 ActionToken)
+     if (!bRunning || !Scheduler->CompleteAction(ActionToken)) return false;
+     ExecutionInterruptRequests.Remove(ActionToken);
+     // ATB actions can bypass the legacy command nodes that turn off AMP FX.
+-    if (const FReditusATBAction* Action=PendingActions.Find(ActionToken))
++    if (FReditusATBAction* Action=PendingActions.Find(ActionToken))
++    {
++        ClearEnemyAmpParticle(*Action);
+         ClearAmpParticle(Action->Unit);
++    }
+     return true;
+ }
+ bool UReditusATBComponent::RejectAction(int32 ActionToken)
+@@ -814,6 +859,7 @@ bool UReditusATBComponent::RejectAction(int32 ActionToken)
+     FReditusATBAction Removed;
+     if (PendingActions.RemoveAndCopyValue(ActionToken,Removed))
+     {
++        ClearEnemyAmpParticle(Removed);
+         RefundProfiledEnemyAmp(Removed);
+         OnActionCancelled.Broadcast(Removed,false);
+         NotifyReady(Removed.Unit,Removed.CycleToken);
+@@ -963,6 +1009,7 @@ void UReditusATBComponent::TickComponent(float DeltaTime,ELevelTick TickType,FAc
+                 Current->Targets=Copy.Targets;
+                 Current->AmpCommitted=Copy.AmpCommitted;
+                 Current->ManagedEnemyAmpSpent=Copy.ManagedEnemyAmpSpent;
++                Current->ManagedEnemyAmpParticle = SpawnEnemyAmpParticle(Copy,EnemyAmpParticleTemplates);
+             }
+             OnExecuteActionRequested.Broadcast(Copy);
+         }
+diff --git a/Source/Chapter1Reditus/ATB/ReditusATBComponent.h b/Source/Chapter1Reditus/ATB/ReditusATBComponent.h
+index bee481bc9805f8fdcd7e94f6dd3e313a2cdc42e0..5ea889c0f7aedf703922df8e16b5b14ecd2ff64f 100644
+--- a/Source/Chapter1Reditus/ATB/ReditusATBComponent.h
++++ b/Source/Chapter1Reditus/ATB/ReditusATBComponent.h
+@@ -9,6 +9,8 @@
+ #include "ReditusATBComponent.generated.h"
+ 
+ class AActor;
++class UParticleSystem;
++class UParticleSystemComponent;
+ 
+ UENUM(BlueprintType)
+ enum class EReditusATBPhase : uint8
+@@ -110,6 +112,7 @@ struct CHAPTER1REDITUS_API FReditusATBAction
+     // Native bookkeeping for AMP chosen by the enemy AI profile.
+     bool bManagedEnemyAmp = false;
+     int32 ManagedEnemyAmpSpent = 0;
++    TWeakObjectPtr<UParticleSystemComponent> ManagedEnemyAmpParticle;
+ };
+ 
+ USTRUCT(BlueprintType)
+@@ -215,6 +218,7 @@ private:
+     UPROPERTY(Transient) TMap<AActor*,FReditusATBTimingEffectList> TimingEffects;
+     UPROPERTY(Transient) TMap<int32,FReditusATBAction> PendingActions;
+     UPROPERTY(Transient) TArray<TWeakObjectPtr<UReditusRollingHPComponent>> RollingUnits;
++    UPROPERTY() TArray<UParticleSystem*> EnemyAmpParticleTemplates;
+     TSet<int32> ExecutionInterruptRequests;
+     bool bRunning = false;
+     bool bStopping = false;

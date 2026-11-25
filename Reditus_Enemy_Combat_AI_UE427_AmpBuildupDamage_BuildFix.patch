@@ -1,0 +1,18 @@
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
+index c4f2c058f674f0e2df01719b7950bb88d37fed4e..8b3816a9c401d3b1c0cd16bc4d5f926ac6230303 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
+@@ -658,9 +658,13 @@ namespace ReditusEnemyAIInstall
+                 TraceSource(AppliedDamage) == Pin(Installed, UEdGraphSchema_K2::PN_ReturnValue) &&
+                 TraceSource(Pin(Installed, TEXT("Attacker"))) == Attacker &&
+                 IsSelf(TraceSource(Pin(Installed, TEXT("BattleController")))))
++            {
+                 UE_LOG(LogReditusEnemyAIInstall, Display, TEXT("Enemy AMP damage is already wired in BP_BattleController.DealDamage."));
++            }
+             else
++            {
+                 UE_LOG(LogReditusEnemyAIInstall, Error, TEXT("Review the existing Scale Enemy Amp Damage node in BP_BattleController.DealDamage."));
++            }
+             return;
+         }
+         if (TraceSource(AppliedDamage) != Damage || !Damage->LinkedTo.Num())

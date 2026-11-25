@@ -1,4 +1,6 @@
 #include "ReditusTableBuffLibrary.h"
+#include "ReditusEnemyCombatAIComponent.h"
+#include "ReditusTableBuffQueries.h"
 #include "ReditusTableBuffState.h"
 
 #include "Components/SceneComponent.h"
@@ -72,7 +74,10 @@ namespace
         default: return false;
         }
     }
+}
 
+namespace ReditusTableBuffQueries
+{
     UObject* ReadObject(const UObject* Owner, const TCHAR* Name)
     {
         if (!IsValid(Owner)) return nullptr;
@@ -140,17 +145,25 @@ namespace
         return nullptr;
     }
 
-    template<typename T> const T* InputProperty(const UStruct* Owner, const TCHAR* Name)
-    {
-        auto* Prop = FindFProperty<T>(Owner, FName(Name));
-        return Prop && Prop->HasAnyPropertyFlags(CPF_Parm) && !Prop->HasAnyPropertyFlags(CPF_ReturnParm)
-            ? Prop : nullptr;
-    }
-
     bool UnitParameter(const FObjectPropertyBase* Prop, const AActor* Unit)
     {
         return IsValid(Unit) && Prop && Prop->PropertyClass == AActor::StaticClass();
     }
+
+    bool MatchesCatalogueSide(const AActor* Unit, FName Side)
+    {
+        if (Side.IsNone() || Side == TEXT("Both")) return true;
+        const FName Expected = Side == TEXT("Enemy") ? FName(TEXT("BP_EnemyUnitBase_C"))
+            : Side == TEXT("Player") ? FName(TEXT("BP_PlayerUnitBase_C")) : NAME_None;
+        for (auto* Class = Unit->GetClass(); Class && !Expected.IsNone(); Class = Class->GetSuperClass())
+            if (Class->GetFName() == Expected) return true;
+        return false;
+    }
+}
+
+namespace
+{
+    using namespace ReditusTableBuffQueries;
 
     // The plugin does not link against the game module. Check the complete
     // reflected signature before calling its ATB APIs.
@@ -353,16 +366,6 @@ namespace
         for (int32 I = 0; I < Items.Num(); ++I)
             if (const auto* Immune = Cast<UClass>(Class->GetObjectPropertyValue(Items.GetRawPtr(I))))
                 if (Effect->IsChildOf(Immune) || (Family && Family->IsChildOf(Immune))) return true;
-        return false;
-    }
-
-    bool MatchesCatalogueSide(const AActor* Unit, FName Side)
-    {
-        if (Side.IsNone() || Side == TEXT("Both")) return true;
-        const FName Expected = Side == TEXT("Enemy") ? FName(TEXT("BP_EnemyUnitBase_C"))
-            : Side == TEXT("Player") ? FName(TEXT("BP_PlayerUnitBase_C")) : NAME_None;
-        for (auto* Class = Unit->GetClass(); Class && !Expected.IsNone(); Class = Class->GetSuperClass())
-            if (Class->GetFName() == Expected) return true;
         return false;
     }
 
@@ -767,6 +770,13 @@ uint64 UReditusTableBuffState::GetAggroFocusOrder(const AActor* InBattle) const
         IsLive() && ClockRunning(BattleClock.Get()) ? AggroFocusOrder : 0;
 }
 
+bool UReditusTableBuffState::HasActiveBuff(FName ID) const
+{
+    if (ID.IsNone() || ActiveID != ID) return false;
+    if (EffectSlot == AmpBlockSlot) return BlocksAmpGain();
+    return Lifetime.Remaining > 0 && IsLive() && ClockRunning(BattleClock.Get());
+}
+
 double UReditusTableBuffState::DefenseDelta() const
 {
     return Lifetime.Remaining > 0 && IsLive() && EffectFor(ActiveRow) == EEffect::PhysicalDefense
@@ -1161,69 +1171,9 @@ bool UReditusTableBuffLibrary::ApplySkillBuffRows(AActor* Skill, UDataTable* Ski
     return bConfigured;
 }
 
-namespace
+
+namespace ReditusTableBuffQueries
 {
-    bool IsStaggeredForEnemyTargeting(UActorComponent* Clock, AActor* Unit)
-    {
-        if (!IsValid(Unit)) return false;
-        // Use the same state query that holds/restarts the affected unit's ATB
-        // gauge. The plugin cannot link against the game module directly.
-        UFunction* Function = IsValid(Clock) ? Clock->FindFunction(TEXT("IsUnitStaggered")) : nullptr;
-        const auto* UnitParam = Function ? InputProperty<FObjectPropertyBase>(Function, TEXT("Unit")) : nullptr;
-        const auto* Return = Function ? CastField<FBoolProperty>(Function->GetReturnProperty()) : nullptr;
-        if (Function && Function->NumParms == 2 && UnitParameter(UnitParam, Unit) &&
-            !UnitParam->HasAnyPropertyFlags(CPF_OutParm) && Return)
-        {
-            FStructOnScope Params(Function);
-            void* Memory = Params.GetStructMemory();
-            UnitParam->SetObjectPropertyValue_InContainer(Memory, Unit);
-            Clock->ProcessEvent(Function, Memory);
-            return Return->GetPropertyValue_InContainer(Memory);
-        }
-
-        // Legacy/non-ATB battles: distinguish stamina break from generic stun.
-        if (ReadBool(Unit, TEXT("Staggered"))) return true;
-        if (!ReadBool(Unit, TEXT("isStun"))) return false;
-        const auto* Property = FindFProperty<FMapProperty>(Unit->GetClass(), TEXT("activeBuffs"));
-        const auto* Value = Property ? CastField<FObjectPropertyBase>(Property->ValueProp) : nullptr;
-        if (!Value) return false;
-        FScriptMapHelper Buffs(Property, Property->ContainerPtrToValuePtr<void>(Unit));
-        for (int32 Index = 0; Index < Buffs.GetMaxIndex(); ++Index)
-        {
-            if (!Buffs.IsValidIndex(Index)) continue;
-            auto* Buff = Cast<AActor>(Value->GetObjectPropertyValue(Buffs.GetValuePtr(Index)));
-            if (!IsValid(Buff) || ReadObject(Buff, TEXT("targetUnit")) != Unit) continue;
-            bool bStagger = false;
-            for (auto* Type = Buff->GetClass(); Type; Type = Type->GetSuperClass())
-                if (Type->GetPathName() == TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Skills/Buffs/BP_Staggered.BP_Staggered_C"))
-                { bStagger = true; break; }
-            if (bStagger && (ReadBool(Buff, TEXT("Permenant State")) || ReadInt(Buff, TEXT("turnLeft")) > 0)) return true;
-        }
-        return false;
-    }
-
-    int32 FindStaggeredPlayerIndex(AActor* BattleController, int32 LegacyIndex)
-    {
-        // Preserve playerUnits indices: the existing Blueprint GET consumes this.
-        UObject* Battle = ReadObject(BattleController, TEXT("currentBattle"));
-        const auto* Property = IsValid(Battle) ? FindFProperty<FArrayProperty>(Battle->GetClass(), TEXT("playerUnits")) : nullptr;
-        const auto* Item = Property ? CastField<FObjectPropertyBase>(Property->Inner) : nullptr;
-        if (!Item) return LegacyIndex;
-        FScriptArrayHelper Players(Property, Property->ContainerPtrToValuePtr<void>(Battle));
-        UActorComponent* Clock = FindClock(BattleController);
-        TArray<int32> Candidates;
-        for (int32 Index = 0; Index < Players.Num(); ++Index)
-        {
-            auto* Unit = Cast<AActor>(Item->GetObjectPropertyValue(Players.GetRawPtr(Index)));
-            if (AliveInBattle(Unit, BattleController) && !ReadBool(Unit, TEXT("Swallowed")) &&
-                IsStaggeredForEnemyTargeting(Clock, Unit)) Candidates.Add(Index);
-        }
-        // Aggro has no influence within the staggered pool. Do not write any
-        // target, threat or action state; an existing attack keeps its snapshot.
-        return Candidates.Num() == 0 ? LegacyIndex
-            : Candidates[Candidates.Num() == 1 ? 0 : FMath::RandRange(0, Candidates.Num() - 1)];
-    }
-
     int32 FindAggroFocus(AActor* BattleController, AActor*& OutTarget)
     {
         // Use the same array and preserve its exact indices, including any empty slots.
@@ -1260,30 +1210,13 @@ namespace
 AActor* UReditusTableBuffLibrary::GetAggroFocusTarget(AActor* BattleController)
 {
     AActor* Target = nullptr;
-    FindAggroFocus(BattleController, Target);
+    ReditusTableBuffQueries::FindAggroFocus(BattleController, Target);
     return Target;
 }
 
 int32 UReditusTableBuffLibrary::ResolveAggroFocusIndex(AActor* BattleController, AActor* Selector, int32 LegacyIndex)
 {
-    if (!IsValid(BattleController) || !IsValid(Selector)) return LegacyIndex;
-    const FName Enemy(TEXT("Enemy"));
-    const bool bEnemyUnitSelector = MatchesCatalogueSide(Selector, Enemy);
-    // The skill selector also runs for some multi-target skills. Keep those unchanged.
-    if (!bEnemyUnitSelector && !ReadBool(Selector, TEXT("OneUnitAttack?"))) return LegacyIndex;
-    const AActor* Attacker = bEnemyUnitSelector ? Selector
-        : Cast<AActor>(ReadObject(BattleController, TEXT("currentAttackingUnit")));
-    if (!AliveInBattle(Attacker, BattleController) ||
-        !MatchesCatalogueSide(Attacker, Enemy)) return LegacyIndex;
-    // Those statuses have their own either-side selection. Do not steer them
-    // back toward the party or override a deliberate friendly-fire choice.
-    if (ReadBool(Attacker, TEXT("Is Confused")) || ReadBool(Attacker, TEXT("NewConfused")) ||
-        ReadBool(Attacker, TEXT("IsCharmed??"))) return LegacyIndex;
-
-    AActor* Target = nullptr;
-    const int32 FocusIndex = FindAggroFocus(BattleController, Target);
-    if (FocusIndex != INDEX_NONE) return FocusIndex; // Rage Bait protects a staggered ally.
-    return FindStaggeredPlayerIndex(BattleController, LegacyIndex);
+    return UReditusEnemyCombatAIComponent::ResolveTargetIndex(BattleController, Selector, LegacyIndex);
 }
 
 int32 UReditusTableBuffLibrary::GetBuffedDefense(AActor* Target, int32 BaseDefense)

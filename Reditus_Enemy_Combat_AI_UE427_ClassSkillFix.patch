@@ -1,0 +1,313 @@
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
+index 82d23c85671d55c69b3baf4827791688f8ef2d71..7b555c1dd71fe1ed50faf8587ab5ce65f65126af 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
+@@ -406,6 +406,23 @@ float UReditusEnemyCombatAIComponent::FilterEnemySkillIDWeight(AActor* Enemy, FN
+ bool UReditusEnemyCombatAIComponent::TryChooseProfiledClassSkill(AActor* Enemy)
+ {
+     if (!IsValid(Enemy)) return false;
++    const auto* CurrentSkill = FindFProperty<FClassProperty>(Enemy->GetClass(), TEXT("currentSkill"));
++    if (!CurrentSkill || !CurrentSkill->MetaClass) return false;
++
++    TSubclassOf<AActor> SelectedSkill;
++    if (!SelectClassSkill(Enemy, CurrentSkill->MetaClass, SelectedSkill)) return false;
++    CurrentSkill->SetObjectPropertyValue_InContainer(Enemy, SelectedSkill.Get());
++    return true;
++}
++
++bool UReditusEnemyCombatAIComponent::TrySelectProfiledClassSkill(AActor* Enemy, TSubclassOf<AActor>& SelectedSkill)
++{
++    SelectedSkill = nullptr;
++    return IsValid(Enemy) && SelectClassSkill(Enemy, AActor::StaticClass(), SelectedSkill);
++}
++
++bool UReditusEnemyCombatAIComponent::SelectClassSkill(AActor* Enemy, const UClass* SkillType, TSubclassOf<AActor>& SelectedSkill)
++{
+     const auto* Component = Enemy->FindComponentByClass<UReditusEnemyCombatAIComponent>();
+     if (!Component) return false;
+     const FReditusEnemyAIProfile* Profile = Component->FindProfile();
+@@ -414,10 +431,8 @@ bool UReditusEnemyCombatAIComponent::TryChooseProfiledClassSkill(AActor* Enemy)
+     const auto* SkillMap = FindFProperty<FMapProperty>(Enemy->GetClass(), TEXT("skills"));
+     const auto* Key = SkillMap ? CastField<FClassProperty>(SkillMap->KeyProp) : nullptr;
+     const auto* Weight = SkillMap ? CastField<FFloatProperty>(SkillMap->ValueProp) : nullptr;
+-    const auto* CurrentSkill = FindFProperty<FClassProperty>(Enemy->GetClass(), TEXT("currentSkill"));
+     const auto* CurrentMP = FindFProperty<FIntProperty>(Enemy->GetClass(), TEXT("currentMP"));
+-    if (!Key || !Key->MetaClass || !Weight || !CurrentSkill || !CurrentSkill->MetaClass || !CurrentMP ||
+-        !Key->MetaClass->IsChildOf(CurrentSkill->MetaClass)) return false;
++    if (!Key || !Key->MetaClass || !Weight || !CurrentMP || !Key->MetaClass->IsChildOf(SkillType)) return false;
+ 
+     struct FWeightedSkill
+     {
+@@ -434,7 +449,7 @@ bool UReditusEnemyCombatAIComponent::TryChooseProfiledClassSkill(AActor* Enemy)
+     {
+         if (!Entries.IsValidIndex(Index)) continue;
+         UClass* Skill = Cast<UClass>(Key->GetObjectPropertyValue(Entries.GetKeyPtr(Index)));
+-        if (Skill && !Skill->IsChildOf(CurrentSkill->MetaClass)) return false;
++        if (Skill && !Skill->IsChildOf(SkillType)) return false;
+         bool bMatchedRule = false;
+         const float CandidateWeight = Component->GetRuleAdjustedWeight(Profile, NAME_None, Skill,
+             Weight->GetPropertyValue(Entries.GetValuePtr(Index)), bMatchedRule);
+@@ -448,23 +463,20 @@ bool UReditusEnemyCombatAIComponent::TryChooseProfiledClassSkill(AActor* Enemy)
+     }
+     if (!bAppliedRule) return false;
+ 
+-    UClass* ChosenSkill = nullptr;
+     if (Candidates.Num() > 0)
+     {
+-        ChosenSkill = Candidates.Last().Class;
++        SelectedSkill = Candidates.Last().Class;
+         double Roll = FMath::FRand() * TotalWeight;
+         for (const FWeightedSkill& Candidate : Candidates)
+         {
+             Roll -= Candidate.Weight;
+             if (Roll < 0.0)
+             {
+-                ChosenSkill = Candidate.Class;
++                SelectedSkill = Candidate.Class;
+                 break;
+             }
+         }
+     }
+-    // A null class is the existing selector's basic-attack result.
+-    CurrentSkill->SetObjectPropertyValue_InContainer(Enemy, ChosenSkill);
+     return true;
+ }
+ 
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h
+index 8aa0289302aa459fe7db0d0d3f7b021bbfd705d3..ccc04a16b02e05671857a291e9f5a11f0f64a646 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h
+@@ -252,10 +252,14 @@ public:
+     /** The existing Blueprint call forwards here for both attacks and single-target skills. */
+     static int32 ResolveTargetIndex(AActor* BattleController, AActor* Selector, int32 LegacyIndex);
+ 
+-    /** Updates the existing currentSkill field only when a class skill rule matches this enemy's list. */
++    /** Compatibility for older callers that stored currentSkill on the enemy actor. */
+     UFUNCTION(BlueprintCallable, Category="Reditus|Enemy AI")
+     static bool TryChooseProfiledClassSkill(AActor* Enemy);
+ 
++    /** When a rule handled selection, returns true and outputs the chosen class, or None for a regular attack. */
++    UFUNCTION(BlueprintCallable, Category="Reditus|Enemy AI")
++    static bool TrySelectProfiledClassSkill(AActor* Enemy, TSubclassOf<AActor>& SelectedSkill);
++
+     /** Filters the existing ID-based selector's candidates before its affordability check and roll. */
+     UFUNCTION(BlueprintPure, Category="Reditus|Enemy AI")
+     static float FilterEnemySkillIDWeight(AActor* Enemy, FName SkillID, float OriginalWeight);
+@@ -265,6 +269,7 @@ public:
+     int32 ResolveEnemyAmpForAction(bool bRegularAttack, FName SkillID, TSubclassOf<AActor> SkillClass) const;
+ 
+ private:
++    static bool SelectClassSkill(AActor* Enemy, const UClass* SkillType, TSubclassOf<AActor>& SelectedSkill);
+     const uint8* FindEnemyDefinition() const;
+     const FReditusEnemyAIProfile* FindProfile() const;
+     bool MeetsSkillCondition(const FReditusEnemyAISkillRule& Rule) const;
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
+index 8672fab3d897bfe1bc487b5d61257bdd0f555470..3de7da3f00cb12ca9bcb67738559359ce338538f 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
+@@ -11,12 +11,14 @@
+ #include "GameFramework/Actor.h"
+ #include "HAL/IConsoleManager.h"
+ #include "K2Node_CallFunction.h"
++#include "K2Node_ClassDynamicCast.h"
+ #include "K2Node_FunctionEntry.h"
+ #include "K2Node_FunctionResult.h"
+ #include "K2Node_IfThenElse.h"
+ #include "K2Node_Knot.h"
+ #include "K2Node_Self.h"
+ #include "K2Node_VariableGet.h"
++#include "K2Node_VariableSet.h"
+ #include "Kismet2/BlueprintEditorUtils.h"
+ #include "Kismet2/KismetEditorUtilities.h"
+ #include "KismetCompiler.h"
+@@ -85,10 +87,14 @@ namespace ReditusEnemyAIInstall
+         UEdGraphPin* Entry = nullptr;
+         UEdGraphPin* OriginalNext = nullptr;
+         UEdGraphPin* Return = nullptr;
++        UK2Node_VariableGet* SkillGet = nullptr;
++        UClass* SkillType = nullptr;
++        UK2Node_CallFunction* OldHook = nullptr;
++        UK2Node_IfThenElse* OldBranch = nullptr;
+         bool bInstalled = false;
+     };
+ 
+-    bool FindClassSkillSite(UEdGraph* Graph, FName HookName, FClassSkillSite& Site)
++    bool FindClassSkillSite(UEdGraph* Graph, FName HookName, FName OldHookName, FClassSkillSite& Site)
+     {
+         if (!Graph) return false;
+         UK2Node_FunctionEntry* Entry = nullptr;
+@@ -106,7 +112,7 @@ namespace ReditusEnemyAIInstall
+                 if (Result) return false;
+                 Result = Candidate;
+             }
+-            if (IsCall(Node, HookName))
++            if (IsCall(Node, HookName) || IsCall(Node, OldHookName))
+             {
+                 if (Hook) return false;
+                 Hook = CastChecked<UK2Node_CallFunction>(Node);
+@@ -116,19 +122,45 @@ namespace ReditusEnemyAIInstall
+         Site.OriginalNext = OneLink(Site.Entry);
+         Site.Return = Pin(Result, UEdGraphSchema_K2::PN_Execute);
+         auto* Skill = TraceSource(Pin(Result, TEXT("skill")));
+-        const auto* SkillGet = Skill ? Cast<UK2Node_VariableGet>(Skill->GetOwningNode()) : nullptr;
+-        if (!Site.OriginalNext || !Site.Return || Site.Return->LinkedTo.Num() == 0 || !SkillGet ||
++        Site.SkillGet = Skill ? Cast<UK2Node_VariableGet>(Skill->GetOwningNode()) : nullptr;
++        Site.SkillType = Skill ? Cast<UClass>(Skill->PinType.PinSubCategoryObject.Get()) : nullptr;
++        if (!Site.OriginalNext || !Site.Return || Site.Return->LinkedTo.Num() == 0 || !Site.SkillGet ||
++            !Site.SkillType || !Site.SkillType->IsChildOf(AActor::StaticClass()) ||
+             Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Class ||
+-            SkillGet->VariableReference.GetMemberName() != TEXT("currentSkill")) return false;
++            Site.SkillGet->VariableReference.GetMemberName() != TEXT("currentSkill")) return false;
+         if (!Hook) return Site.OriginalNext != Site.Return;
+ 
+-        auto* Then = OneLink(Pin(Hook, UEdGraphSchema_K2::PN_Then));
+-        auto* Branch = Then ? Cast<UK2Node_IfThenElse>(Then->GetOwningNode()) : nullptr;
++        auto* AfterHook = OneLink(Pin(Hook, UEdGraphSchema_K2::PN_Then));
++        auto* Branch = AfterHook ? Cast<UK2Node_IfThenElse>(AfterHook->GetOwningNode()) : nullptr;
+         auto* Fallback = OneLink(Pin(Branch, UEdGraphSchema_K2::PN_Else));
+-        Site.bInstalled = Site.OriginalNext == Pin(Hook, UEdGraphSchema_K2::PN_Execute) &&
+-            IsSelf(TraceSource(Pin(Hook, TEXT("Enemy")))) && Branch && Fallback && Fallback != Site.Return &&
+-            TraceSource(Pin(Branch, TEXT("Condition"))) == Pin(Hook, UEdGraphSchema_K2::PN_ReturnValue) &&
+-            OneLink(Pin(Branch, UEdGraphSchema_K2::PN_Then)) == Site.Return;
++        if (Site.OriginalNext != Pin(Hook, UEdGraphSchema_K2::PN_Execute) ||
++            !IsSelf(TraceSource(Pin(Hook, TEXT("Enemy")))) || !Branch ||
++            AfterHook != Pin(Branch, UEdGraphSchema_K2::PN_Execute) || !Fallback || Fallback == Site.Return ||
++            !Pin(Hook, UEdGraphSchema_K2::PN_ReturnValue) ||
++            TraceSource(Pin(Branch, TEXT("Condition"))) != Pin(Hook, UEdGraphSchema_K2::PN_ReturnValue)) return false;
++
++        auto* ProfiledPath = OneLink(Pin(Branch, UEdGraphSchema_K2::PN_Then));
++        if (IsCall(Hook, OldHookName))
++        {
++            if (ProfiledPath != Site.Return) return false;
++            Site.OldHook = Hook;
++            Site.OldBranch = Branch;
++            return true;
++        }
++
++        auto* SetSkill = ProfiledPath ? Cast<UK2Node_VariableSet>(ProfiledPath->GetOwningNode()) : nullptr;
++        if (!SetSkill || ProfiledPath != Pin(SetSkill, UEdGraphSchema_K2::PN_Execute) ||
++            OneLink(Pin(SetSkill, UEdGraphSchema_K2::PN_Then)) != Site.Return) return false;
++        const auto& SkillReference = Site.SkillGet->VariableReference;
++        const auto& SetReference = SetSkill->VariableReference;
++        auto* SelectedSkillPin = Pin(Hook, TEXT("SelectedSkill"));
++        auto* ConvertedSkill = TraceSource(Pin(SetSkill, SkillReference.GetMemberName()));
++        auto* ClassCast = ConvertedSkill ? Cast<UK2Node_ClassDynamicCast>(ConvertedSkill->GetOwningNode()) : nullptr;
++        Site.bInstalled = SetReference.GetMemberName() == SkillReference.GetMemberName() &&
++            SetReference.GetMemberGuid() == SkillReference.GetMemberGuid() &&
++            SetReference.IsLocalScope() == SkillReference.IsLocalScope() &&
++            ClassCast && ClassCast->IsNodePure() && ClassCast->TargetType == Site.SkillType && SelectedSkillPin &&
++            TraceSource(Pin(ClassCast, TEXT("Class"))) == SelectedSkillPin;
+         return Site.bInstalled;
+     }
+ 
+@@ -203,14 +235,21 @@ namespace ReditusEnemyAIInstall
+         return Node;
+     }
+ 
+-    UK2Node_CallFunction* AddCallWithSelf(UEdGraph* Graph, UFunction* Function, int32 X, int32 Y)
++    UK2Node_CallFunction* AddCallWithSelf(UEdGraph* Graph, UFunction* Function, int32 X, int32 Y,
++        UEdGraphPin* SelfPin = nullptr)
+     {
+         auto* Call = AddNode<UK2Node_CallFunction>(Graph, X, Y);
+         Call->SetFromFunction(Function);
+         Call->AllocateDefaultPins();
+-        auto* Self = AddNode<UK2Node_Self>(Graph, X - 155, Y + 110);
+-        Self->AllocateDefaultPins();
+-        return Link(Pin(Self, UEdGraphSchema_K2::PN_Self), Pin(Call, TEXT("Enemy"))) ? Call : nullptr;
++        if (!SelfPin)
++        {
++            auto* Self = AddNode<UK2Node_Self>(Graph, X - 155, Y + 110);
++            Self->AllocateDefaultPins();
++            SelfPin = Pin(Self, UEdGraphSchema_K2::PN_Self);
++        }
++        if (!SelfPin) return nullptr;
++        SelfPin->GetOwningNode()->Modify();
++        return Link(SelfPin, Pin(Call, TEXT("Enemy"))) ? Call : nullptr;
+     }
+ 
+     bool WireClassSkill(const FClassSkillSite& Site, UFunction* Function)
+@@ -222,17 +261,55 @@ namespace ReditusEnemyAIInstall
+         EntryNode->Modify();
+         Site.OriginalNext->GetOwningNode()->Modify();
+         Site.Return->GetOwningNode()->Modify();
+-        const int32 X = EntryNode->NodePosX + 250;
+-        const int32 Y = EntryNode->NodePosY - 220;
+-        auto* Call = AddCallWithSelf(Graph, Function, X, Y);
+-        auto* Branch = AddNode<UK2Node_IfThenElse>(Graph, X + 270, Y);
+-        Branch->AllocateDefaultPins();
+-        if (!Call || !Link(Pin(Call, UEdGraphSchema_K2::PN_Then), Pin(Branch, UEdGraphSchema_K2::PN_Execute)) ||
+-            !Link(Pin(Call, UEdGraphSchema_K2::PN_ReturnValue), Pin(Branch, TEXT("Condition")))) return false;
+-        Site.Entry->BreakLinkTo(Site.OriginalNext);
++
++        const int32 X = Site.OldHook ? Site.OldHook->NodePosX : EntryNode->NodePosX + 250;
++        const int32 Y = Site.OldHook ? Site.OldHook->NodePosY : EntryNode->NodePosY - 220;
++        auto* Call = AddCallWithSelf(Graph, Function, X, Y, TraceSource(Pin(Site.OldHook, TEXT("Enemy"))));
++        if (!Call) return false;
++
++        auto* Branch = Site.OldBranch;
++        if (Branch) Branch->Modify();
++        else
++        {
++            Branch = AddNode<UK2Node_IfThenElse>(Graph, X + 275, Y);
++            Branch->AllocateDefaultPins();
++        }
++        auto* ClassCast = AddNode<UK2Node_ClassDynamicCast>(Graph, Branch->NodePosX, Branch->NodePosY - 135);
++        ClassCast->TargetType = Site.SkillType;
++        ClassCast->AllocateDefaultPins();
++        if (!ClassCast->IsNodePure()) ClassCast->SetPurity(true);
++        if (!ClassCast->IsNodePure()) return false;
++        UEdGraphPin* CastResult = nullptr;
++        for (auto* Candidate : ClassCast->Pins)
++        {
++            if (Candidate && !Candidate->bOrphanedPin && Candidate->Direction == EGPD_Output &&
++                Candidate->PinType.PinCategory == UEdGraphSchema_K2::PC_Class)
++            {
++                CastResult = Candidate;
++                break;
++            }
++        }
++
++        auto* SetSkill = AddNode<UK2Node_VariableSet>(Graph, Branch->NodePosX + 270, Branch->NodePosY);
++        SetSkill->VariableReference = Site.SkillGet->VariableReference;
++        SetSkill->AllocateDefaultPins();
++        if (!Link(Pin(Call, TEXT("SelectedSkill")), Pin(ClassCast, TEXT("Class"))) ||
++            !Link(CastResult, Pin(SetSkill, SetSkill->VariableReference.GetMemberName())) ||
++            !Link(Pin(SetSkill, UEdGraphSchema_K2::PN_Then), Site.Return)) return false;
++
++        if (Site.OldHook)
++        {
++            Site.OldHook->Modify();
++            Pin(Branch, UEdGraphSchema_K2::PN_Then)->BreakLinkTo(Site.Return);
++            Site.OldHook->DestroyNode();
++        }
++        else Site.Entry->BreakLinkTo(Site.OriginalNext);
++
+         return Link(Site.Entry, Pin(Call, UEdGraphSchema_K2::PN_Execute)) &&
+-            Link(Pin(Branch, UEdGraphSchema_K2::PN_Then), Site.Return) &&
+-            Link(Pin(Branch, UEdGraphSchema_K2::PN_Else), Site.OriginalNext);
++            Link(Pin(Call, UEdGraphSchema_K2::PN_Then), Pin(Branch, UEdGraphSchema_K2::PN_Execute)) &&
++            Link(Pin(Call, UEdGraphSchema_K2::PN_ReturnValue), Pin(Branch, TEXT("Condition"))) &&
++            Link(Pin(Branch, UEdGraphSchema_K2::PN_Then), Pin(SetSkill, UEdGraphSchema_K2::PN_Execute)) &&
++            (Site.OldHook || Link(Pin(Branch, UEdGraphSchema_K2::PN_Else), Site.OriginalNext));
+     }
+ 
+     bool WireIDWeight(const FIDWeightSite& Site, UFunction* Function)
+@@ -444,7 +521,8 @@ namespace ReditusEnemyAIInstall
+         }
+         auto* Blueprint = LoadObject<UBlueprint>(nullptr, EnemyBlueprintPath);
+         auto* AIClass = UReditusEnemyCombatAIComponent::StaticClass();
+-        const FName ClassHook = GET_FUNCTION_NAME_CHECKED(UReditusEnemyCombatAIComponent, TryChooseProfiledClassSkill);
++        const FName ClassHook = GET_FUNCTION_NAME_CHECKED(UReditusEnemyCombatAIComponent, TrySelectProfiledClassSkill);
++        const FName OldClassHook = GET_FUNCTION_NAME_CHECKED(UReditusEnemyCombatAIComponent, TryChooseProfiledClassSkill);
+         const FName IDHook = GET_FUNCTION_NAME_CHECKED(UReditusEnemyCombatAIComponent, FilterEnemySkillIDWeight);
+         UFunction* ClassFunction = AIClass->FindFunctionByName(ClassHook);
+         UFunction* IDFunction = AIClass->FindFunctionByName(IDHook);
+@@ -456,7 +534,7 @@ namespace ReditusEnemyAIInstall
+             UE_LOG(LogReditusEnemyAIInstall, Error, TEXT("Could not find BP_EnemyUnitBase or its component slot. No Blueprint was edited."));
+             return;
+         }
+-        const bool bClassOK = FindClassSkillSite(FindFunctionGraph(Blueprint, TEXT("GetRandomSkill")), ClassHook, ClassSite);
++        const bool bClassOK = FindClassSkillSite(FindFunctionGraph(Blueprint, TEXT("GetRandomSkill")), ClassHook, OldClassHook, ClassSite);
+         const bool bIDOK = FindIDWeightSite(FindFunctionGraph(Blueprint, TEXT("GetRandomSkillByID")), IDHook, IDSite);
+         if (!bClassOK || !bIDOK)
+         {

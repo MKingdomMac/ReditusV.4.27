@@ -1,0 +1,458 @@
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
+index 3de7da3f00cb12ca9bcb67738559359ce338538f..c4f2c058f674f0e2df01719b7950bb88d37fed4e 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
+@@ -601,4 +601,116 @@ namespace ReditusEnemyAIInstall
+     FAutoConsoleCommand GInstallEnemyAI(TEXT("Reditus.InstallEnemyCombatAI"),
+         TEXT("Attach the C++ enemy AI component and connect both skill selectors. Stop Play first."),
+         FConsoleCommandDelegate::CreateStatic(&Install));
++
++    void InstallEnemyAmpDamage()
++    {
++        if (!GEditor || GEditor->PlayWorld)
++        {
++            UE_LOG(LogReditusEnemyAIInstall, Error, TEXT("Stop Play before running Reditus.InstallEnemyAmpDamage."));
++            return;
++        }
++        auto* Blueprint = LoadObject<UBlueprint>(nullptr,
++            TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_BattleController.BP_BattleController"));
++        auto* ATBClass = FindObject<UClass>(nullptr, TEXT("/Script/Chapter1Reditus.ReditusATBComponent"));
++        UFunction* Scale = ATBClass ? ATBClass->FindFunctionByName(TEXT("ScaleEnemyAmpDamage")) : nullptr;
++        auto* Graph = Blueprint ? FindFunctionGraph(Blueprint, TEXT("DealDamage")) : nullptr;
++        if (!Graph || !Scale)
++        {
++            UE_LOG(LogReditusEnemyAIInstall, Error, TEXT("The DealDamage graph or Scale Enemy Amp Damage node was unavailable."));
++            return;
++        }
++
++        UEdGraphPin* Damage = nullptr;
++        UEdGraphPin* Attacker = nullptr;
++        UEdGraphPin* AppliedDamage = nullptr;
++        UK2Node_CallFunction* Installed = nullptr;
++        for (UEdGraphNode* Node : Graph->Nodes)
++        {
++            if (auto* Get = Cast<UK2Node_VariableGet>(Node))
++                if (Get->VariableReference.GetMemberName() == TEXT("currentAttackingUnit") && !Attacker)
++                    Attacker = Pin(Get, TEXT("currentAttackingUnit"));
++
++            auto* Call = Cast<UK2Node_CallFunction>(Node);
++            auto* Exec = Pin(Call, UEdGraphSchema_K2::PN_Execute);
++            if (Exec && Exec->LinkedTo.Num() && IsCall(Call, TEXT("CalculateDamage")))
++            {
++                if (Damage)
++                {
++                    UE_LOG(LogReditusEnemyAIInstall, Error, TEXT("DealDamage has more than one live Calculate Damage call. Export the current graph."));
++                    return;
++                }
++                Damage = Pin(Call, TEXT("damage"));
++            }
++            if (Exec && Exec->LinkedTo.Num() && IsCall(Call, TEXT("TakeDamage")))
++                AppliedDamage = Pin(Call, TEXT("damage"));
++            if (Call && Call->GetTargetFunction() == Scale) Installed = Call;
++        }
++        auto* AttackerType = Attacker ? Cast<UClass>(Attacker->PinType.PinSubCategoryObject.Get()) : nullptr;
++        if (!Damage || Damage->Direction != EGPD_Output || Damage->PinType.PinCategory != UEdGraphSchema_K2::PC_Int ||
++            !AttackerType || !AttackerType->IsChildOf(AActor::StaticClass()) || !AppliedDamage)
++        {
++            UE_LOG(LogReditusEnemyAIInstall, Error, TEXT("DealDamage needs the shared Calculate Damage output, attacker and Take Damage input."));
++            return;
++        }
++        if (Installed)
++        {
++            if (TraceSource(Pin(Installed, TEXT("Damage"))) == Damage &&
++                TraceSource(AppliedDamage) == Pin(Installed, UEdGraphSchema_K2::PN_ReturnValue) &&
++                TraceSource(Pin(Installed, TEXT("Attacker"))) == Attacker &&
++                IsSelf(TraceSource(Pin(Installed, TEXT("BattleController")))))
++                UE_LOG(LogReditusEnemyAIInstall, Display, TEXT("Enemy AMP damage is already wired in BP_BattleController.DealDamage."));
++            else
++                UE_LOG(LogReditusEnemyAIInstall, Error, TEXT("Review the existing Scale Enemy Amp Damage node in BP_BattleController.DealDamage."));
++            return;
++        }
++        if (TraceSource(AppliedDamage) != Damage || !Damage->LinkedTo.Num())
++        {
++            UE_LOG(LogReditusEnemyAIInstall, Error, TEXT("Take Damage uses a different amount. Export BP_BattleController.DealDamage to review its wiring."));
++            return;
++        }
++
++        bool bSuccess = false;
++        {
++            const FScopedTransaction Transaction(NSLOCTEXT("ReditusEnemyAI", "InstallAmpDamage", "Wire Enemy AMP Damage"));
++            if (!Transaction.IsOutstanding()) return;
++            Blueprint->Modify();
++            Graph->Modify();
++            auto* Source = Damage->GetOwningNode();
++            Source->Modify();
++            Attacker->GetOwningNode()->Modify();
++            const TArray<UEdGraphPin*> Consumers = Damage->LinkedTo;
++            auto* Call = AddNode<UK2Node_CallFunction>(Graph, Source->NodePosX + 240, Source->NodePosY + 300);
++            Call->SetFromFunction(Scale);
++            Call->AllocateDefaultPins();
++            auto* Self = AddNode<UK2Node_Self>(Graph, Call->NodePosX - 160, Call->NodePosY + 100);
++            Self->AllocateDefaultPins();
++            bSuccess = Link(Pin(Self, UEdGraphSchema_K2::PN_Self), Pin(Call, TEXT("BattleController"))) &&
++                Link(Attacker, Pin(Call, TEXT("Attacker"))) && Link(Damage, Pin(Call, TEXT("Damage")));
++            for (auto* Consumer : Consumers)
++            {
++                if (!bSuccess) break;
++                Consumer->GetOwningNode()->Modify();
++                Damage->BreakLinkTo(Consumer);
++                bSuccess = Link(Pin(Call, UEdGraphSchema_K2::PN_ReturnValue), Consumer);
++            }
++            if (bSuccess)
++            {
++                FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
++                bSuccess = Compile(Blueprint);
++            }
++        }
++        if (!bSuccess)
++        {
++            const bool bUndone = GEditor->UndoTransaction(false);
++            if (bUndone) Compile(Blueprint);
++            UE_LOG(LogReditusEnemyAIInstall, Error, TEXT("Enemy AMP damage wiring could not compile. Blueprint undo %s."),
++                bUndone ? TEXT("succeeded") : TEXT("failed. Leave BP_BattleController unsaved"));
++            return;
++        }
++        UE_LOG(LogReditusEnemyAIInstall, Display, TEXT("Enemy AMP damage installed in DealDamage. Save BP_BattleController."));
++    }
++
++    FAutoConsoleCommand GInstallEnemyAmpDamage(TEXT("Reditus.InstallEnemyAmpDamage"),
++        TEXT("Wire spent enemy AMP into the shared damage result. Stop Play first."),
++        FConsoleCommandDelegate::CreateStatic(&InstallEnemyAmpDamage));
+ }
+diff --git a/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp b/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
+index dccb7202ed4534d507eaa3ea0f6e7422cb670124..a4fa69bcde73d05472b2b84358e44eaa79104785 100644
+--- a/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
++++ b/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
+@@ -7,6 +7,7 @@
+ #include "Kismet/GameplayStatics.h"
+ #include "Particles/ParticleSystem.h"
+ #include "Particles/ParticleSystemComponent.h"
++#include "Sound/SoundBase.h"
+ #include "UObject/ConstructorHelpers.h"
+ #include "UObject/UnrealType.h"
+ #include "UObject/StructOnScope.h"
+@@ -88,26 +89,26 @@ namespace
+         return false;
+     }
+ 
++    const FIntProperty* FindSpendableEnemyAmp(const FReditusATBAction& Action, int32& Available)
++    {
++        if (Action.AmpCommitted <= 0 || !IsValid(Action.Unit)) return nullptr;
++        const auto* Total = FindFProperty<FIntProperty>(Action.Unit->GetClass(), TEXT("TotalAmpPoints"));
++        const auto* Capacity = FindFProperty<FIntProperty>(Action.Unit->GetClass(), TEXT("MaxExhaustionPoints"));
++        if (!Total || !Capacity || Action.AmpCommitted > Capacity->GetPropertyValue_InContainer(Action.Unit)) return nullptr;
++        Available = Total->GetPropertyValue_InContainer(Action.Unit);
++        return Available >= Action.AmpCommitted ? Total : nullptr;
++    }
++
+     void SpendProfiledEnemyAmp(FReditusATBAction& Action)
+     {
+         if (!Action.bManagedEnemyAmp || Action.ManagedEnemyAmpSpent > 0) return;
+-        if (IsValid(Action.Unit))
++        int32 Available = 0;
++        if (const auto* Total = FindSpendableEnemyAmp(Action, Available))
+         {
+-            const auto* Total = FindFProperty<FIntProperty>(Action.Unit->GetClass(), TEXT("TotalAmpPoints"));
+-            const auto* Capacity = FindFProperty<FIntProperty>(Action.Unit->GetClass(), TEXT("MaxExhaustionPoints"));
+-            if (Total && Capacity)
+-            {
+-                const int32 Available = Total->GetPropertyValue_InContainer(Action.Unit);
+-                if (Action.AmpCommitted > 0 && Action.AmpCommitted <= Available &&
+-                    Action.AmpCommitted <= Capacity->GetPropertyValue_InContainer(Action.Unit))
+-                {
+-                    Total->SetPropertyValue_InContainer(Action.Unit, Available - Action.AmpCommitted);
+-                    Action.ManagedEnemyAmpSpent = Action.AmpCommitted;
+-                    return;
+-                }
+-            }
++            Total->SetPropertyValue_InContainer(Action.Unit, Available - Action.AmpCommitted);
++            Action.ManagedEnemyAmpSpent = Action.AmpCommitted;
+         }
+-        Action.AmpCommitted = 0;
++        else Action.AmpCommitted = 0;
+     }
+ 
+     void RefundProfiledEnemyAmp(const FReditusATBAction& Action)
+@@ -228,24 +229,30 @@ namespace
+         if (IsValid(Particle)) Particle->DestroyComponent();
+     }
+ 
+-    UParticleSystemComponent* SpawnEnemyAmpParticle(const FReditusATBAction& Action,
+-        const TArray<UParticleSystem*>& Templates)
++    UParticleSystemComponent* PlayEnemyAmpBeat(AActor* Unit, int32 Beat,
++        const TArray<UParticleSystem*>& Templates, USoundBase* Sound)
+     {
+-        if (Action.ManagedEnemyAmpSpent <= 0 || Templates.Num() == 0 || !IsValid(Action.Unit)) return nullptr;
+-        const UWorld* World = Action.Unit->GetWorld();
++        if (!IsValid(Unit)) return nullptr;
++        const UWorld* World = Unit->GetWorld();
+         if (!World || !World->IsGameWorld() || World->bIsTearingDown || World->GetNetMode() == NM_DedicatedServer)
+             return nullptr;
+ 
+-        UParticleSystem* Template = Templates[FMath::Min(Action.ManagedEnemyAmpSpent, Templates.Num()) - 1];
++        if (IsValid(Sound)) UGameplayStatics::PlaySound2D(Unit, Sound, 1.f, 1.f, 0.f, nullptr, nullptr, true);
++        if (Templates.Num() == 0) return nullptr;
++        UParticleSystem* Template = Templates[FMath::Clamp(Beat, 1, Templates.Num()) - 1];
+         if (!IsValid(Template)) Template = Templates[0];
+         if (!IsValid(Template)) return nullptr;
+ 
+-        const auto* Sprite = FindFProperty<FObjectPropertyBase>(Action.Unit->GetClass(), TEXT("Pixel2D"));
+-        auto* Anchor = Sprite ? Cast<USceneComponent>(Sprite->GetObjectPropertyValue_InContainer(Action.Unit)) : nullptr;
+-        if (!IsValid(Anchor)) Anchor = Action.Unit->GetRootComponent();
++        const auto* Sprite = FindFProperty<FObjectPropertyBase>(Unit->GetClass(), TEXT("Pixel2D"));
++        auto* Anchor = Sprite ? Cast<USceneComponent>(Sprite->GetObjectPropertyValue_InContainer(Unit)) : nullptr;
++        if (!IsValid(Anchor)) Anchor = Unit->GetRootComponent();
+         if (!IsValid(Anchor)) return nullptr;
+-        return UGameplayStatics::SpawnEmitterAttached(Template, Anchor, NAME_None, FVector::ZeroVector,
++        static const FName StatusSocket(TEXT("StatusSocket"));
++        auto* Particle = UGameplayStatics::SpawnEmitterAttached(Template, Anchor,
++            Anchor->DoesSocketExist(StatusSocket) ? StatusSocket : NAME_None, FVector::ZeroVector,
+             FRotator::ZeroRotator, FVector(1.f), EAttachLocation::KeepRelativeOffset, true);
++        if (IsValid(Particle)) Particle->CustomTimeDilation = 1.f + 0.25f * (Beat - 1);
++        return Particle;
+     }
+ 
+     void ClearEnemyAmpParticle(FReditusATBAction& Action)
+@@ -327,7 +334,10 @@ UReditusATBComponent::UReditusATBComponent()
+         TEXT("/Game/Particles/GoodParticleStatus/Particles/Buff_Status/PS_GPS_Buff_Nebula1.PS_GPS_Buff_Nebula1"));
+     static ConstructorHelpers::FObjectFinderOptional<UParticleSystem> ThreeAmp(
+         TEXT("/Game/Particles/GoodParticleStatus/Particles/Buff_Status/PS_GPS_Buff_Nebula2.PS_GPS_Buff_Nebula2"));
++    static ConstructorHelpers::FObjectFinderOptional<USoundBase> AmpSound(
++        TEXT("/Game/Sounds/JrpgBlueprintSounds/CUE_ThunderboltHit.CUE_ThunderboltHit"));
+     EnemyAmpParticleTemplates = {OneAmp.Get(), TwoAmp.Get(), ThreeAmp.Get()};
++    EnemyAmpSound = AmpSound.Get();
+ }
+ UReditusATBComponent::~UReditusATBComponent() = default;
+ 
+@@ -376,7 +386,7 @@ void UReditusATBComponent::UnregisterUnit(AActor* Unit)
+         if (const FReditusATBAction* Action=PendingActions.Find(State->Action))
+         {
+             Removed=*Action; bCancelled=true;
+-            bHadStarted=State->State==ReditusATBCore::Phase::Executing || State->State==ReditusATBCore::Phase::CycleEnd;
++            bHadStarted=Action->bExecutionDispatched;
+             PendingActions.Remove(State->Action);
+             ExecutionInterruptRequests.Remove(State->Action);
+         }
+@@ -434,9 +444,7 @@ void UReditusATBComponent::StopATB()
+     for (FReditusATBAction& Action : Cancelled)
+     {
+         ClearEnemyAmpParticle(Action);
+-        bool bHadStarted=false;
+-        for (const FReditusATBUnitView& State : Before)
+-            if (State.Unit==Action.Unit) bHadStarted=State.Phase==EReditusATBPhase::Executing || State.Phase==EReditusATBPhase::CycleEnd;
++        const bool bHadStarted=Action.bExecutionDispatched;
+         if (bHadStarted) RemoveLegacyActionEndBinding(Action.Unit,GetOwner());
+         OnActionCancelled.Broadcast(Action,bHadStarted);
+     }
+@@ -551,7 +559,7 @@ bool UReditusATBComponent::RequestExecutionInterruption(AActor* Unit)
+ {
+     FReditusATBAction Action;
+     if (!bRunning || GetUnitState(Unit).Phase!=EReditusATBPhase::Executing || !GetPendingAction(Unit,Action) ||
+-        !Action.bInterruptibleDuringExecution || ExecutionInterruptRequests.Contains(Action.ActionToken) ||
++        !Action.bExecutionDispatched || !Action.bInterruptibleDuringExecution || ExecutionInterruptRequests.Contains(Action.ActionToken) ||
+         !OnExecutionInterruptRequested.IsBound()) return false;
+     ExecutionInterruptRequests.Add(Action.ActionToken);
+     OnExecutionInterruptRequested.Broadcast(Action);
+@@ -836,12 +844,29 @@ bool UReditusATBComponent::SubmitAction(const FReditusATBAction& Action,int32& A
+     }
+     Saved.ActionToken=Token; Saved.CycleToken=Scheduler->Find(*Identity)->Cycle;
+     Saved.bManagedEnemyAmp = bProfiledEnemy && CommittedAmp > 0;
++    Saved.bExecutionDispatched = false;
+     Saved.ManagedEnemyAmpSpent = 0;
++    Saved.EnemyAmpBeat = 0;
++    Saved.EnemyAmpBeatTimeRemaining = 0.0;
+     Saved.ManagedEnemyAmpParticle.Reset();
+     Saved.AmpCommitted = CommittedAmp;
+     PendingActions.Add(Token,Saved); ActionToken=Token;
+     return true;
+ }
++int32 UReditusATBComponent::ScaleEnemyAmpDamage(AActor* BattleController, AActor* Attacker, int32 Damage)
++{
++    if (Damage <= 0 || !IsValid(BattleController) || !IsValid(Attacker)) return Damage;
++    const auto* Clock = BattleController->FindComponentByClass<UReditusATBComponent>();
++    if (!Clock || !Clock->bRunning) return Damage;
++    const auto Active = Clock->Scheduler->ActiveWork();
++    const auto* Action = Active.Kind == ReditusATBCore::WorkKind::Action ? Clock->PendingActions.Find(Active.Action) : nullptr;
++    if (!Action || Action->Unit != Attacker || !Action->bExecutionDispatched || Action->ManagedEnemyAmpSpent <= 0)
++        return Damage;
++    const double Bonus = ReditusATBCore::NonNegative(Clock->EnemyAmpDamageBonusPerPoint);
++    const double Scaled = Damage * (1.0 + Bonus * Action->ManagedEnemyAmpSpent);
++    return Scaled >= MAX_int32 ? MAX_int32 : static_cast<int32>(Scaled + 0.5);
++}
++
+ bool UReditusATBComponent::CompleteAction(int32 ActionToken)
+ {
+     if (!bRunning || !Scheduler->CompleteAction(ActionToken)) return false;
+@@ -901,6 +926,57 @@ bool UReditusATBComponent::CompleteCycleEnd(AActor* Unit,int32 CycleToken)
+     if (bAdvanceLegacyStaggerOnCycleEnd && !bFrozen) AdvanceLegacyStaggerRecovery(Unit);
+     return true;
+ }
++bool UReditusATBComponent::AdvanceEnemyAmpBuildup(FReditusATBAction& Action, double Elapsed)
++{
++    if (!Action.bManagedEnemyAmp || Action.AmpCommitted <= 0) return false;
++    int32 Available = 0;
++    if (!FindSpendableEnemyAmp(Action, Available))
++    {
++        Action.AmpCommitted = 0;
++        ClearEnemyAmpParticle(Action);
++        return false;
++    }
++    if (Action.EnemyAmpBeat > 0)
++    {
++        Action.EnemyAmpBeatTimeRemaining -= Elapsed;
++        if (Action.EnemyAmpBeatTimeRemaining > 0.0) return true;
++    }
++    if (Action.EnemyAmpBeat >= FMath::Min(3, Action.AmpCommitted)) return false;
++
++    // Hold the execution slot for each beat, including the final one.
++    ++Action.EnemyAmpBeat;
++    ClearEnemyAmpParticle(Action);
++    Action.ManagedEnemyAmpParticle = PlayEnemyAmpBeat(Action.Unit, Action.EnemyAmpBeat, EnemyAmpParticleTemplates, EnemyAmpSound);
++    Action.EnemyAmpBeatTimeRemaining = FMath::Max(0.05, ReditusATBCore::NonNegative(EnemyAmpBeatSeconds));
++    return true;
++}
++
++void UReditusATBComponent::DispatchActionWhenReady(int32 ActionToken, double Elapsed)
++{
++    auto* Saved = PendingActions.Find(ActionToken);
++    if (!Saved)
++    {
++        Scheduler->RejectAction(ActionToken);
++        return;
++    }
++    if (Saved->bExecutionDispatched) return;
++
++    FReditusATBAction Copy = *Saved;
++    // A unit can lose its target or be disabled while its AMP is building.
++    if (IsIncapacitated(Copy.Unit) || IsUnitStaggered(Copy.Unit) || !RevalidateActionTargets(Copy))
++    {
++        if (CompleteAction(ActionToken)) OnActionCancelled.Broadcast(Copy, false);
++        return;
++    }
++    if (AdvanceEnemyAmpBuildup(*Saved, Elapsed)) return;
++
++    Saved->Targets = MoveTemp(Copy.Targets);
++    SpendProfiledEnemyAmp(*Saved);
++    Saved->bExecutionDispatched = true;
++    Copy = *Saved;
++    OnExecuteActionRequested.Broadcast(Copy);
++}
++
+ void UReditusATBComponent::TickComponent(float DeltaTime,ELevelTick TickType,FActorComponentTickFunction* ThisTickFunction)
+ {
+     Super::TickComponent(DeltaTime,TickType,ThisTickFunction);
+@@ -980,7 +1056,14 @@ void UReditusATBComponent::TickComponent(float DeltaTime,ELevelTick TickType,FAc
+             }
+         }
+     }
+-    const ReditusATBCore::Work Task=Scheduler->Poll();
++    ReditusATBCore::Work Task=Scheduler->Poll();
++    if (Task.Kind==ReditusATBCore::WorkKind::None)
++    {
++        const auto Active = Scheduler->ActiveWork();
++        const auto* Action = Active.Kind == ReditusATBCore::WorkKind::Action ? PendingActions.Find(Active.Action) : nullptr;
++        if (!Action || Action->bExecutionDispatched) return;
++        Task = Active;
++    }
+     AActor* Unit=ResolveActor(Task.Unit);
+     if (!UnitAlive(Unit)) { UnregisterUnit(Unit); return; }
+     if (Task.Kind==ReditusATBCore::WorkKind::CycleStart)
+@@ -990,36 +1073,5 @@ void UReditusATBComponent::TickComponent(float DeltaTime,ELevelTick TickType,FAc
+         if (bRunning && ClockEpoch==TickEpoch) FinishSynchronousCycleStart(Unit,Task.Cycle);
+     }
+     else if (Task.Kind==ReditusATBCore::WorkKind::CycleEnd) OnCycleEndRequested.Broadcast(Unit,Task.Cycle);
+-    else if (Task.Kind==ReditusATBCore::WorkKind::Action)
+-    {
+-        if (const FReditusATBAction* Saved=PendingActions.Find(Task.Action))
+-        {
+-            FReditusATBAction Copy=*Saved;
+-            // An enemy may have chosen this action before being staggered.
+-            // Its stunned animation cannot emit the normal attack-finished
+-            // callback. Consume only this action and run its cycle-end cleanup.
+-            if (IsIncapacitated(Unit))
+-            {
+-                if (CompleteAction(Task.Action)) OnActionCancelled.Broadcast(Copy,false);
+-                return;
+-            }
+-            if (!RevalidateActionTargets(Copy))
+-            {
+-                // No animation/item has started. Complete this action rather
+-                // than waiting forever for a callback that cannot occur.
+-                if (CompleteAction(Task.Action)) OnActionCancelled.Broadcast(Copy,false);
+-                return;
+-            }
+-            if (FReditusATBAction* Current=PendingActions.Find(Task.Action))
+-            {
+-                SpendProfiledEnemyAmp(Copy);
+-                Current->Targets=Copy.Targets;
+-                Current->AmpCommitted=Copy.AmpCommitted;
+-                Current->ManagedEnemyAmpSpent=Copy.ManagedEnemyAmpSpent;
+-                Current->ManagedEnemyAmpParticle = SpawnEnemyAmpParticle(Copy,EnemyAmpParticleTemplates);
+-            }
+-            OnExecuteActionRequested.Broadcast(Copy);
+-        }
+-        else Scheduler->RejectAction(Task.Action);
+-    }
++    else if (Task.Kind==ReditusATBCore::WorkKind::Action) DispatchActionWhenReady(Task.Action, Elapsed);
+ }
+diff --git a/Source/Chapter1Reditus/ATB/ReditusATBComponent.h b/Source/Chapter1Reditus/ATB/ReditusATBComponent.h
+index 5ea889c0f7aedf703922df8e16b5b14ecd2ff64f..1be015f5800f9759facd1534fa3f5f6055e6937b 100644
+--- a/Source/Chapter1Reditus/ATB/ReditusATBComponent.h
++++ b/Source/Chapter1Reditus/ATB/ReditusATBComponent.h
+@@ -11,6 +11,7 @@
+ class AActor;
+ class UParticleSystem;
+ class UParticleSystemComponent;
++class USoundBase;
+ 
+ UENUM(BlueprintType)
+ enum class EReditusATBPhase : uint8
+@@ -111,7 +112,10 @@ struct CHAPTER1REDITUS_API FReditusATBAction
+ 
+     // Native bookkeeping for AMP chosen by the enemy AI profile.
+     bool bManagedEnemyAmp = false;
++    bool bExecutionDispatched = false;
+     int32 ManagedEnemyAmpSpent = 0;
++    int32 EnemyAmpBeat = 0;
++    double EnemyAmpBeatTimeRemaining = 0.0;
+     TWeakObjectPtr<UParticleSystemComponent> ManagedEnemyAmpParticle;
+ };
+ 
+@@ -165,6 +169,12 @@ public:
+     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Legacy") bool bFinishSynchronousLegacyCycleStart = true;
+     /** Single living-ally commands recheck their target at execution; revival keeps its dead-target rule. */
+     UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Targets") bool bRetargetLostLivingAlly = true;
++    /** Battle seconds to hold each enemy AMP pulse before proceeding. */
++    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Enemy AMP",meta=(ClampMin="0.05"))
++    float EnemyAmpBeatSeconds = 0.28f;
++    /** Fractional bonus to positive damage for each point the enemy spent on this action. */
++    UPROPERTY(EditAnywhere,BlueprintReadWrite,Category="Reditus|ATB|Enemy AMP",meta=(ClampMin="0.0"))
++    float EnemyAmpDamageBonusPerPoint = 0.25f;
+ 
+     /** Run regen/poison/status checks once; acknowledge using Complete Cycle Start. */
+     UPROPERTY(BlueprintAssignable,Category="Reditus|ATB") FReditusATBCycleEvent OnCycleStartRequested;
+@@ -210,6 +220,9 @@ public:
+     UFUNCTION(BlueprintCallable,Category="Reditus|ATB") bool CancelPendingAction(AActor* Unit);
+     UFUNCTION(BlueprintCallable,Category="Reditus|ATB") bool CompleteCycleEnd(AActor* Unit,int32 CycleToken);
+     UFUNCTION(BlueprintPure,Category="Reditus|ATB") float GetPreparationTime(const FReditusATBAction& Action) const;
++    /** Scale the existing hit result in BP_BattleController.DealDamage. */
++    UFUNCTION(BlueprintPure,Category="Reditus|ATB|Enemy AMP")
++    static int32 ScaleEnemyAmpDamage(AActor* BattleController, AActor* Attacker, int32 Damage);
+ 
+ private:
+     TUniquePtr<ReditusATBCore::Scheduler> Scheduler;
+@@ -219,6 +232,7 @@ private:
+     UPROPERTY(Transient) TMap<int32,FReditusATBAction> PendingActions;
+     UPROPERTY(Transient) TArray<TWeakObjectPtr<UReditusRollingHPComponent>> RollingUnits;
+     UPROPERTY() TArray<UParticleSystem*> EnemyAmpParticleTemplates;
++    UPROPERTY() USoundBase* EnemyAmpSound = nullptr;
+     TSet<int32> ExecutionInterruptRequests;
+     bool bRunning = false;
+     bool bStopping = false;
+@@ -235,4 +249,6 @@ private:
+     void AdvanceFrozenStaggerRecovery();
+     void FinishSynchronousCycleStart(AActor* Unit,int32 CycleToken);
+     bool RevalidateActionTargets(FReditusATBAction& Action) const;
++    bool AdvanceEnemyAmpBuildup(FReditusATBAction& Action, double Elapsed);
++    void DispatchActionWhenReady(int32 ActionToken, double Elapsed);
+ };

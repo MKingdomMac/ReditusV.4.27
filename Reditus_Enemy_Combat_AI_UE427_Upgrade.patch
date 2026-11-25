@@ -1,0 +1,1427 @@
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
+index 4596eb589d166c6924e95aa241702a1b308a3de1..33dcbaa8761ea1e2f51ee026d1fd41be11808067 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
+@@ -3,15 +3,275 @@
+ #include "GameFramework/Actor.h"
+ #include "ReditusTableBuffQueries.h"
+ #include "ReditusTableBuffState.h"
++#include "UObject/EnumProperty.h"
+ #include "UObject/StructOnScope.h"
+ 
++#include <limits>
++
+ using namespace ReditusTableBuffQueries;
+ 
++namespace
++{
++    using EComparison = EReditusEnemyAIComparison;
++    using ETest = EReditusEnemyAITestType;
++    using ESubject = EReditusEnemyAISubject;
++
++    bool IsStaggeredForEnemyTargeting(UActorComponent* Clock, AActor* Unit)
++    {
++        if (!IsValid(Unit)) return false;
++        // Use the same state query that holds/restarts the affected unit's ATB
++        // gauge. The plugin cannot link against the game module directly.
++        UFunction* Function = IsValid(Clock) ? Clock->FindFunction(TEXT("IsUnitStaggered")) : nullptr;
++        const auto* UnitParam = Function ? InputProperty<FObjectPropertyBase>(Function, TEXT("Unit")) : nullptr;
++        const auto* Return = Function ? CastField<FBoolProperty>(Function->GetReturnProperty()) : nullptr;
++        if (Function && Function->NumParms == 2 && UnitParameter(UnitParam, Unit) &&
++            !UnitParam->HasAnyPropertyFlags(CPF_OutParm) && Return)
++        {
++            FStructOnScope Params(Function);
++            void* Memory = Params.GetStructMemory();
++            UnitParam->SetObjectPropertyValue_InContainer(Memory, Unit);
++            Clock->ProcessEvent(Function, Memory);
++            return Return->GetPropertyValue_InContainer(Memory);
++        }
++
++        // Legacy/non-ATB battles: distinguish stamina break from generic stun.
++        if (ReadBool(Unit, TEXT("Staggered"))) return true;
++        if (!ReadBool(Unit, TEXT("isStun"))) return false;
++        const auto* Property = FindFProperty<FMapProperty>(Unit->GetClass(), TEXT("activeBuffs"));
++        const auto* Value = Property ? CastField<FObjectPropertyBase>(Property->ValueProp) : nullptr;
++        if (!Value) return false;
++        FScriptMapHelper Buffs(Property, Property->ContainerPtrToValuePtr<void>(Unit));
++        for (int32 Index = 0; Index < Buffs.GetMaxIndex(); ++Index)
++        {
++            if (!Buffs.IsValidIndex(Index)) continue;
++            auto* Buff = Cast<AActor>(Value->GetObjectPropertyValue(Buffs.GetValuePtr(Index)));
++            if (!IsValid(Buff) || ReadObject(Buff, TEXT("targetUnit")) != Unit) continue;
++            bool bStagger = false;
++            for (auto* Type = Buff->GetClass(); Type; Type = Type->GetSuperClass())
++                if (Type->GetPathName() == TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Skills/Buffs/BP_Staggered.BP_Staggered_C"))
++                { bStagger = true; break; }
++            if (bStagger && (ReadBool(Buff, TEXT("Permenant State")) || ReadInt(Buff, TEXT("turnLeft")) > 0)) return true;
++        }
++        return false;
++    }
++
++    bool MatchesNumber(double Observed, EComparison Comparison, double Threshold)
++    {
++        if (!FMath::IsFinite(Observed) || !FMath::IsFinite(Threshold)) return false;
++        switch (Comparison)
++        {
++        case EComparison::AtLeast: return Observed >= Threshold;
++        case EComparison::AtMost: return Observed <= Threshold;
++        case EComparison::Exactly: return Observed == Threshold;
++        }
++        return false;
++    }
++
++    bool TryReadNumber(const UStruct* Type, const void* Object, FName Name, double& OutValue)
++    {
++        if (Name.IsNone()) return false;
++        const auto* Property = FindFProperty<FNumericProperty>(Type, Name);
++        if (!Property) return false;
++        const void* Value = Property->ContainerPtrToValuePtr<void>(Object);
++        if (Property->IsInteger()) OutValue = static_cast<double>(Property->GetSignedIntPropertyValue(Value));
++        else if (Property->IsFloatingPoint()) OutValue = Property->GetFloatingPointPropertyValue(Value);
++        else return false;
++        return FMath::IsFinite(OutValue);
++    }
++
++    bool TryReadPercent(const AActor* Unit, FName CurrentName, FName MaxName, double& OutPercent)
++    {
++        double Current = 0.0;
++        double Maximum = 0.0;
++        if (!TryReadNumber(Unit->GetClass(), Unit, CurrentName, Current) ||
++            !TryReadNumber(Unit->GetClass(), Unit, MaxName, Maximum) || Maximum <= 0.0) return false;
++        OutPercent = FMath::Clamp(100.0 * Current / Maximum, 0.0, 100.0);
++        return true;
++    }
++
++    bool TryReadStatus(AActor* Unit, FName StatusFlag, FName StatusBuffID, bool& bActive)
++    {
++        const auto* Flag = StatusFlag.IsNone() ? nullptr : FindFProperty<FBoolProperty>(Unit->GetClass(), StatusFlag);
++        bActive = Flag && Flag->GetPropertyValue_InContainer(Unit);
++        if (!bActive && !StatusBuffID.IsNone())
++        {
++            TInlineComponentArray<UReditusTableBuffState*> Buffs;
++            Unit->GetComponents(Buffs);
++            for (const auto* Buff : Buffs)
++            {
++                if (IsValid(Buff) && Buff->HasActiveBuff(StatusBuffID))
++                {
++                    bActive = true;
++                    break;
++                }
++            }
++        }
++        return Flag || !StatusBuffID.IsNone();
++    }
++
++    template <class ReadState>
++    bool WithActiveATBState(AActor* Unit, AActor* Controller, ReadState Read)
++    {
++        UActorComponent* Clock = FindClock(Controller);
++        UFunction* Function = IsValid(Clock) ? Clock->FindFunction(TEXT("GetUnitState")) : nullptr;
++        if (!Function || Function->NumParms != 2) return false;
++        const auto* UnitParam = InputProperty<FObjectPropertyBase>(Function, TEXT("Unit"));
++        const auto* Result = CastField<FStructProperty>(Function->GetReturnProperty());
++        if (!UnitParameter(UnitParam, Unit) || UnitParam->HasAnyPropertyFlags(CPF_OutParm) ||
++            !Result || !Result->Struct || Result->Struct->GetPathName() != TEXT("/Script/Chapter1Reditus.ReditusATBUnitView")) return false;
++        const auto* Phase = FindFProperty<FEnumProperty>(Result->Struct, TEXT("Phase"));
++        if (!Phase || !Phase->GetEnum()) return false;
++
++        FStructOnScope Params(Function);
++        void* Memory = Params.GetStructMemory();
++        UnitParam->SetObjectPropertyValue_InContainer(Memory, Unit);
++        Clock->ProcessEvent(Function, Memory);
++        const void* State = Result->ContainerPtrToValuePtr<void>(Memory);
++        const auto PhaseValue = Phase->GetUnderlyingProperty()->GetSignedIntPropertyValue(Phase->ContainerPtrToValuePtr<void>(State));
++        const FString PhaseName = Phase->GetEnum()->GetNameStringByValue(PhaseValue);
++        return !PhaseName.IsEmpty() && PhaseName != TEXT("Inactive") && Read(Result->Struct, State, PhaseName);
++    }
++
++    bool TryReadATBMetric(AActor* Unit, AActor* Controller, FName Name, double& OutValue)
++    {
++        return WithActiveATBState(Unit, Controller, [&](const UStruct* Type, const void* State, const FString&)
++        {
++            return TryReadNumber(Type, State, Name, OutValue);
++        });
++    }
++
++    bool TryReadMetric(AActor* Unit, AActor* Controller, const FReditusEnemyAIUnitTest& Test, double& OutValue)
++    {
++        FName PropertyName = NAME_None;
++        switch (Test.Type)
++        {
++        case ETest::HPPercent: return TryReadPercent(Unit, TEXT("currentHP"), TEXT("maxHP"), OutValue);
++        case ETest::MPPercent: return TryReadPercent(Unit, TEXT("currentMP"), TEXT("maxMP"), OutValue);
++        case ETest::StaminaPercent: return TryReadPercent(Unit, TEXT("CurrentStamina"), TEXT("MaxStamina"), OutValue);
++        case ETest::OverdrivePercent: return TryReadPercent(Unit, TEXT("CurrentOverDrivePoints"), TEXT("MaxOverdrivePoints"), OutValue);
++        case ETest::ATBGaugePercent:
++            if (!TryReadATBMetric(Unit, Controller, TEXT("Gauge"), OutValue)) return false;
++            OutValue = FMath::Clamp(OutValue, 0.0, 1.0) * 100.0;
++            return true;
++        case ETest::CompletedATBCycles: return TryReadATBMetric(Unit, Controller, TEXT("CompletedCycles"), OutValue);
++        case ETest::MPPoints: PropertyName = TEXT("currentMP"); break;
++        case ETest::StaminaPoints: PropertyName = TEXT("CurrentStamina"); break;
++        case ETest::AmpPoints: PropertyName = TEXT("TotalAmpPoints"); break;
++        case ETest::NumericProperty: PropertyName = Test.PropertyName; break;
++        default: return false;
++        }
++        return TryReadNumber(Unit->GetClass(), Unit, PropertyName, OutValue);
++    }
++
++    bool PassesUnitTests(AActor* Unit, AActor* Controller, const TArray<FReditusEnemyAIUnitTest>& Tests)
++    {
++        for (const auto& Test : Tests)
++        {
++            if (Test.Type == ETest::StatusPresent || Test.Type == ETest::StatusMissing)
++            {
++                bool bActive = false;
++                if (!TryReadStatus(Unit, Test.StatusFlag, Test.StatusBuffID, bActive) ||
++                    bActive != (Test.Type == ETest::StatusPresent)) return false;
++            }
++            else if (Test.Type == ETest::Staggered || Test.Type == ETest::NotStaggered)
++            {
++                if (IsStaggeredForEnemyTargeting(FindClock(Controller), Unit) != (Test.Type == ETest::Staggered)) return false;
++            }
++            else if (Test.Type == ETest::ATBReady || Test.Type == ETest::ATBActionPending)
++            {
++                const bool bMatches = WithActiveATBState(Unit, Controller, [&](const UStruct*, const void*, const FString& Phase)
++                {
++                    return Test.Type == ETest::ATBReady ? Phase == TEXT("Ready")
++                        : (Phase == TEXT("Preparing") || Phase == TEXT("Queued"));
++                });
++                if (!bMatches) return false;
++            }
++            else
++            {
++                double Observed = 0.0;
++                if (!TryReadMetric(Unit, Controller, Test, Observed) || !MatchesNumber(Observed, Test.Comparison, Test.Value)) return false;
++            }
++        }
++        return true;
++    }
++
++    bool PassesUnitCheck(AActor* Caster, AActor* Controller, const FReditusEnemyAIUnitCheck& Check)
++    {
++        if (Check.Count < 0) return false;
++        if (Check.Subject == ESubject::Self)
++        {
++            const int32 Count = PassesUnitTests(Caster, Controller, Check.AllTests) ? 1 : 0;
++            return MatchesNumber(Count, Check.CountComparison, Check.Count);
++        }
++
++        const bool bKO = Check.Subject == ESubject::KnockedOutAllies || Check.Subject == ESubject::KnockedOutOpponents;
++        const bool bSwallowed = Check.Subject == ESubject::SwallowedAllies || Check.Subject == ESubject::SwallowedOpponents;
++        const bool bOpposing = Check.Subject == ESubject::LivingOpponents || Check.Subject == ESubject::KnockedOutOpponents ||
++            Check.Subject == ESubject::SwallowedOpponents;
++        if (!IsValid(Controller) || ReadBool(Controller, TEXT("isBattleOver"))) return false;
++        UObject* Battle = ReadObject(Controller, TEXT("currentBattle"));
++        const auto* Property = IsValid(Battle) ? FindFProperty<FArrayProperty>(Battle->GetClass(),
++            bOpposing ? TEXT("playerUnits") : TEXT("enemyUnits")) : nullptr;
++        const auto* Item = Property ? CastField<FObjectPropertyBase>(Property->Inner) : nullptr;
++        if (!Item) return false;
++
++        FScriptArrayHelper Roster(Property, Property->ContainerPtrToValuePtr<void>(Battle));
++        TSet<AActor*> Seen;
++        int32 Count = 0;
++        for (int32 Index = 0; Index < Roster.Num(); ++Index)
++        {
++            auto* Unit = Cast<AActor>(Item->GetObjectPropertyValue(Roster.GetRawPtr(Index)));
++            if (!IsValid(Unit) || Seen.Contains(Unit) || ReadObject(Unit, TEXT("battleController")) != Controller ||
++                ReadBool(Unit, TEXT("Swallowed")) != bSwallowed || (Unit == Caster && Check.Subject == ESubject::OtherLivingAllies)) continue;
++            Seen.Add(Unit);
++
++            double HP = 0.0;
++            if (!TryReadNumber(Unit->GetClass(), Unit, TEXT("currentHP"), HP)) continue;
++            const bool bKnockedOut = HP <= 0.0 || ReadBool(Unit, TEXT("IsDead?"));
++            if (bKnockedOut == bKO && PassesUnitTests(Unit, Controller, Check.AllTests)) ++Count;
++        }
++        return MatchesNumber(Count, Check.CountComparison, Check.Count);
++    }
++
++    bool MatchesAnyConditionGroup(AActor* Caster, const TArray<FReditusEnemyAIConditionGroup>& Groups)
++    {
++        if (!IsValid(Caster)) return false;
++        AActor* Controller = Cast<AActor>(ReadObject(Caster, TEXT("battleController")));
++        for (const auto& Group : Groups)
++        {
++            if (Group.AllChecks.Num() == 0) continue;
++            bool bMatches = true;
++            for (const auto& Check : Group.AllChecks)
++            {
++                if (PassesUnitCheck(Caster, Controller, Check)) continue;
++                bMatches = false;
++                break;
++            }
++            if (bMatches) return true;
++        }
++        return false;
++    }
++
++    bool MatchesSkill(FName ActionID, const UClass* ActionClass, FName RuleID, const UClass* RuleClass)
++    {
++        return (!ActionID.IsNone() && ActionID == RuleID) || (ActionClass && RuleClass && ActionClass->IsChildOf(RuleClass));
++    }
++}
++
+ UReditusEnemyCombatAIComponent::UReditusEnemyCombatAIComponent()
+ {
+     PrimaryComponentTick.bCanEverTick = false;
+ }
+ 
++const uint8* UReditusEnemyCombatAIComponent::FindEnemyDefinition() const
++{
++    const AActor* Enemy = GetOwner();
++    if (!IsValid(Enemy) || !IsValid(EnemyDefinitions) || !EnemyDefinitions->GetRowStruct()) return nullptr;
++    const auto* IDProperty = FindFProperty<FNameProperty>(Enemy->GetClass(), TEXT("EnemyID"));
++    const FName ID = IDProperty ? IDProperty->GetPropertyValue_InContainer(Enemy) : NAME_None;
++    return ID.IsNone() ? nullptr : EnemyDefinitions->GetRowMap().FindRef(ID);
++}
++
+ const FReditusEnemyAIProfile* UReditusEnemyCombatAIComponent::FindProfile() const
+ {
+     const AActor* Enemy = GetOwner();
+@@ -21,20 +281,55 @@ const FReditusEnemyAIProfile* UReditusEnemyCombatAIComponent::FindProfile() cons
+         return AIProfile.DataTable->GetRowStruct() == FReditusEnemyAIProfile::StaticStruct()
+             ? AIProfile.GetRow<FReditusEnemyAIProfile>(TEXT("Enemy class AI profile")) : nullptr;
+     }
+-    if (!IsValid(ProfileTable) || ProfileTable->GetRowStruct() != FReditusEnemyAIProfile::StaticStruct() ||
+-        !IsValid(EnemyDefinitions) || !EnemyDefinitions->GetRowStruct()) return nullptr;
+-
+-    const auto* EnemyIDProperty = FindFProperty<FNameProperty>(Enemy->GetClass(), TEXT("EnemyID"));
++    if (!IsValid(ProfileTable) || ProfileTable->GetRowStruct() != FReditusEnemyAIProfile::StaticStruct()) return nullptr;
++    const uint8* RowData = FindEnemyDefinition();
++    if (!RowData) return nullptr;
+     const auto* ProfileIDProperty = FindFProperty<FNameProperty>(EnemyDefinitions->GetRowStruct(), TEXT("AIProfileID"));
+-    if (!EnemyIDProperty || !ProfileIDProperty) return nullptr;
+-
+-    const FName EnemyID = EnemyIDProperty->GetPropertyValue_InContainer(Enemy);
+-    const uint8* RowData = EnemyID.IsNone() ? nullptr : EnemyDefinitions->GetRowMap().FindRef(EnemyID);
+-    const FName ProfileID = RowData ? ProfileIDProperty->GetPropertyValue_InContainer(RowData) : NAME_None;
++    const FName ProfileID = ProfileIDProperty ? ProfileIDProperty->GetPropertyValue_InContainer(RowData) : NAME_None;
+     return ProfileID.IsNone() ? nullptr : ProfileTable->FindRow<FReditusEnemyAIProfile>(
+         ProfileID, TEXT("Enemy definition AI profile"), false);
+ }
+ 
++int32 UReditusEnemyCombatAIComponent::ResolveEnemyAmpForAction(bool bRegularAttack, FName SkillID, TSubclassOf<AActor> SkillClass) const
++{
++    AActor* Enemy = GetOwner();
++    if (!IsValid(Enemy) || AmpPolicy == EReditusEnemyAIAmpPolicy::Disabled || ReadBool(Enemy, TEXT("Easy Difficulty "))) return 0;
++
++    const FReditusEnemyAIProfile* Profile = FindProfile();
++    if (AmpPolicy == EReditusEnemyAIAmpPolicy::UseProfile && (!Profile || !Profile->bEnableAMP)) return 0;
++    if (const uint8* Definition = FindEnemyDefinition())
++    {
++        const auto* CanUseAMP = FindFProperty<FBoolProperty>(EnemyDefinitions->GetRowStruct(), TEXT("bCanUseAMP"));
++        if (CanUseAMP && !CanUseAMP->GetPropertyValue_InContainer(Definition)) return 0;
++    }
++
++    const int32 Available = ReadInt(Enemy, TEXT("TotalAmpPoints"));
++    if (Available <= 0) return 0;
++    const UClass* ChosenClass = SkillClass.Get();
++    const auto SelectAmount = [&](const TArray<FReditusEnemyAIAmpRule>& Rules, bool& bMatchesMove)
++    {
++        for (const auto& Rule : Rules)
++        {
++            if ((Rule.Action == EReditusEnemyAIAmpAction::RegularAttack) != bRegularAttack || Rule.Points <= 0) continue;
++            if (!bRegularAttack)
++            {
++                const UClass* RuleClass = Rule.SkillClass.Get();
++                const bool bAnySkill = Rule.SkillID.IsNone() && !RuleClass;
++                if (!bAnySkill && !MatchesSkill(SkillID, ChosenClass, Rule.SkillID, RuleClass)) continue;
++            }
++            bMatchesMove = true;
++            if (!Rule.bSpendUpToAvailable && Rule.Points > Available) continue;
++            if (Rule.AnyOf.Num() > 0 && !MatchesAnyConditionGroup(Enemy, Rule.AnyOf)) continue;
++            return FMath::Min(Available, Rule.Points);
++        }
++        return 0;
++    };
++
++    bool bMatchesMove = false;
++    const int32 LocalAmount = SelectAmount(LocalAmpRules, bMatchesMove);
++    return bMatchesMove || !Profile ? LocalAmount : SelectAmount(Profile->AmpRules, bMatchesMove);
++}
++
+ bool UReditusEnemyCombatAIComponent::MeetsSkillCondition(const FReditusEnemyAISkillRule& Rule) const
+ {
+     AActor* Enemy = GetOwner();
+@@ -48,44 +343,56 @@ bool UReditusEnemyCombatAIComponent::MeetsSkillCondition(const FReditusEnemyAISk
+             static_cast<double>(CurrentHP) * 100.0 <= static_cast<double>(MaxHP) * FMath::Clamp(Rule.HPPercent, 0.f, 100.f);
+     }
+ 
+-    const auto* Flag = Rule.StatusFlag.IsNone() ? nullptr : FindFProperty<FBoolProperty>(Enemy->GetClass(), Rule.StatusFlag);
+-    bool bActive = Flag && Flag->GetPropertyValue_InContainer(Enemy);
+-    if (!bActive && !Rule.StatusBuffID.IsNone())
+-    {
+-        TInlineComponentArray<UReditusTableBuffState*> Buffs;
+-        Enemy->GetComponents(Buffs);
+-        for (const auto* Buff : Buffs)
+-        {
+-            if (IsValid(Buff) && Buff->HasActiveBuff(Rule.StatusBuffID))
+-            {
+-                bActive = true;
+-                break;
+-            }
+-        }
+-    }
++    bool bActive = false;
++    TryReadStatus(Enemy, Rule.StatusFlag, Rule.StatusBuffID, bActive);
+     return Rule.Condition == EReditusEnemyAISkillCondition::SkipWhileStatusActive ? !bActive : bActive;
+ }
+ 
+-bool UReditusEnemyCombatAIComponent::IsSkillAllowed(const FReditusEnemyAIProfile* Profile, FName SkillID,
+-    const UClass* SkillClass, bool& bMatchedRule) const
++float UReditusEnemyCombatAIComponent::GetRuleAdjustedWeight(const FReditusEnemyAIProfile* Profile, FName SkillID,
++    const UClass* SkillClass, float OriginalWeight, bool& bMatchedRule) const
+ {
+-    const auto AllMatchingRulesPass = [&](const TArray<FReditusEnemyAISkillRule>& Rules)
++    bMatchedRule = false;
++    double Weight = OriginalWeight;
++    // The ID selector sums floats. Bound any boosted term for even the largest possible map.
++    constexpr double MaximumScaledWeight = static_cast<double>((std::numeric_limits<float>::max)()) /
++        (std::numeric_limits<int32>::max)();
++    const double WeightLimit = FMath::Max(MaximumScaledWeight, Weight);
++    const auto ApplyMatchingRules = [&](const TArray<FReditusEnemyAISkillRule>& Rules)
+     {
+-        for (const FReditusEnemyAISkillRule& Rule : Rules)
++        for (const auto& Rule : Rules)
+         {
+-            const UClass* RuleClass = Rule.SkillClass.Get();
+-            const bool bMatchesID = !SkillID.IsNone() && Rule.SkillID == SkillID;
+-            const bool bMatchesClass = SkillClass && RuleClass && SkillClass->IsChildOf(RuleClass);
+-            if (!bMatchesID && !bMatchesClass) continue;
+-
++            if (!MatchesSkill(SkillID, SkillClass, Rule.SkillID, Rule.SkillClass.Get())) continue;
+             bMatchedRule = true;
+-            if (!MeetsSkillCondition(Rule)) return false;
++            if (Weight <= 0.0 || !FMath::IsFinite(Weight)) return false;
++
++            if (Rule.AnyOf.Num() == 0)
++            {
++                if (!MeetsSkillCondition(Rule)) return false;
++                continue;
++            }
++            const bool bMatches = MatchesAnyConditionGroup(GetOwner(), Rule.AnyOf);
++            switch (Rule.ConditionEffect)
++            {
++            case EReditusEnemyAIRuleEffect::RequireMatch:
++                if (!bMatches) return false;
++                break;
++            case EReditusEnemyAIRuleEffect::SkipOnMatch:
++                if (bMatches) return false;
++                break;
++            case EReditusEnemyAIRuleEffect::AdjustWeight:
++                if (bMatches && FMath::IsFinite(Rule.WeightMultiplier))
++                {
++                    const float Multiplier = FMath::Clamp(Rule.WeightMultiplier, 0.f, 100.f);
++                    Weight = FMath::Min(Weight * Multiplier, WeightLimit);
++                }
++                break;
++            }
+         }
+         return true;
+     };
+ 
+-    bMatchedRule = false;
+-    return AllMatchingRulesPass(LocalSkillRules) && (!Profile || AllMatchingRulesPass(Profile->SkillRules));
++    if (!ApplyMatchingRules(LocalSkillRules) || (Profile && !ApplyMatchingRules(Profile->SkillRules))) return 0.f;
++    return static_cast<float>(Weight);
+ }
+ 
+ float UReditusEnemyCombatAIComponent::FilterEnemySkillIDWeight(AActor* Enemy, FName SkillID, float OriginalWeight)
+@@ -95,12 +402,29 @@ float UReditusEnemyCombatAIComponent::FilterEnemySkillIDWeight(AActor* Enemy, FN
+     if (!Component) return OriginalWeight;
+ 
+     bool bMatchedRule = false;
+-    return Component->IsSkillAllowed(Component->FindProfile(), SkillID, nullptr, bMatchedRule) ? OriginalWeight : 0.f;
++    return Component->GetRuleAdjustedWeight(Component->FindProfile(), SkillID, nullptr, OriginalWeight, bMatchedRule);
+ }
+ 
+ bool UReditusEnemyCombatAIComponent::TryChooseProfiledClassSkill(AActor* Enemy)
+ {
+     if (!IsValid(Enemy)) return false;
++    const auto* CurrentSkill = FindFProperty<FClassProperty>(Enemy->GetClass(), TEXT("currentSkill"));
++    if (!CurrentSkill || !CurrentSkill->MetaClass) return false;
++
++    TSubclassOf<AActor> SelectedSkill;
++    if (!SelectClassSkill(Enemy, CurrentSkill->MetaClass, SelectedSkill)) return false;
++    CurrentSkill->SetObjectPropertyValue_InContainer(Enemy, SelectedSkill.Get());
++    return true;
++}
++
++bool UReditusEnemyCombatAIComponent::TrySelectProfiledClassSkill(AActor* Enemy, TSubclassOf<AActor>& SelectedSkill)
++{
++    SelectedSkill = nullptr;
++    return IsValid(Enemy) && SelectClassSkill(Enemy, AActor::StaticClass(), SelectedSkill);
++}
++
++bool UReditusEnemyCombatAIComponent::SelectClassSkill(AActor* Enemy, const UClass* SkillType, TSubclassOf<AActor>& SelectedSkill)
++{
+     const auto* Component = Enemy->FindComponentByClass<UReditusEnemyCombatAIComponent>();
+     if (!Component) return false;
+     const FReditusEnemyAIProfile* Profile = Component->FindProfile();
+@@ -109,10 +433,8 @@ bool UReditusEnemyCombatAIComponent::TryChooseProfiledClassSkill(AActor* Enemy)
+     const auto* SkillMap = FindFProperty<FMapProperty>(Enemy->GetClass(), TEXT("skills"));
+     const auto* Key = SkillMap ? CastField<FClassProperty>(SkillMap->KeyProp) : nullptr;
+     const auto* Weight = SkillMap ? CastField<FFloatProperty>(SkillMap->ValueProp) : nullptr;
+-    const auto* CurrentSkill = FindFProperty<FClassProperty>(Enemy->GetClass(), TEXT("currentSkill"));
+     const auto* CurrentMP = FindFProperty<FIntProperty>(Enemy->GetClass(), TEXT("currentMP"));
+-    if (!Key || !Key->MetaClass || !Weight || !CurrentSkill || !CurrentSkill->MetaClass || !CurrentMP ||
+-        !Key->MetaClass->IsChildOf(CurrentSkill->MetaClass)) return false;
++    if (!Key || !Key->MetaClass || !Weight || !CurrentMP || !Key->MetaClass->IsChildOf(SkillType)) return false;
+ 
+     struct FWeightedSkill
+     {
+@@ -121,7 +443,7 @@ bool UReditusEnemyCombatAIComponent::TryChooseProfiledClassSkill(AActor* Enemy)
+     };
+ 
+     const int32 MP = CurrentMP->GetPropertyValue_InContainer(Enemy);
+-    const FScriptMapHelper Entries(SkillMap, SkillMap->ContainerPtrToValuePtr<void>(Enemy));
++    FScriptMapHelper Entries(SkillMap, SkillMap->ContainerPtrToValuePtr<void>(Enemy));
+     TArray<FWeightedSkill> Candidates;
+     bool bAppliedRule = false;
+     double TotalWeight = 0.0;
+@@ -129,13 +451,13 @@ bool UReditusEnemyCombatAIComponent::TryChooseProfiledClassSkill(AActor* Enemy)
+     {
+         if (!Entries.IsValidIndex(Index)) continue;
+         UClass* Skill = Cast<UClass>(Key->GetObjectPropertyValue(Entries.GetKeyPtr(Index)));
+-        if (Skill && !Skill->IsChildOf(CurrentSkill->MetaClass)) return false;
++        if (Skill && !Skill->IsChildOf(SkillType)) return false;
+         bool bMatchedRule = false;
+-        const bool bAllowed = Component->IsSkillAllowed(Profile, NAME_None, Skill, bMatchedRule);
++        const float CandidateWeight = Component->GetRuleAdjustedWeight(Profile, NAME_None, Skill,
++            Weight->GetPropertyValue(Entries.GetValuePtr(Index)), bMatchedRule);
+         bAppliedRule |= bMatchedRule;
+ 
+-        const float CandidateWeight = Weight->GetPropertyValue(Entries.GetValuePtr(Index));
+-        if (!bAllowed || !FMath::IsFinite(CandidateWeight) || CandidateWeight <= 0.f) continue;
++        if (!FMath::IsFinite(CandidateWeight) || CandidateWeight <= 0.f) continue;
+         if (Skill && MP < FMath::Max(0, ReadInt(Skill->GetDefaultObject(), TEXT("manaRequired")))) continue;
+ 
+         Candidates.Add({Skill, CandidateWeight});
+@@ -143,67 +465,25 @@ bool UReditusEnemyCombatAIComponent::TryChooseProfiledClassSkill(AActor* Enemy)
+     }
+     if (!bAppliedRule) return false;
+ 
+-    UClass* ChosenSkill = nullptr;
+     if (Candidates.Num() > 0)
+     {
+-        ChosenSkill = Candidates.Last().Class;
++        SelectedSkill = Candidates.Last().Class;
+         double Roll = FMath::FRand() * TotalWeight;
+         for (const FWeightedSkill& Candidate : Candidates)
+         {
+             Roll -= Candidate.Weight;
+             if (Roll < 0.0)
+             {
+-                ChosenSkill = Candidate.Class;
++                SelectedSkill = Candidate.Class;
+                 break;
+             }
+         }
+     }
+-    // A null class is the existing selector's basic-attack result.
+-    CurrentSkill->SetObjectPropertyValue_InContainer(Enemy, ChosenSkill);
+     return true;
+ }
+ 
+ namespace
+ {
+-    bool IsStaggeredForEnemyTargeting(UActorComponent* Clock, AActor* Unit)
+-    {
+-        if (!IsValid(Unit)) return false;
+-        // Use the same state query that holds/restarts the affected unit's ATB
+-        // gauge. The plugin cannot link against the game module directly.
+-        UFunction* Function = IsValid(Clock) ? Clock->FindFunction(TEXT("IsUnitStaggered")) : nullptr;
+-        const auto* UnitParam = Function ? InputProperty<FObjectPropertyBase>(Function, TEXT("Unit")) : nullptr;
+-        const auto* Return = Function ? CastField<FBoolProperty>(Function->GetReturnProperty()) : nullptr;
+-        if (Function && Function->NumParms == 2 && UnitParameter(UnitParam, Unit) &&
+-            !UnitParam->HasAnyPropertyFlags(CPF_OutParm) && Return)
+-        {
+-            FStructOnScope Params(Function);
+-            void* Memory = Params.GetStructMemory();
+-            UnitParam->SetObjectPropertyValue_InContainer(Memory, Unit);
+-            Clock->ProcessEvent(Function, Memory);
+-            return Return->GetPropertyValue_InContainer(Memory);
+-        }
+-
+-        // Legacy/non-ATB battles: distinguish stamina break from generic stun.
+-        if (ReadBool(Unit, TEXT("Staggered"))) return true;
+-        if (!ReadBool(Unit, TEXT("isStun"))) return false;
+-        const auto* Property = FindFProperty<FMapProperty>(Unit->GetClass(), TEXT("activeBuffs"));
+-        const auto* Value = Property ? CastField<FObjectPropertyBase>(Property->ValueProp) : nullptr;
+-        if (!Value) return false;
+-        FScriptMapHelper Buffs(Property, Property->ContainerPtrToValuePtr<void>(Unit));
+-        for (int32 Index = 0; Index < Buffs.GetMaxIndex(); ++Index)
+-        {
+-            if (!Buffs.IsValidIndex(Index)) continue;
+-            auto* Buff = Cast<AActor>(Value->GetObjectPropertyValue(Buffs.GetValuePtr(Index)));
+-            if (!IsValid(Buff) || ReadObject(Buff, TEXT("targetUnit")) != Unit) continue;
+-            bool bStagger = false;
+-            for (auto* Type = Buff->GetClass(); Type; Type = Type->GetSuperClass())
+-                if (Type->GetPathName() == TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Skills/Buffs/BP_Staggered.BP_Staggered_C"))
+-                { bStagger = true; break; }
+-            if (bStagger && (ReadBool(Buff, TEXT("Permenant State")) || ReadInt(Buff, TEXT("turnLeft")) > 0)) return true;
+-        }
+-        return false;
+-    }
+-
+     int32 FindStaggeredPlayerIndex(AActor* BattleController, int32 LegacyIndex)
+     {
+         // Preserve playerUnits indices: the existing Blueprint GET consumes this.
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h
+index 631a50ae327019da88ee7e1454776be2803f295a..ede13fb5eb5696769be3da18b86cd3cfc274ae14 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusEnemyCombatAIComponent.h
+@@ -15,6 +15,128 @@ enum class EReditusEnemyAISkillCondition : uint8
+     RequireLowHP UMETA(DisplayName="Require HP At or Below Percent")
+ };
+ 
++UENUM(BlueprintType)
++enum class EReditusEnemyAISubject : uint8
++{
++    Self,
++    LivingAllies UMETA(DisplayName="Living Allies (Including Self)"),
++    OtherLivingAllies,
++    LivingOpponents,
++    KnockedOutAllies,
++    KnockedOutOpponents,
++    SwallowedAllies,
++    SwallowedOpponents
++};
++
++UENUM(BlueprintType)
++enum class EReditusEnemyAIComparison : uint8
++{
++    AtLeast,
++    AtMost,
++    Exactly
++};
++
++UENUM(BlueprintType)
++enum class EReditusEnemyAITestType : uint8
++{
++    StatusPresent,
++    StatusMissing,
++    Staggered,
++    NotStaggered,
++    HPPercent UMETA(DisplayName="HP Percent"),
++    MPPoints UMETA(DisplayName="MP Points"),
++    MPPercent UMETA(DisplayName="MP Percent"),
++    StaminaPoints,
++    StaminaPercent,
++    AmpPoints UMETA(DisplayName="Available AMP Points"),
++    OverdrivePercent,
++    ATBGaugePercent UMETA(DisplayName="ATB Gauge Percent"),
++    CompletedATBCycles UMETA(DisplayName="Completed ATB Cycles"),
++    NumericProperty UMETA(DisplayName="Custom Numeric Property"),
++    ATBReady UMETA(DisplayName="ATB Ready"),
++    ATBActionPending UMETA(DisplayName="ATB Preparing or Queued")
++};
++
++UENUM(BlueprintType)
++enum class EReditusEnemyAIRuleEffect : uint8
++{
++    RequireMatch UMETA(DisplayName="Use Only When Conditions Match"),
++    SkipOnMatch UMETA(DisplayName="Skip When Conditions Match"),
++    AdjustWeight UMETA(DisplayName="Change Selection Weight When Conditions Match")
++};
++
++UENUM(BlueprintType)
++enum class EReditusEnemyAIAmpPolicy : uint8
++{
++    UseProfile,
++    Disabled,
++    Enabled
++};
++
++UENUM(BlueprintType)
++enum class EReditusEnemyAIAmpAction : uint8
++{
++    RegularAttack,
++    Skill
++};
++
++USTRUCT(BlueprintType)
++struct REDITUSTABLEBUFFS_API FReditusEnemyAIUnitTest
++{
++    GENERATED_BODY()
++
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Condition")
++    EReditusEnemyAITestType Type = EReditusEnemyAITestType::HPPercent;
++
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Condition")
++    EReditusEnemyAIComparison Comparison = EReditusEnemyAIComparison::AtMost;
++
++    /** Percent tests use 0 to 100. Point and cycle tests use raw values. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Condition")
++    float Value = 50.f;
++
++    /** Optional internal Blueprint Boolean name for a status test. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Status")
++    FName StatusFlag = NAME_None;
++
++    /** Optional active native DT_Buffs row. A true flag or this buff counts as present. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Status")
++    FName StatusBuffID = NAME_None;
++
++    /** Internal Blueprint property name for a custom integer or floating-point test. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Condition")
++    FName PropertyName = NAME_None;
++};
++
++USTRUCT(BlueprintType)
++struct REDITUSTABLEBUFFS_API FReditusEnemyAIUnitCheck
++{
++    GENERATED_BODY()
++
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conditions")
++    EReditusEnemyAISubject Subject = EReditusEnemyAISubject::Self;
++
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conditions")
++    EReditusEnemyAIComparison CountComparison = EReditusEnemyAIComparison::AtLeast;
++
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conditions", meta=(ClampMin="0"))
++    int32 Count = 1;
++
++    /** Each counted unit must pass every test. An empty list counts the entire subject group. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conditions", meta=(TitleProperty="Type"))
++    TArray<FReditusEnemyAIUnitTest> AllTests;
++};
++
++USTRUCT(BlueprintType)
++struct REDITUSTABLEBUFFS_API FReditusEnemyAIConditionGroup
++{
++    GENERATED_BODY()
++
++    /** Every check in this situation must pass. An empty group never matches. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Conditions", meta=(TitleProperty="Subject"))
++    TArray<FReditusEnemyAIUnitCheck> AllChecks;
++};
++
+ USTRUCT(BlueprintType)
+ struct REDITUSTABLEBUFFS_API FReditusEnemyAISkillRule
+ {
+@@ -41,6 +163,44 @@ struct REDITUSTABLEBUFFS_API FReditusEnemyAISkillRule
+ 
+     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Condition", meta=(ClampMin="0.0", ClampMax="100.0"))
+     float HPPercent = 30.f;
++
++    /** Optional alternatives. When populated, uses this list and Condition Effect for this rule. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Condition Groups")
++    TArray<FReditusEnemyAIConditionGroup> AnyOf;
++
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Condition Groups")
++    EReditusEnemyAIRuleEffect ConditionEffect = EReditusEnemyAIRuleEffect::RequireMatch;
++
++    /** Applied by Adjust Weight. Eligibility and MP checks still apply. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Condition Groups", meta=(ClampMin="0.0", ClampMax="100.0"))
++    float WeightMultiplier = 2.f;
++};
++
++USTRUCT(BlueprintType)
++struct REDITUSTABLEBUFFS_API FReditusEnemyAIAmpRule
++{
++    GENERATED_BODY()
++
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP")
++    EReditusEnemyAIAmpAction Action = EReditusEnemyAIAmpAction::RegularAttack;
++
++    /** For Skill rules. Leave both skill fields empty to match every skill. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP")
++    FName SkillID = NAME_None;
++
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP")
++    TSubclassOf<AActor> SkillClass;
++
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP", meta=(ClampMin="1"))
++    int32 Points = 1;
++
++    /** Allow the rule to use available AMP when it has fewer points than requested. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP")
++    bool bSpendUpToAvailable = false;
++
++    /** An empty list allows the rule whenever its action and AMP amount match. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AMP")
++    TArray<FReditusEnemyAIConditionGroup> AnyOf;
+ };
+ 
+ USTRUCT(BlueprintType)
+@@ -50,6 +210,13 @@ struct REDITUSTABLEBUFFS_API FReditusEnemyAIProfile : public FTableRowBase
+ 
+     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy AI")
+     TArray<FReditusEnemyAISkillRule> SkillRules;
++
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy AI|AMP")
++    bool bEnableAMP = false;
++
++    /** The first eligible AMP rule supplies the amount for this action. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy AI|AMP", meta=(TitleProperty="Action"))
++    TArray<FReditusEnemyAIAmpRule> AmpRules;
+ };
+ 
+ UCLASS(ClassGroup=(Reditus), meta=(BlueprintSpawnableComponent, DisplayName="Reditus Enemy Combat AI"))
+@@ -68,6 +235,14 @@ public:
+     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy AI")
+     TArray<FReditusEnemyAISkillRule> LocalSkillRules;
+ 
++    /** Per-class override of the selected profile's opt-in. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy AI|AMP")
++    EReditusEnemyAIAmpPolicy AmpPolicy = EReditusEnemyAIAmpPolicy::UseProfile;
++
++    /** Matching local rules take priority for that move, including when they are saving AMP. */
++    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy AI|AMP", meta=(TitleProperty="Action"))
++    TArray<FReditusEnemyAIAmpRule> LocalAmpRules;
++
+     /** DT_EnemyAIProfiles, used to resolve DT_Enemies' AI Profile ID. */
+     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy AI|Data Tables")
+     UDataTable* ProfileTable = nullptr;
+@@ -78,17 +253,27 @@ public:
+     /** The existing Blueprint call forwards here for both attacks and single-target skills. */
+     static int32 ResolveTargetIndex(AActor* BattleController, AActor* Selector, int32 LegacyIndex);
+ 
+-    /** Updates the existing currentSkill field only when a class skill rule matches this enemy's list. */
++    /** Compatibility for older callers that stored currentSkill on the enemy actor. */
+     UFUNCTION(BlueprintCallable, Category="Reditus|Enemy AI")
+     static bool TryChooseProfiledClassSkill(AActor* Enemy);
+ 
++    /** When a rule handled selection, returns true and outputs the chosen class, or None for a regular attack. */
++    UFUNCTION(BlueprintCallable, Category="Reditus|Enemy AI")
++    static bool TrySelectProfiledClassSkill(AActor* Enemy, TSubclassOf<AActor>& SelectedSkill);
++
+     /** Filters the existing ID-based selector's candidates before its affordability check and roll. */
+     UFUNCTION(BlueprintPure, Category="Reditus|Enemy AI")
+     static float FilterEnemySkillIDWeight(AActor* Enemy, FName SkillID, float OriginalWeight);
+ 
++    /** Read by the ATB component when a regular attack or skill is submitted. */
++    UFUNCTION(BlueprintPure, Category="Reditus|Enemy AI")
++    int32 ResolveEnemyAmpForAction(bool bRegularAttack, FName SkillID, TSubclassOf<AActor> SkillClass) const;
++
+ private:
++    static bool SelectClassSkill(AActor* Enemy, const UClass* SkillType, TSubclassOf<AActor>& SelectedSkill);
++    const uint8* FindEnemyDefinition() const;
+     const FReditusEnemyAIProfile* FindProfile() const;
+     bool MeetsSkillCondition(const FReditusEnemyAISkillRule& Rule) const;
+-    bool IsSkillAllowed(const FReditusEnemyAIProfile* Profile, FName SkillID, const UClass* SkillClass,
+-        bool& bMatchedRule) const;
++    float GetRuleAdjustedWeight(const FReditusEnemyAIProfile* Profile, FName SkillID, const UClass* SkillClass,
++        float OriginalWeight, bool& bMatchedRule) const;
+ };
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
+index ebb5bac3ac69fd7912af57a96f560c88fa2c6dfb..3de7da3f00cb12ca9bcb67738559359ce338538f 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusEnemyCombatAIInstall.cpp
+@@ -11,12 +11,14 @@
+ #include "GameFramework/Actor.h"
+ #include "HAL/IConsoleManager.h"
+ #include "K2Node_CallFunction.h"
++#include "K2Node_ClassDynamicCast.h"
+ #include "K2Node_FunctionEntry.h"
+ #include "K2Node_FunctionResult.h"
+ #include "K2Node_IfThenElse.h"
+ #include "K2Node_Knot.h"
+ #include "K2Node_Self.h"
+ #include "K2Node_VariableGet.h"
++#include "K2Node_VariableSet.h"
+ #include "Kismet2/BlueprintEditorUtils.h"
+ #include "Kismet2/KismetEditorUtilities.h"
+ #include "KismetCompiler.h"
+@@ -85,10 +87,14 @@ namespace ReditusEnemyAIInstall
+         UEdGraphPin* Entry = nullptr;
+         UEdGraphPin* OriginalNext = nullptr;
+         UEdGraphPin* Return = nullptr;
++        UK2Node_VariableGet* SkillGet = nullptr;
++        UClass* SkillType = nullptr;
++        UK2Node_CallFunction* OldHook = nullptr;
++        UK2Node_IfThenElse* OldBranch = nullptr;
+         bool bInstalled = false;
+     };
+ 
+-    bool FindClassSkillSite(UEdGraph* Graph, FName HookName, FClassSkillSite& Site)
++    bool FindClassSkillSite(UEdGraph* Graph, FName HookName, FName OldHookName, FClassSkillSite& Site)
+     {
+         if (!Graph) return false;
+         UK2Node_FunctionEntry* Entry = nullptr;
+@@ -106,7 +112,7 @@ namespace ReditusEnemyAIInstall
+                 if (Result) return false;
+                 Result = Candidate;
+             }
+-            if (IsCall(Node, HookName))
++            if (IsCall(Node, HookName) || IsCall(Node, OldHookName))
+             {
+                 if (Hook) return false;
+                 Hook = CastChecked<UK2Node_CallFunction>(Node);
+@@ -116,19 +122,45 @@ namespace ReditusEnemyAIInstall
+         Site.OriginalNext = OneLink(Site.Entry);
+         Site.Return = Pin(Result, UEdGraphSchema_K2::PN_Execute);
+         auto* Skill = TraceSource(Pin(Result, TEXT("skill")));
+-        const auto* SkillGet = Skill ? Cast<UK2Node_VariableGet>(Skill->GetOwningNode()) : nullptr;
+-        if (!Site.OriginalNext || !Site.Return || Site.Return->LinkedTo.Num() == 0 || !SkillGet ||
++        Site.SkillGet = Skill ? Cast<UK2Node_VariableGet>(Skill->GetOwningNode()) : nullptr;
++        Site.SkillType = Skill ? Cast<UClass>(Skill->PinType.PinSubCategoryObject.Get()) : nullptr;
++        if (!Site.OriginalNext || !Site.Return || Site.Return->LinkedTo.Num() == 0 || !Site.SkillGet ||
++            !Site.SkillType || !Site.SkillType->IsChildOf(AActor::StaticClass()) ||
+             Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Class ||
+-            SkillGet->VariableReference.GetMemberName() != TEXT("currentSkill")) return false;
++            Site.SkillGet->VariableReference.GetMemberName() != TEXT("currentSkill")) return false;
+         if (!Hook) return Site.OriginalNext != Site.Return;
+ 
+-        auto* Then = OneLink(Pin(Hook, UEdGraphSchema_K2::PN_Then));
+-        auto* Branch = Then ? Cast<UK2Node_IfThenElse>(Then->GetOwningNode()) : nullptr;
++        auto* AfterHook = OneLink(Pin(Hook, UEdGraphSchema_K2::PN_Then));
++        auto* Branch = AfterHook ? Cast<UK2Node_IfThenElse>(AfterHook->GetOwningNode()) : nullptr;
+         auto* Fallback = OneLink(Pin(Branch, UEdGraphSchema_K2::PN_Else));
+-        Site.bInstalled = Site.OriginalNext == Pin(Hook, UEdGraphSchema_K2::PN_Execute) &&
+-            IsSelf(TraceSource(Pin(Hook, TEXT("Enemy")))) && Branch && Fallback && Fallback != Site.Return &&
+-            TraceSource(Pin(Branch, TEXT("Condition"))) == Pin(Hook, UEdGraphSchema_K2::PN_ReturnValue) &&
+-            OneLink(Pin(Branch, UEdGraphSchema_K2::PN_Then)) == Site.Return;
++        if (Site.OriginalNext != Pin(Hook, UEdGraphSchema_K2::PN_Execute) ||
++            !IsSelf(TraceSource(Pin(Hook, TEXT("Enemy")))) || !Branch ||
++            AfterHook != Pin(Branch, UEdGraphSchema_K2::PN_Execute) || !Fallback || Fallback == Site.Return ||
++            !Pin(Hook, UEdGraphSchema_K2::PN_ReturnValue) ||
++            TraceSource(Pin(Branch, TEXT("Condition"))) != Pin(Hook, UEdGraphSchema_K2::PN_ReturnValue)) return false;
++
++        auto* ProfiledPath = OneLink(Pin(Branch, UEdGraphSchema_K2::PN_Then));
++        if (IsCall(Hook, OldHookName))
++        {
++            if (ProfiledPath != Site.Return) return false;
++            Site.OldHook = Hook;
++            Site.OldBranch = Branch;
++            return true;
++        }
++
++        auto* SetSkill = ProfiledPath ? Cast<UK2Node_VariableSet>(ProfiledPath->GetOwningNode()) : nullptr;
++        if (!SetSkill || ProfiledPath != Pin(SetSkill, UEdGraphSchema_K2::PN_Execute) ||
++            OneLink(Pin(SetSkill, UEdGraphSchema_K2::PN_Then)) != Site.Return) return false;
++        const auto& SkillReference = Site.SkillGet->VariableReference;
++        const auto& SetReference = SetSkill->VariableReference;
++        auto* SelectedSkillPin = Pin(Hook, TEXT("SelectedSkill"));
++        auto* ConvertedSkill = TraceSource(Pin(SetSkill, SkillReference.GetMemberName()));
++        auto* ClassCast = ConvertedSkill ? Cast<UK2Node_ClassDynamicCast>(ConvertedSkill->GetOwningNode()) : nullptr;
++        Site.bInstalled = SetReference.GetMemberName() == SkillReference.GetMemberName() &&
++            SetReference.GetMemberGuid() == SkillReference.GetMemberGuid() &&
++            SetReference.IsLocalScope() == SkillReference.IsLocalScope() &&
++            ClassCast && ClassCast->IsNodePure() && ClassCast->TargetType == Site.SkillType && SelectedSkillPin &&
++            TraceSource(Pin(ClassCast, TEXT("Class"))) == SelectedSkillPin;
+         return Site.bInstalled;
+     }
+ 
+@@ -203,14 +235,21 @@ namespace ReditusEnemyAIInstall
+         return Node;
+     }
+ 
+-    UK2Node_CallFunction* AddCallWithSelf(UEdGraph* Graph, UFunction* Function, int32 X, int32 Y)
++    UK2Node_CallFunction* AddCallWithSelf(UEdGraph* Graph, UFunction* Function, int32 X, int32 Y,
++        UEdGraphPin* SelfPin = nullptr)
+     {
+         auto* Call = AddNode<UK2Node_CallFunction>(Graph, X, Y);
+         Call->SetFromFunction(Function);
+         Call->AllocateDefaultPins();
+-        auto* Self = AddNode<UK2Node_Self>(Graph, X - 155, Y + 110);
+-        Self->AllocateDefaultPins();
+-        return Link(Pin(Self, UEdGraphSchema_K2::PN_Self), Pin(Call, TEXT("Enemy"))) ? Call : nullptr;
++        if (!SelfPin)
++        {
++            auto* Self = AddNode<UK2Node_Self>(Graph, X - 155, Y + 110);
++            Self->AllocateDefaultPins();
++            SelfPin = Pin(Self, UEdGraphSchema_K2::PN_Self);
++        }
++        if (!SelfPin) return nullptr;
++        SelfPin->GetOwningNode()->Modify();
++        return Link(SelfPin, Pin(Call, TEXT("Enemy"))) ? Call : nullptr;
+     }
+ 
+     bool WireClassSkill(const FClassSkillSite& Site, UFunction* Function)
+@@ -222,17 +261,55 @@ namespace ReditusEnemyAIInstall
+         EntryNode->Modify();
+         Site.OriginalNext->GetOwningNode()->Modify();
+         Site.Return->GetOwningNode()->Modify();
+-        const int32 X = EntryNode->NodePosX + 250;
+-        const int32 Y = EntryNode->NodePosY - 220;
+-        auto* Call = AddCallWithSelf(Graph, Function, X, Y);
+-        auto* Branch = AddNode<UK2Node_IfThenElse>(Graph, X + 270, Y);
+-        Branch->AllocateDefaultPins();
+-        if (!Call || !Link(Pin(Call, UEdGraphSchema_K2::PN_Then), Pin(Branch, UEdGraphSchema_K2::PN_Execute)) ||
+-            !Link(Pin(Call, UEdGraphSchema_K2::PN_ReturnValue), Pin(Branch, TEXT("Condition")))) return false;
+-        Site.Entry->BreakLinkTo(Site.OriginalNext);
++
++        const int32 X = Site.OldHook ? Site.OldHook->NodePosX : EntryNode->NodePosX + 250;
++        const int32 Y = Site.OldHook ? Site.OldHook->NodePosY : EntryNode->NodePosY - 220;
++        auto* Call = AddCallWithSelf(Graph, Function, X, Y, TraceSource(Pin(Site.OldHook, TEXT("Enemy"))));
++        if (!Call) return false;
++
++        auto* Branch = Site.OldBranch;
++        if (Branch) Branch->Modify();
++        else
++        {
++            Branch = AddNode<UK2Node_IfThenElse>(Graph, X + 275, Y);
++            Branch->AllocateDefaultPins();
++        }
++        auto* ClassCast = AddNode<UK2Node_ClassDynamicCast>(Graph, Branch->NodePosX, Branch->NodePosY - 135);
++        ClassCast->TargetType = Site.SkillType;
++        ClassCast->AllocateDefaultPins();
++        if (!ClassCast->IsNodePure()) ClassCast->SetPurity(true);
++        if (!ClassCast->IsNodePure()) return false;
++        UEdGraphPin* CastResult = nullptr;
++        for (auto* Candidate : ClassCast->Pins)
++        {
++            if (Candidate && !Candidate->bOrphanedPin && Candidate->Direction == EGPD_Output &&
++                Candidate->PinType.PinCategory == UEdGraphSchema_K2::PC_Class)
++            {
++                CastResult = Candidate;
++                break;
++            }
++        }
++
++        auto* SetSkill = AddNode<UK2Node_VariableSet>(Graph, Branch->NodePosX + 270, Branch->NodePosY);
++        SetSkill->VariableReference = Site.SkillGet->VariableReference;
++        SetSkill->AllocateDefaultPins();
++        if (!Link(Pin(Call, TEXT("SelectedSkill")), Pin(ClassCast, TEXT("Class"))) ||
++            !Link(CastResult, Pin(SetSkill, SetSkill->VariableReference.GetMemberName())) ||
++            !Link(Pin(SetSkill, UEdGraphSchema_K2::PN_Then), Site.Return)) return false;
++
++        if (Site.OldHook)
++        {
++            Site.OldHook->Modify();
++            Pin(Branch, UEdGraphSchema_K2::PN_Then)->BreakLinkTo(Site.Return);
++            Site.OldHook->DestroyNode();
++        }
++        else Site.Entry->BreakLinkTo(Site.OriginalNext);
++
+         return Link(Site.Entry, Pin(Call, UEdGraphSchema_K2::PN_Execute)) &&
+-            Link(Pin(Branch, UEdGraphSchema_K2::PN_Then), Site.Return) &&
+-            Link(Pin(Branch, UEdGraphSchema_K2::PN_Else), Site.OriginalNext);
++            Link(Pin(Call, UEdGraphSchema_K2::PN_Then), Pin(Branch, UEdGraphSchema_K2::PN_Execute)) &&
++            Link(Pin(Call, UEdGraphSchema_K2::PN_ReturnValue), Pin(Branch, TEXT("Condition"))) &&
++            Link(Pin(Branch, UEdGraphSchema_K2::PN_Then), Pin(SetSkill, UEdGraphSchema_K2::PN_Execute)) &&
++            (Site.OldHook || Link(Pin(Branch, UEdGraphSchema_K2::PN_Else), Site.OriginalNext));
+     }
+ 
+     bool WireIDWeight(const FIDWeightSite& Site, UFunction* Function)
+@@ -300,6 +377,134 @@ namespace ReditusEnemyAIInstall
+         return Table;
+     }
+ 
++    FReditusEnemyAIProfile MakeProtectExample()
++    {
++        FReditusEnemyAISkillRule Protect;
++        Protect.SkillID = TEXT("ProtectSelfBuff");
++        Protect.SkillClass = LoadClass<AActor>(nullptr, ProtectSkillPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
++
++        FReditusEnemyAISkillRule Require = Protect;
++        FReditusEnemyAIUnitTest HP;
++        HP.Type = EReditusEnemyAITestType::HPPercent;
++        HP.Value = 50.f;
++        FReditusEnemyAIUnitTest Stamina = HP;
++        Stamina.Type = EReditusEnemyAITestType::StaminaPercent;
++        FReditusEnemyAIUnitCheck CasterHealth;
++        CasterHealth.AllTests = {HP, Stamina};
++        FReditusEnemyAIConditionGroup HealthGroup;
++        HealthGroup.AllChecks.Add(CasterHealth);
++
++        FReditusEnemyAIUnitCheck Opponents;
++        Opponents.Subject = EReditusEnemyAISubject::LivingOpponents;
++        Opponents.Count = 2;
++        FReditusEnemyAIConditionGroup OpponentGroup;
++        OpponentGroup.AllChecks.Add(Opponents);
++        Require.AnyOf = {HealthGroup, OpponentGroup};
++
++        FReditusEnemyAISkillRule Skip = Protect;
++        Skip.ConditionEffect = EReditusEnemyAIRuleEffect::SkipOnMatch;
++        FReditusEnemyAIUnitTest Protected;
++        Protected.Type = EReditusEnemyAITestType::StatusPresent;
++        Protected.StatusFlag = TEXT("IsProtected");
++        Protected.StatusBuffID = TEXT("Protect");
++        FReditusEnemyAIConditionGroup ProtectionGroup;
++        FReditusEnemyAIUnitCheck CasterProtection;
++        CasterProtection.AllTests.Add(Protected);
++        ProtectionGroup.AllChecks.Add(CasterProtection);
++        Skip.AnyOf.Add(ProtectionGroup);
++
++        FReditusEnemyAISkillRule Prefer = Protect;
++        Prefer.ConditionEffect = EReditusEnemyAIRuleEffect::AdjustWeight;
++        Prefer.WeightMultiplier = 3.f;
++        FReditusEnemyAIConditionGroup LowHealthGroup = HealthGroup;
++        HP.Value = 25.f;
++        LowHealthGroup.AllChecks[0].AllTests = {HP};
++        Prefer.AnyOf.Add(LowHealthGroup);
++
++        FReditusEnemyAIProfile Profile;
++        Profile.SkillRules = {Require, Skip, Prefer};
++        return Profile;
++    }
++
++    FReditusEnemyAIProfile MakeSelfHealExample()
++    {
++        FReditusEnemyAIUnitTest LowHP;
++        LowHP.Type = EReditusEnemyAITestType::HPPercent;
++        LowHP.Value = 40.f;
++        FReditusEnemyAIUnitCheck Caster;
++        Caster.AllTests.Add(LowHP);
++        FReditusEnemyAIConditionGroup WhenHurt;
++        WhenHurt.AllChecks.Add(Caster);
++        FReditusEnemyAISkillRule Heal;
++        Heal.AnyOf.Add(WhenHurt);
++        // The designer chooses an existing self-heal class or Skill ID.
++        FReditusEnemyAIProfile Profile;
++        Profile.SkillRules.Add(Heal);
++        return Profile;
++    }
++
++    FReditusEnemyAIProfile MakeStaggerFinisherExample()
++    {
++        FReditusEnemyAIUnitTest Stagger;
++        Stagger.Type = EReditusEnemyAITestType::Staggered;
++        FReditusEnemyAIUnitCheck BrokenOpponent;
++        BrokenOpponent.Subject = EReditusEnemyAISubject::LivingOpponents;
++        BrokenOpponent.AllTests.Add(Stagger);
++
++        FReditusEnemyAIUnitTest RageBait;
++        RageBait.Type = EReditusEnemyAITestType::StatusPresent;
++        RageBait.StatusBuffID = TEXT("AggroFocus");
++        FReditusEnemyAIUnitCheck FocusedOpponents = BrokenOpponent;
++        FocusedOpponents.CountComparison = EReditusEnemyAIComparison::Exactly;
++        FocusedOpponents.Count = 0;
++        FocusedOpponents.AllTests = {RageBait};
++
++        FReditusEnemyAIConditionGroup Opening;
++        Opening.AllChecks = {BrokenOpponent, FocusedOpponents};
++        FReditusEnemyAISkillRule Finisher;
++        Finisher.AnyOf.Add(Opening);
++        FReditusEnemyAIProfile Profile;
++        Profile.SkillRules.Add(Finisher);
++        return Profile;
++    }
++
++    FReditusEnemyAIProfile MakeRegularAttackAmpExample()
++    {
++        FReditusEnemyAIAmpRule Attack;
++        Attack.Action = EReditusEnemyAIAmpAction::RegularAttack;
++        Attack.Points = 1;
++        FReditusEnemyAIProfile Profile;
++        Profile.bEnableAMP = true;
++        Profile.AmpRules.Add(Attack);
++        return Profile;
++    }
++
++    void AddExampleProfiles(UDataTable* Table)
++    {
++        const FName ProtectID(TEXT("Example_ProtectSelf"));
++        const FName HealID(TEXT("Example_SelfHeal"));
++        const FName FinisherID(TEXT("Example_StaggerFinisher"));
++        const FName AttackAmpID(TEXT("Example_RegularAttackAMP"));
++        const bool bNeedsProtect = !Table->FindRow<FReditusEnemyAIProfile>(ProtectID, TEXT("Enemy AI examples"), false);
++        const bool bNeedsHeal = !Table->FindRow<FReditusEnemyAIProfile>(HealID, TEXT("Enemy AI examples"), false);
++        const bool bNeedsFinisher = !Table->FindRow<FReditusEnemyAIProfile>(FinisherID, TEXT("Enemy AI examples"), false);
++        const bool bNeedsAttackAmp = !Table->FindRow<FReditusEnemyAIProfile>(AttackAmpID, TEXT("Enemy AI examples"), false);
++        if (!bNeedsProtect && !bNeedsHeal && !bNeedsFinisher && !bNeedsAttackAmp) return;
++
++        const FScopedTransaction Transaction(NSLOCTEXT("ReditusEnemyAI", "AddExampleProfiles", "Add Enemy AI Example Profiles"));
++        if (!Transaction.IsOutstanding()) return;
++        Table->Modify();
++        if (bNeedsProtect) Table->AddRow(ProtectID, MakeProtectExample());
++        if (bNeedsHeal) Table->AddRow(HealID, MakeSelfHealExample());
++        if (bNeedsFinisher) Table->AddRow(FinisherID, MakeStaggerFinisherExample());
++        if (bNeedsAttackAmp) Table->AddRow(AttackAmpID, MakeRegularAttackAmpExample());
++        Table->PostEditChange();
++        Table->MarkPackageDirty();
++        UE_LOG(LogReditusEnemyAIInstall, Display,
++            TEXT("Enemy AI examples are available in %s. Look for the Example_ rows. Save the table to keep new rows."),
++            *Table->GetName());
++    }
++
+     bool Compile(UBlueprint* Blueprint)
+     {
+         FCompilerResultsLog Log;
+@@ -316,7 +521,8 @@ namespace ReditusEnemyAIInstall
+         }
+         auto* Blueprint = LoadObject<UBlueprint>(nullptr, EnemyBlueprintPath);
+         auto* AIClass = UReditusEnemyCombatAIComponent::StaticClass();
+-        const FName ClassHook = GET_FUNCTION_NAME_CHECKED(UReditusEnemyCombatAIComponent, TryChooseProfiledClassSkill);
++        const FName ClassHook = GET_FUNCTION_NAME_CHECKED(UReditusEnemyCombatAIComponent, TrySelectProfiledClassSkill);
++        const FName OldClassHook = GET_FUNCTION_NAME_CHECKED(UReditusEnemyCombatAIComponent, TryChooseProfiledClassSkill);
+         const FName IDHook = GET_FUNCTION_NAME_CHECKED(UReditusEnemyCombatAIComponent, FilterEnemySkillIDWeight);
+         UFunction* ClassFunction = AIClass->FindFunctionByName(ClassHook);
+         UFunction* IDFunction = AIClass->FindFunctionByName(IDHook);
+@@ -328,7 +534,7 @@ namespace ReditusEnemyAIInstall
+             UE_LOG(LogReditusEnemyAIInstall, Error, TEXT("Could not find BP_EnemyUnitBase or its component slot. No Blueprint was edited."));
+             return;
+         }
+-        const bool bClassOK = FindClassSkillSite(FindFunctionGraph(Blueprint, TEXT("GetRandomSkill")), ClassHook, ClassSite);
++        const bool bClassOK = FindClassSkillSite(FindFunctionGraph(Blueprint, TEXT("GetRandomSkill")), ClassHook, OldClassHook, ClassSite);
+         const bool bIDOK = FindIDWeightSite(FindFunctionGraph(Blueprint, TEXT("GetRandomSkillByID")), IDHook, IDSite);
+         if (!bClassOK || !bIDOK)
+         {
+@@ -348,6 +554,7 @@ namespace ReditusEnemyAIInstall
+         if (Component && Component->ProfileTable == Profiles && Component->EnemyDefinitions == Definitions &&
+             ClassSite.bInstalled && IDSite.bInstalled)
+         {
++            AddExampleProfiles(Profiles);
+             UE_LOG(LogReditusEnemyAIInstall, Display, TEXT("Enemy Combat AI is already installed on BP_EnemyUnitBase."));
+             return;
+         }
+@@ -386,6 +593,7 @@ namespace ReditusEnemyAIInstall
+                 bUndone ? TEXT("succeeded") : TEXT("failed. Leave BP_EnemyUnitBase unsaved"));
+             return;
+         }
++        AddExampleProfiles(Profiles);
+         UE_LOG(LogReditusEnemyAIInstall, Display,
+             TEXT("Enemy Combat AI installed. Save BP_EnemyUnitBase and DT_EnemyAIProfiles. To try it, choose the LizardMan profile on BP_LizardMan's inherited component."));
+     }
+diff --git a/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp b/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
+index 145e08f34ec83ba61d6d6bebdf20738d347158a7..dccb7202ed4534d507eaa3ea0f6e7422cb670124 100644
+--- a/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
++++ b/Source/Chapter1Reditus/ATB/ReditusATBComponent.cpp
+@@ -2,8 +2,12 @@
+ #include "ReditusATBCore.h"
+ #include "ReditusAmpRules.h"
+ #include "Components/SceneComponent.h"
++#include "Engine/World.h"
+ #include "GameFramework/Actor.h"
++#include "Kismet/GameplayStatics.h"
++#include "Particles/ParticleSystem.h"
+ #include "Particles/ParticleSystemComponent.h"
++#include "UObject/ConstructorHelpers.h"
+ #include "UObject/UnrealType.h"
+ #include "UObject/StructOnScope.h"
+ 
+@@ -41,6 +45,81 @@ namespace
+         return Value && Value->GetPropertyValue_InContainer(Object);
+     }
+ 
++    bool TryResolveProfiledEnemyAmp(const FReditusATBAction& Action, int32& Amount)
++    {
++        if (!IsValid(Action.Unit) || IsLegacyPlayer(Action.Unit)) return false;
++        const bool bRegularAttack = Action.Kind == EReditusATBActionKind::Attack;
++
++        TInlineComponentArray<UActorComponent*> Components;
++        Action.Unit->GetComponents(Components);
++        for (UActorComponent* Component : Components)
++        {
++            if (!IsValid(Component)) continue;
++            UFunction* Function = Component->FindFunction(TEXT("ResolveEnemyAmpForAction"));
++            if (!Function || !Function->HasAnyFunctionFlags(FUNC_Native) ||
++                Function->GetOuter()->GetPathName() != TEXT("/Script/ReditusTableBuffs.ReditusEnemyCombatAIComponent")) continue;
++
++            // This component owns AMP for the enemy's actions, including a zero allocation.
++            Amount = 0;
++            if ((!bRegularAttack && Action.Kind != EReditusATBActionKind::Skill) || Function->NumParms != 4)
++                return true;
++
++            const auto* Attack = FindFProperty<FBoolProperty>(Function, TEXT("bRegularAttack"));
++            const auto* SkillID = FindFProperty<FNameProperty>(Function, TEXT("SkillID"));
++            const auto* SkillClass = FindFProperty<FClassProperty>(Function, TEXT("SkillClass"));
++            const auto* Result = CastField<FIntProperty>(Function->GetReturnProperty());
++            const auto IsInput = [](const FProperty* Property)
++            {
++                return Property && Property->HasAnyPropertyFlags(CPF_Parm) &&
++                    !Property->HasAnyPropertyFlags(CPF_OutParm | CPF_ReturnParm);
++            };
++            if (!IsInput(Attack) || !IsInput(SkillID) || !IsInput(SkillClass) ||
++                SkillClass->MetaClass != AActor::StaticClass() || !Result) return true;
++
++            FStructOnScope Params(Function);
++            void* Memory = Params.GetStructMemory();
++            Attack->SetPropertyValue_InContainer(Memory, bRegularAttack);
++            SkillID->SetPropertyValue_InContainer(Memory, Action.ActionID);
++            SkillClass->SetObjectPropertyValue_InContainer(Memory, Action.LegacyClass.Get());
++            Component->ProcessEvent(Function, Memory);
++            Amount = FMath::Max(0, Result->GetPropertyValue_InContainer(Memory));
++            return true;
++        }
++        return false;
++    }
++
++    void SpendProfiledEnemyAmp(FReditusATBAction& Action)
++    {
++        if (!Action.bManagedEnemyAmp || Action.ManagedEnemyAmpSpent > 0) return;
++        if (IsValid(Action.Unit))
++        {
++            const auto* Total = FindFProperty<FIntProperty>(Action.Unit->GetClass(), TEXT("TotalAmpPoints"));
++            const auto* Capacity = FindFProperty<FIntProperty>(Action.Unit->GetClass(), TEXT("MaxExhaustionPoints"));
++            if (Total && Capacity)
++            {
++                const int32 Available = Total->GetPropertyValue_InContainer(Action.Unit);
++                if (Action.AmpCommitted > 0 && Action.AmpCommitted <= Available &&
++                    Action.AmpCommitted <= Capacity->GetPropertyValue_InContainer(Action.Unit))
++                {
++                    Total->SetPropertyValue_InContainer(Action.Unit, Available - Action.AmpCommitted);
++                    Action.ManagedEnemyAmpSpent = Action.AmpCommitted;
++                    return;
++                }
++            }
++        }
++        Action.AmpCommitted = 0;
++    }
++
++    void RefundProfiledEnemyAmp(const FReditusATBAction& Action)
++    {
++        if (!Action.bManagedEnemyAmp || Action.ManagedEnemyAmpSpent <= 0 || !IsValid(Action.Unit)) return;
++        const auto* Total = FindFProperty<FIntProperty>(Action.Unit->GetClass(), TEXT("TotalAmpPoints"));
++        const auto* Capacity = FindFProperty<FIntProperty>(Action.Unit->GetClass(), TEXT("MaxExhaustionPoints"));
++        if (!Total || !Capacity) return;
++        Total->SetPropertyValue_InContainer(Action.Unit, ReditusAmpRules::Award(Total->GetPropertyValue_InContainer(Action.Unit),
++            Action.ManagedEnemyAmpSpent, Capacity->GetPropertyValue_InContainer(Action.Unit)));
++    }
++
+     bool BlocksPersonalAmp(AActor* Unit,UActorComponent* Clock,int32 CycleToken)
+     {
+         bool bBlocked=false;
+@@ -149,6 +228,33 @@ namespace
+         if (IsValid(Particle)) Particle->DestroyComponent();
+     }
+ 
++    UParticleSystemComponent* SpawnEnemyAmpParticle(const FReditusATBAction& Action,
++        const TArray<UParticleSystem*>& Templates)
++    {
++        if (Action.ManagedEnemyAmpSpent <= 0 || Templates.Num() == 0 || !IsValid(Action.Unit)) return nullptr;
++        const UWorld* World = Action.Unit->GetWorld();
++        if (!World || !World->IsGameWorld() || World->bIsTearingDown || World->GetNetMode() == NM_DedicatedServer)
++            return nullptr;
++
++        UParticleSystem* Template = Templates[FMath::Min(Action.ManagedEnemyAmpSpent, Templates.Num()) - 1];
++        if (!IsValid(Template)) Template = Templates[0];
++        if (!IsValid(Template)) return nullptr;
++
++        const auto* Sprite = FindFProperty<FObjectPropertyBase>(Action.Unit->GetClass(), TEXT("Pixel2D"));
++        auto* Anchor = Sprite ? Cast<USceneComponent>(Sprite->GetObjectPropertyValue_InContainer(Action.Unit)) : nullptr;
++        if (!IsValid(Anchor)) Anchor = Action.Unit->GetRootComponent();
++        if (!IsValid(Anchor)) return nullptr;
++        return UGameplayStatics::SpawnEmitterAttached(Template, Anchor, NAME_None, FVector::ZeroVector,
++            FRotator::ZeroRotator, FVector(1.f), EAttachLocation::KeepRelativeOffset, true);
++    }
++
++    void ClearEnemyAmpParticle(FReditusATBAction& Action)
++    {
++        UParticleSystemComponent* Particle = Action.ManagedEnemyAmpParticle.Get();
++        Action.ManagedEnemyAmpParticle.Reset();
++        if (IsValid(Particle)) Particle->DestroyComponent();
++    }
++
+     void ClearStaggeredCommand(AActor* Unit,bool bActionRunning)
+     {
+         if (!IsValid(Unit)) return;
+@@ -214,6 +320,14 @@ UReditusATBComponent::UReditusATBComponent()
+ {
+     PrimaryComponentTick.bCanEverTick=true;
+     Scheduler=MakeUnique<ReditusATBCore::Scheduler>();
++
++    static ConstructorHelpers::FObjectFinderOptional<UParticleSystem> OneAmp(
++        TEXT("/Game/Particles/GoodParticleStatus/Particles/Buff_Status/PS_GPS_Buff_Nebula.PS_GPS_Buff_Nebula"));
++    static ConstructorHelpers::FObjectFinderOptional<UParticleSystem> TwoAmp(
++        TEXT("/Game/Particles/GoodParticleStatus/Particles/Buff_Status/PS_GPS_Buff_Nebula1.PS_GPS_Buff_Nebula1"));
++    static ConstructorHelpers::FObjectFinderOptional<UParticleSystem> ThreeAmp(
++        TEXT("/Game/Particles/GoodParticleStatus/Particles/Buff_Status/PS_GPS_Buff_Nebula2.PS_GPS_Buff_Nebula2"));
++    EnemyAmpParticleTemplates = {OneAmp.Get(), TwoAmp.Get(), ThreeAmp.Get()};
+ }
+ UReditusATBComponent::~UReditusATBComponent() = default;
+ 
+@@ -283,6 +397,7 @@ void UReditusATBComponent::UnregisterUnit(AActor* Unit)
+             }
+         }
+     ClearAmpParticle(Unit);
++    ClearEnemyAmpParticle(Removed);
+     if (bCancelled) OnActionCancelled.Broadcast(Removed,bHadStarted);
+ }
+ bool UReditusATBComponent::StartATB()
+@@ -316,8 +431,9 @@ void UReditusATBComponent::StopATB()
+             Health->FinishBattle();
+         }
+     for (const FReditusATBUnitView& State : Before) ClearAmpParticle(State.Unit);
+-    for (const FReditusATBAction& Action : Cancelled)
++    for (FReditusATBAction& Action : Cancelled)
+     {
++        ClearEnemyAmpParticle(Action);
+         bool bHadStarted=false;
+         for (const FReditusATBUnitView& State : Before)
+             if (State.Unit==Action.Unit) bHadStarted=State.Phase==EReditusATBPhase::Executing || State.Phase==EReditusATBPhase::CycleEnd;
+@@ -699,6 +815,8 @@ bool UReditusATBComponent::SubmitAction(const FReditusATBAction& Action,int32& A
+     ActionToken=INDEX_NONE;
+     const int32* Identity=UnitIDs.Find(Action.Unit);
+     if (!Identity || !CanIssueCommands(Action.Unit) || !FMath::IsFinite(PreparationOverride)) return false;
++    int32 CommittedAmp = FMath::Max(0, Action.AmpCommitted);
++    const bool bProfiledEnemy = TryResolveProfiledEnemyAmp(Action, CommittedAmp);
+     const float Preparation=PreparationOverride>=0.f ? PreparationOverride : GetPreparationTime(Action);
+     const int32 Token=Scheduler->Submit(*Identity,Preparation);
+     if (Token<0) return false;
+@@ -717,7 +835,10 @@ bool UReditusATBComponent::SubmitAction(const FReditusATBAction& Action,int32& A
+         else if (SkillType==3) Saved.TargetMode=TEXT("AllLivingAllies");
+     }
+     Saved.ActionToken=Token; Saved.CycleToken=Scheduler->Find(*Identity)->Cycle;
+-    Saved.AmpCommitted=FMath::Max(0,Saved.AmpCommitted);
++    Saved.bManagedEnemyAmp = bProfiledEnemy && CommittedAmp > 0;
++    Saved.ManagedEnemyAmpSpent = 0;
++    Saved.ManagedEnemyAmpParticle.Reset();
++    Saved.AmpCommitted = CommittedAmp;
+     PendingActions.Add(Token,Saved); ActionToken=Token;
+     return true;
+ }
+@@ -726,8 +847,11 @@ bool UReditusATBComponent::CompleteAction(int32 ActionToken)
+     if (!bRunning || !Scheduler->CompleteAction(ActionToken)) return false;
+     ExecutionInterruptRequests.Remove(ActionToken);
+     // ATB actions can bypass the legacy command nodes that turn off AMP FX.
+-    if (const FReditusATBAction* Action=PendingActions.Find(ActionToken))
++    if (FReditusATBAction* Action=PendingActions.Find(ActionToken))
++    {
++        ClearEnemyAmpParticle(*Action);
+         ClearAmpParticle(Action->Unit);
++    }
+     return true;
+ }
+ bool UReditusATBComponent::RejectAction(int32 ActionToken)
+@@ -742,6 +866,8 @@ bool UReditusATBComponent::RejectAction(int32 ActionToken)
+     FReditusATBAction Removed;
+     if (PendingActions.RemoveAndCopyValue(ActionToken,Removed))
+     {
++        ClearEnemyAmpParticle(Removed);
++        RefundProfiledEnemyAmp(Removed);
+         OnActionCancelled.Broadcast(Removed,false);
+         NotifyReady(Removed.Unit,Removed.CycleToken);
+     }
+@@ -884,7 +1010,14 @@ void UReditusATBComponent::TickComponent(float DeltaTime,ELevelTick TickType,FAc
+                 if (CompleteAction(Task.Action)) OnActionCancelled.Broadcast(Copy,false);
+                 return;
+             }
+-            if (FReditusATBAction* Current=PendingActions.Find(Task.Action)) Current->Targets=Copy.Targets;
++            if (FReditusATBAction* Current=PendingActions.Find(Task.Action))
++            {
++                SpendProfiledEnemyAmp(Copy);
++                Current->Targets=Copy.Targets;
++                Current->AmpCommitted=Copy.AmpCommitted;
++                Current->ManagedEnemyAmpSpent=Copy.ManagedEnemyAmpSpent;
++                Current->ManagedEnemyAmpParticle = SpawnEnemyAmpParticle(Copy,EnemyAmpParticleTemplates);
++            }
+             OnExecuteActionRequested.Broadcast(Copy);
+         }
+         else Scheduler->RejectAction(Task.Action);
+diff --git a/Source/Chapter1Reditus/ATB/ReditusATBComponent.h b/Source/Chapter1Reditus/ATB/ReditusATBComponent.h
+index 6f1d0f69bd6735f124934b02b379001c3d68344e..5ea889c0f7aedf703922df8e16b5b14ecd2ff64f 100644
+--- a/Source/Chapter1Reditus/ATB/ReditusATBComponent.h
++++ b/Source/Chapter1Reditus/ATB/ReditusATBComponent.h
+@@ -9,6 +9,8 @@
+ #include "ReditusATBComponent.generated.h"
+ 
+ class AActor;
++class UParticleSystem;
++class UParticleSystemComponent;
+ 
+ UENUM(BlueprintType)
+ enum class EReditusATBPhase : uint8
+@@ -106,6 +108,11 @@ struct CHAPTER1REDITUS_API FReditusATBAction
+     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interruption") bool bInterruptibleDuringExecution = false;
+     UPROPERTY(BlueprintReadOnly, Category="Action") int32 ActionToken = INDEX_NONE;
+     UPROPERTY(BlueprintReadOnly, Category="Action") int32 CycleToken = INDEX_NONE;
++
++    // Native bookkeeping for AMP chosen by the enemy AI profile.
++    bool bManagedEnemyAmp = false;
++    int32 ManagedEnemyAmpSpent = 0;
++    TWeakObjectPtr<UParticleSystemComponent> ManagedEnemyAmpParticle;
+ };
+ 
+ USTRUCT(BlueprintType)
+@@ -211,6 +218,7 @@ private:
+     UPROPERTY(Transient) TMap<AActor*,FReditusATBTimingEffectList> TimingEffects;
+     UPROPERTY(Transient) TMap<int32,FReditusATBAction> PendingActions;
+     UPROPERTY(Transient) TArray<TWeakObjectPtr<UReditusRollingHPComponent>> RollingUnits;
++    UPROPERTY() TArray<UParticleSystem*> EnemyAmpParticleTemplates;
+     TSet<int32> ExecutionInterruptRequests;
+     bool bRunning = false;
+     bool bStopping = false;
