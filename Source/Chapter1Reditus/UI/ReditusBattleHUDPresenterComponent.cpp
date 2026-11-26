@@ -407,6 +407,15 @@ namespace
         Unit->ProcessEvent(Function,Parameters.GetData());
     }
 
+    void ClearPartyTargetIcons(UObject* Battle)
+    {
+        for (AActor* Ally:Actors(Battle,TEXT("playerUnits")))
+        {
+            const auto* Icon=Cast<USceneComponent>(ObjectValue(Ally,TEXT("TargetIconWidget")));
+            if (IsValid(Icon) && Icon->IsVisible()) SetTargetIcon(Ally,false);
+        }
+    }
+
     void RestoreATBListCommands(AActor* Unit)
     {
         SetSelectionValue(Unit,3); // E_SelectType::ActionsUI
@@ -667,6 +676,14 @@ namespace
         int32 Scope=Row.Int(TEXT("TargetScope"));
         int32 Filter=Row.Int(TEXT("UnitFilter"));
         int32 SkillType=Row.Int(TEXT("SkillType"));
+        if (Command==EReditusHUDCommand::Overdrive && (SkillType==0 || SkillType==4))
+        {
+            // The shipped rows misdescribe these two legacy Blueprints. Both
+            // damage loops walk enemyUnits; keep the preview on that same roster.
+            const auto* Legacy=Row.Class(TEXT("LegacySkill"));
+            if (Legacy && ((SkillType==4 && Legacy->GetFName()==TEXT("BP_OdinUltimaOverdrive_C")) ||
+                (SkillType==0 && Legacy->GetFName()==TEXT("BP_AirloftAoeFireOverdrive_C")))) SkillType=2;
+        }
         if (bItem)
         {
             UClass* ItemClass=Row.Class(TEXT("UsableItemLegacyLaunch"));
@@ -1261,7 +1278,7 @@ void UReditusBattleHUDPresenterComponent::ClearATBListTargeting()
     for (const auto& Icon:Icons) SetTargetIcon(Icon.Get(),false);
 }
 
-bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FName ID,EReditusHUDCommand Command,bool bFromNativeMenu)
+bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FName ID,EReditusHUDCommand Command)
 {
 #if REDITUS_HUD_HAS_ATB
     const auto* ATB=RunningATB(GetOwner());
@@ -1270,12 +1287,6 @@ bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FNa
     if (!CanUseATBListEntry(Unit,Command,Row)) return false;
     const auto Targets=ListTargets(GetOwner(),Unit,Command,Row,DisplaySlots,Player);
     if (!IsValid(Targets.Initial)) return false;
-    // An enemy group needs confirmation even when only one enemy is alive.
-    const bool bCanSkipTargeting=Targets.bGroup ? Targets.Mode==TEXT("AllLivingAllies") : Targets.Units.Num()==1;
-    if (bFromNativeMenu && Command==EReditusHUDCommand::Overdrive && bCanSkipTargeting)
-    {
-        return SubmitATBListAction(Unit,ID,Command,Row.Class(TEXT("LegacySkill")),Targets.Units,Targets.Mode);
-    }
 
     AActor* PreviousTarget=Cast<AActor>(ObjectValue(Unit,TEXT("currentTarget")));
     if (!SetObjectValue(Unit,TEXT("currentTarget"),Targets.Initial) || !SetSelectionValue(Unit,1))
@@ -1285,9 +1296,10 @@ bool UReditusBattleHUDPresenterComponent::BeginATBListTargeting(AActor* Unit,FNa
     }
 
     ClearATBListTargeting();
-    // Clear the old legacy target icon before displaying a new group or ally.
-    if ((Targets.bGroup || !Targets.Mode.IsNone()) && PreviousTarget!=Targets.Initial)
-        SetTargetIcon(PreviousTarget,false);
+    if (PreviousTarget!=Targets.Initial) SetTargetIcon(PreviousTarget,false);
+    // Some legacy menus display an ally marker before the native draft owns
+    // the selection. Clear it before laying out the new set of markers.
+    if (Command==EReditusHUDCommand::Overdrive) ClearPartyTargetIcons(ObjectValue(GetOwner(),TEXT("currentBattle")));
     bDraftActive=true;
     bDraftGroup=Targets.bGroup;
     bExplicitTarget=false;
@@ -1475,14 +1487,8 @@ bool UReditusBattleHUDPresenterComponent::SubmitATBListAction(AActor* Unit,FName
         return false;
     }
 
-    if (!bDraftActive)
-    {
-        // A direct Overdrive can leave an icon on the move list's old target.
-        SetTargetIcon(Cast<AActor>(ObjectValue(Unit,TEXT("currentTarget"))),false);
-        SetObjectValue(Unit,TEXT("currentTarget"),TargetUnits[0]);
-        bExplicitTarget=false;
-    }
     ClearATBListTargeting();
+    if (Command==EReditusHUDCommand::Overdrive) ClearPartyTargetIcons(ObjectValue(Controller,TEXT("currentBattle")));
     SetSelectionValue(Unit,0);
     SetBoolValue(Unit,TEXT("Confirmed"),true);
     SetBoolValue(Unit,TEXT("TargetSet"),false);
@@ -1523,7 +1529,7 @@ void UReditusBattleHUDPresenterComponent::HandleNativeMenuChosen(AActor* Unit,FN
     if (RunningATB(GetOwner()))
     {
         if (!Items || LiveItemCount(Player,NativeMenuDataIDs[Index],1)>0)
-            BeginATBListTargeting(Unit,NativeMenuDataIDs[Index],NativeMenuCommand,true);
+            BeginATBListTargeting(Unit,NativeMenuDataIDs[Index],NativeMenuCommand);
         return;
     }
 #endif
@@ -2289,6 +2295,9 @@ void UReditusBattleHUDPresenterComponent::RefreshBattleHUD()
         ReditusHUDInputPolicy::LegacyTargetSurface(IsPartyActor && OwnsLegacyCommand,Number(CurrentActor,TEXT("currentHP"))>0.0,
             Boolean(CurrentActor,TEXT("isInputBlocked")),LegacySelection,BattleMode);
     if (TargetWindow) CommandWindow=false;
+    // The command cross owns no party target markers. This also cleans up
+    // a marker that the legacy executor made visible after the draft closed.
+    if (bUsingATB && CommandWindow && !HUD->IsMenuOpen()) ClearPartyTargetIcons(Battle);
     if (HUD->IsTargetSelectionActive() && !TargetWindow) { bExplicitTarget=false; ExplicitEnemyTarget.Reset(); }
     HUD->SetTargetSelectionActive(TargetWindow);
     UpdateDisplaySlots(Battle,CurrentActor,CommandWindow);

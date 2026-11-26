@@ -1,5 +1,6 @@
 #include "ReditusSequenceSkip.h"
 #include "ReditusQuestNPCReflection.h"
+#include "ReditusQuestSequenceGate.h"
 #include "LevelSequenceActor.h"
 #include "LevelSequencePlayer.h"
 #include "MovieSceneSequencePlayer.h"
@@ -24,8 +25,11 @@
 #include "Components/VerticalBoxSlot.h"
 #include "Components/AudioComponent.h"
 #include "UObject/UnrealType.h"
+#include "UObject/StructOnScope.h"
 #include "Styling/CoreStyle.h"
 #include "UnrealClient.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogReditusSequenceSkip, Log, All);
 
 namespace
 {
@@ -40,6 +44,36 @@ namespace
     bool SkipKey(const FKey& Key)
     {
         return Key == EKeys::LeftShift || Key == EKeys::RightShift || Key == EKeys::Gamepad_RightTrigger;
+    }
+
+    const FBoolProperty* LegacyInputBlockField(APlayerController* Controller)
+    {
+        return IsValid(Controller) ? FindFProperty<FBoolProperty>(Controller->GetClass(), TEXT("isInputBlocked")) : nullptr;
+    }
+
+    bool IsLegacyInputBlocked(APlayerController* Controller)
+    {
+        const auto* Field = LegacyInputBlockField(Controller);
+        return Field && Field->GetPropertyValue_InContainer(Controller);
+    }
+
+    void UnblockLegacyInput(APlayerController* Controller)
+    {
+        // Match the controller's existing finish event, including its mobile UI update.
+        auto* Event = Controller->FindFunction(TEXT("BlockPlayerInput"));
+        if (ReditusQuestNPCReflection::DelegateSignature(Event, true))
+        {
+            const auto* IsBlock = FindFProperty<FBoolProperty>(Event, TEXT("isBlock"));
+            if (IsBlock && IsBlock->HasAnyPropertyFlags(CPF_Parm))
+            {
+                FStructOnScope Parameters(Event);
+                IsBlock->SetPropertyValue_InContainer(Parameters.GetStructMemory(), false);
+                Controller->ProcessEvent(Event, Parameters.GetStructMemory());
+                return;
+            }
+        }
+        if (const auto* Field = LegacyInputBlockField(Controller))
+            Field->SetPropertyValue_InContainer(Controller, false);
     }
 
     class FSequenceSkipInput : public IInputProcessor
@@ -117,8 +151,8 @@ TSharedRef<SWidget> UReditusSequenceSkipNotice::RebuildWidget()
     BarBounds->SetContent(ProgressBar);
     Rows->AddChildToVerticalBox(BarBounds);
     auto* NoticeSlot = Canvas->AddChildToCanvas(Border);
-    NoticeSlot->SetAnchors(FAnchors(.5f, .66f));
-    NoticeSlot->SetAlignment(FVector2D(.5f, .5f));
+    NoticeSlot->SetAnchors(FAnchors(.98f, .04f));
+    NoticeSlot->SetAlignment(FVector2D(1.f, 0.f));
     NoticeSlot->SetAutoSize(true);
     SetVisibility(ESlateVisibility::HitTestInvisible);
     return Super::RebuildWidget();
@@ -142,6 +176,7 @@ void UReditusSequenceSkipSubsystem::RegisterInput()
 void UReditusSequenceSkipSubsystem::Deinitialize()
 {
     bStopped = true;
+    PendingInputController.Reset();
     ClearSequence();
     if (NoticeWidget) NoticeWidget->RemoveFromParent();
     NoticeWidget = nullptr;
@@ -181,14 +216,28 @@ bool UReditusSequenceSkipSubsystem::Configure(ALevelSequenceActor* Actor, bool A
     SequencePlayer = Actor->GetSequencePlayer();
     OnSkipped = Handoff;
     bAllowSkip = AllowSkip && OnSkipped.IsBound();
+    PendingInputController.Reset();
+    LastUnregisteredSequence.Reset();
+    bUsesControllerSequence = ControllerSequenceActor(Controller) == Actor;
+    bPlaybackStarted = HasActiveSequence();
+    if (IsValid(Controller) && !bPlaybackStarted)
+    {
+        bSequenceMayOwnMoveLock = Actor->PlaybackSettings.bDisableMovementInput && !Controller->IsMoveInputIgnored();
+        bSequenceMayOwnLookLock = Actor->PlaybackSettings.bDisableLookAtInput && !Controller->IsLookInputIgnored();
+    }
     bNeedTriggerRelease = LastTriggerValue > .2f || (IsValid(Controller)
         && Controller->GetInputAnalogKeyState(EKeys::Gamepad_RightTriggerAxis) > .2f);
     if (IsValid(Controller) && Controller->IsLocalController()) Controller->bShowMouseCursor = false;
+    SequencePlayer->OnPlay.AddUniqueDynamic(this, &UReditusSequenceSkipSubsystem::SequenceStarted);
+    SequencePlayer->OnPlayReverse.AddUniqueDynamic(this, &UReditusSequenceSkipSubsystem::SequenceStarted);
     SequencePlayer->OnFinished.AddUniqueDynamic(this, &UReditusSequenceSkipSubsystem::SequenceEnded);
     SequencePlayer->OnStop.AddUniqueDynamic(this, &UReditusSequenceSkipSubsystem::SequenceEnded);
     if (AllowSkip && !OnSkipped.IsBound())
         UE_LOG(LogTemp, Warning, TEXT("Configure Level Sequence Skipping needs an On Skipped handoff before Allow Skip can be enabled."));
+    UE_LOG(LogReditusSequenceSkip, Display, TEXT("Configured %s (Allow Skip=%d, handoff bound=%d)."),
+        *GetNameSafe(Actor), AllowSkip, OnSkipped.IsBound());
     RegisterInput();
+    ShowSkipPrompt();
     return !AllowSkip || bAllowSkip;
 }
 
@@ -219,6 +268,8 @@ void UReditusSequenceSkipSubsystem::ClearSequence()
     bShowingProgress = false;
     if (IsValid(SequencePlayer))
     {
+        SequencePlayer->OnPlay.RemoveDynamic(this, &UReditusSequenceSkipSubsystem::SequenceStarted);
+        SequencePlayer->OnPlayReverse.RemoveDynamic(this, &UReditusSequenceSkipSubsystem::SequenceStarted);
         SequencePlayer->OnFinished.RemoveDynamic(this, &UReditusSequenceSkipSubsystem::SequenceEnded);
         SequencePlayer->OnStop.RemoveDynamic(this, &UReditusSequenceSkipSubsystem::SequenceEnded);
     }
@@ -226,51 +277,76 @@ void UReditusSequenceSkipSubsystem::ClearSequence()
     SequencePlayer = nullptr;
     OnSkipped.Unbind();
     SetAutoAdvance(nullptr, false);
+    bUsesControllerSequence = bPlaybackStarted = false;
+    bSequenceMayOwnMoveLock = bSequenceMayOwnLookLock = false;
     bAllowSkip = false;
     bKeyHeld = bTriggerHeld = bMouseHeld = false;
     bNeedTriggerRelease = LastTriggerValue > .2f;
     HeldSeconds = 0;
 }
 
+void UReditusSequenceSkipSubsystem::SequenceStarted()
+{
+    bPlaybackStarted = true;
+    ShowSkipPrompt();
+}
+
 void UReditusSequenceSkipSubsystem::SequenceEnded()
 {
-    ClearSequence();
+    // A finish listener can already have registered or started the next scene.
+    if (bPlaybackStarted && !HasActiveSequence()) ClearSequence();
+}
+
+UReditusSequenceSkipNotice* UReditusSequenceSkipSubsystem::EnsureNoticeWidget()
+{
+    if (!IsValid(NoticeWidget))
+    {
+        auto* Player = UGameplayStatics::GetPlayerController(GetTickableGameObjectWorld(), 0);
+        auto* Game = GetGameInstance();
+        if (!IsValid(Player) || !Player->IsLocalController() || !Game || !Game->GetGameViewportClient()) return nullptr;
+        NoticeWidget = CreateWidget<UReditusSequenceSkipNotice>(Player);
+    }
+    if (!IsValid(NoticeWidget)) return nullptr;
+    if (!NoticeWidget->IsInViewport())
+    {
+        NoticeWidget->AddToViewport(1000);
+        if (bAllowSkip && NoticeWidget->IsInViewport())
+            UE_LOG(LogReditusSequenceSkip, Display, TEXT("Skip UI shown for %s."), *GetNameSafe(SequenceActor));
+    }
+    return NoticeWidget->IsInViewport() ? NoticeWidget : nullptr;
+}
+
+bool UReditusSequenceSkipSubsystem::ShowSkipPrompt()
+{
+    if (!bAllowSkip || !OnSkipped.IsBound() || bShowingProgress || !HasActiveSequence()) return false;
+    auto* Notice = EnsureNoticeWidget();
+    if (!Notice) return false;
+    Notice->SetMessage(NSLOCTEXT("ReditusSequence", "SkipPrompt", "Hold Shift or RT to skip"));
+    NoticeSeconds = 0;
+    return true;
 }
 
 void UReditusSequenceSkipSubsystem::ShowBlockedNotice()
 {
-    if (!NoticeWidget)
-    {
-        auto* Player = UGameplayStatics::GetPlayerController(GetTickableGameObjectWorld(), 0);
-        NoticeWidget = Player ? CreateWidget<UReditusSequenceSkipNotice>(Player) : nullptr;
-        if (NoticeWidget)
-        {
-            NoticeWidget->AddToViewport(1000);
-        }
-    }
-    if (NoticeWidget) NoticeWidget->SetMessage(NSLOCTEXT("ReditusSequence", "SkipBlocked", "This scene can't be skipped."));
+    if (auto* Notice = EnsureNoticeWidget())
+        Notice->SetMessage(NSLOCTEXT("ReditusSequence", "SkipBlocked", "This scene can't be skipped."));
     bShowingProgress = false;
     NoticeSeconds = 2;
 }
 
 void UReditusSequenceSkipSubsystem::ShowHoldProgress(float Progress)
 {
-    if (!NoticeWidget)
-    {
-        auto* Player = UGameplayStatics::GetPlayerController(GetTickableGameObjectWorld(), 0);
-        NoticeWidget = Player ? CreateWidget<UReditusSequenceSkipNotice>(Player) : nullptr;
-        if (NoticeWidget) NoticeWidget->AddToViewport(1000);
-    }
-    if (NoticeWidget) NoticeWidget->SetProgress(Progress);
+    if (auto* Notice = EnsureNoticeWidget()) Notice->SetProgress(Progress);
     bShowingProgress = true;
 }
 
 void UReditusSequenceSkipSubsystem::HideHoldProgress()
 {
     if (!bShowingProgress) return;
+    bShowingProgress = false;
+    if (ShowSkipPrompt()) return;
     if (NoticeWidget) NoticeWidget->RemoveFromParent();
     NoticeWidget = nullptr;
-    bShowingProgress = false;
 }
 
 void UReditusSequenceSkipSubsystem::SetAutoAdvance(UMovieSceneSequencePlayer* Player, bool Enabled)
@@ -300,6 +376,32 @@ void UReditusSequenceSkipSubsystem::DismissSequenceDialogue()
     if (auto* Field = FindFProperty<FObjectPropertyBase>(Controller->GetClass(), TEXT("DialogueWidget")))
         if (Field->GetObjectPropertyValue_InContainer(Controller) == Dialogue)
             Field->SetObjectPropertyValue_InContainer(Controller, nullptr);
+}
+
+void UReditusSequenceSkipSubsystem::RestoreGameplayInput()
+{
+    auto* Controller = PendingInputController.Get();
+    PendingInputController.Reset();
+    UWorld* World = GetTickableGameObjectWorld();
+    if (!IsValid(Controller) || !World || World->bIsTearingDown || Controller->GetWorld() != World
+        || !Controller->IsLocalController() || UGameplayStatics::GetPlayerController(World, 0) != Controller
+        || IsValid(SequenceActor) || FindSequencePlayer(Controller) || !ReditusQuestSequenceGate::IsExploring(Controller)
+        || UGameplayStatics::IsGamePaused(World)) return;
+
+    const auto* Dialogue = Cast<UUserWidget>(ReditusQuestNPCReflection::ReadObject(Controller, TEXT("DialogueWidget")));
+    if (IsValid(Dialogue) && Dialogue->IsInViewport() && Dialogue->IsVisible()) return;
+    // Respect an input lock newly taken by the authored handoff.
+    const bool bLegacyBlocked = IsLegacyInputBlocked(Controller);
+    if (bLegacyBlocked && !bRestoreLegacyInput) return;
+    if (bLegacyBlocked) UnblockLegacyInput(Controller);
+    if (bRestoreMoveInput && Controller->IsMoveInputIgnored()) Controller->SetIgnoreMoveInput(false);
+    if (bRestoreLookInput && Controller->IsLookInputIgnored()) Controller->SetIgnoreLookInput(false);
+
+    // Restore focus after the finish graph and teardown of the old UI.
+    Controller->EnableInput(Controller);
+    Controller->SetInputMode(FInputModeGameOnly());
+    UE_LOG(LogReditusSequenceSkip, Display, TEXT("Restored skip input: move ignored=%d, look ignored=%d, Blueprint blocked=%d."),
+        Controller->IsMoveInputIgnored(), Controller->IsLookInputIgnored(), IsLegacyInputBlocked(Controller));
 }
 
 bool UReditusSequenceSkipSubsystem::BeginAttempt()
@@ -371,8 +473,9 @@ void UReditusSequenceSkipSubsystem::Tick(float DeltaTime)
     LastTime = Now;
     if (NoticeWidget && !bShowingProgress)
     {
-        NoticeSeconds -= Delta;
-        if (NoticeSeconds <= 0 || NoticeWidget->GetWorld() != GetTickableGameObjectWorld())
+        const bool bTimedNotice = NoticeSeconds > 0;
+        if (bTimedNotice) NoticeSeconds -= Delta;
+        if ((bTimedNotice && NoticeSeconds <= 0) || NoticeWidget->GetWorld() != GetTickableGameObjectWorld())
         {
             NoticeWidget->RemoveFromParent();
             NoticeWidget = nullptr;
@@ -380,7 +483,24 @@ void UReditusSequenceSkipSubsystem::Tick(float DeltaTime)
     }
     if (bAutoAdvance && !IsAutoAdvanceEnabled(AutoSequence.Get()))
         SetAutoAdvance(nullptr, false);
-    if (SequenceActor && !HasActiveSequence()) ClearSequence();
+    UWorld* World = GetTickableGameObjectWorld();
+    auto* Controller = UGameplayStatics::GetPlayerController(World, 0);
+    auto* CurrentActor = ControllerSequenceActor(Controller);
+    if (SequenceActor && (!IsValid(SequenceActor) || SequenceActor->GetWorld() != World || !IsValid(SequencePlayer)
+        || (bUsesControllerSequence && CurrentActor != SequenceActor) || (bPlaybackStarted && !HasActiveSequence())))
+        ClearSequence();
+    if (HasActiveSequence())
+    {
+        bPlaybackStarted = true;
+        if (!IsValid(NoticeWidget) || !NoticeWidget->IsInViewport()) ShowSkipPrompt();
+    }
+    else if (IsValid(CurrentActor) && CurrentActor != LastUnregisteredSequence.Get()
+        && FindSequencePlayer(Controller))
+    {
+        LastUnregisteredSequence = CurrentActor;
+        UE_LOG(LogReditusSequenceSkip, Warning, TEXT("%s started without Configure Level Sequence Skipping."), *GetNameSafe(CurrentActor));
+    }
+    if (PendingInputController.IsValid()) RestoreGameplayInput();
     UpdateDialogueContinuation();
     if (!CanCapture())
     {
@@ -406,29 +526,54 @@ void UReditusSequenceSkipSubsystem::Tick(float DeltaTime)
         ShowBlockedNotice();
         return;
     }
-    // Jump avoids replaying every intervening dialogue cue. Stop alone never
-    // invokes OnFinished, so use the scene's explicitly supplied handoff once.
+    // Take a snapshot of the original finish bindings after releasing our own
+    // observer. A Stop or dialogue callback can configure the next scene.
     auto Handoff = OnSkipped;
     auto* Player = SequencePlayer;
-    DismissSequenceDialogue();
+    const TWeakObjectPtr<APlayerController> SkipController(Controller);
+    const bool bRestoreNativeMove = bSequenceMayOwnMoveLock;
+    const bool bRestoreNativeLook = bSequenceMayOwnLookLock;
     ClearSequence();
+    auto Finished = Player->OnFinished;
+    const bool bUseFinishBinding = Finished.Contains(Handoff);
+    DismissSequenceDialogue();
     FMovieSceneSequencePlaybackParams EndPosition;
-    // The upper bound is exclusive. Stay on the last visible frame so a
-    // natural-finish callback cannot also execute the authored skip handoff.
-    EndPosition.Frame = FMath::Max(Player->GetStartTime().Time,
-        Player->GetEndTime().Time - FFrameTime(FFrameNumber(1)));
-    EndPosition.PositionType = EMovieScenePositionType::Frame;
-    EndPosition.UpdateMethod = EUpdatePositionMethod::Jump;
-    Player->SetPlaybackPosition(EndPosition);
-    if (IsValid(Player)) Player->StopAtCurrentTime();
-    Handoff.ExecuteIfBound();
+    if (IsValid(Player))
+    {
+        // Jump to a frame inside the playback range. Stop issues OnStop, so
+        // the original finish bindings can run once after playback is stopped.
+        EndPosition.Frame = FMath::Max(Player->GetStartTime().Time,
+            Player->GetEndTime().Time - FFrameTime(FFrameNumber(1)));
+        EndPosition.PositionType = EMovieScenePositionType::Frame;
+        EndPosition.UpdateMethod = EUpdatePositionMethod::Jump;
+        Player->SetPlaybackPosition(EndPosition);
+        if (IsValid(Player)) Player->StopAtCurrentTime();
+    }
+    // Only release a movement/look lock still present after Stop. A new lock
+    // taken inside the handoff can then keep its own input state.
+    const bool bRestoreMove = bRestoreNativeMove && SkipController.IsValid() && SkipController->IsMoveInputIgnored();
+    const bool bRestoreLook = bRestoreNativeLook && SkipController.IsValid() && SkipController->IsLookInputIgnored();
+    const bool bRestoreBlueprint = IsLegacyInputBlocked(SkipController.Get());
+    if (bUseFinishBinding) Finished.Broadcast();
+    else Handoff.ExecuteIfBound();
+    if (!IsValid(SequenceActor) && World == GetTickableGameObjectWorld() && SkipController.IsValid())
+    {
+        PendingInputController = SkipController;
+        bRestoreLegacyInput = bRestoreBlueprint;
+        bRestoreMoveInput = bRestoreMove;
+        bRestoreLookInput = bRestoreLook;
+    }
 }
 
 bool UReditusSequenceSkipLibrary::ConfigureLevelSequenceSkipping(const UObject* WorldContextObject,
     ALevelSequenceActor* SequenceActor, FReditusSequenceSkipHandoff OnSkipped, bool AllowSkip)
 {
     if (!SequenceActor)
-        SequenceActor = ControllerSequenceActor(Cast<APlayerController>(WorldContextObject));
+    {
+        const auto* Controller = Cast<APlayerController>(WorldContextObject);
+        if (!Controller) Controller = UGameplayStatics::GetPlayerController(WorldContextObject, 0);
+        SequenceActor = ControllerSequenceActor(Controller);
+    }
     auto* Instance = UGameplayStatics::GetGameInstance(WorldContextObject);
     auto* System = Instance ? Instance->GetSubsystem<UReditusSequenceSkipSubsystem>() : nullptr;
     return System && System->Configure(SequenceActor, AllowSkip, OnSkipped);

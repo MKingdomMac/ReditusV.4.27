@@ -1,0 +1,872 @@
+#include "Blueprint/WidgetTree.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/Image.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphPin.h"
+#include "EdGraphSchema_K2.h"
+#include "Editor.h"
+#include "Engine/Blueprint.h"
+#include "HAL/IConsoleManager.h"
+#include "K2Node_BreakStruct.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_IfThenElse.h"
+#include "K2Node_Knot.h"
+#include "K2Node_MacroInstance.h"
+#include "K2Node_VariableGet.h"
+#include "Kismet/KismetSystemLibrary.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
+#include "KismetCompiler.h"
+#include "Modules/ModuleManager.h"
+#include "ScopedTransaction.h"
+#include "UObject/UnrealType.h"
+#include "WidgetBlueprint.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogReditusBlueprintRepair, Log, All);
+
+namespace ReditusBlueprintRepair
+{
+    constexpr const TCHAR* LevelSnapshotComment = TEXT("Record party levels before awarding EXP");
+
+    UBlueprint* Load(const TCHAR* RelativePath)
+    {
+        const FString Path = FString(TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/")) + RelativePath;
+        return LoadObject<UBlueprint>(nullptr, *Path);
+    }
+
+    template<typename NodeType = UEdGraphNode>
+    NodeType* Find(UBlueprint* Blueprint, const TCHAR* GraphName, const TCHAR* GuidText)
+    {
+        FGuid Guid;
+        if (!Blueprint || !FGuid::Parse(FString(GuidText), Guid))
+        {
+            return nullptr;
+        }
+        TArray<UEdGraph*> Graphs;
+        Blueprint->GetAllGraphs(Graphs);
+        for (UEdGraph* Graph : Graphs)
+        {
+            if (Graph && Graph->GetFName() == FName(GraphName))
+            {
+                for (UEdGraphNode* Node : Graph->Nodes)
+                {
+                    if (Node && Node->NodeGuid == Guid)
+                    {
+                        return Cast<NodeType>(Node);
+                    }
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    UEdGraphNode* EventNode(UBlueprint* Blueprint, const TCHAR* Guid)
+    {
+        return Find(Blueprint, TEXT("EventGraph"), Guid);
+    }
+
+    UEdGraphPin* Pin(UEdGraphNode* Node, FName Name)
+    {
+        UEdGraphPin* Result = Node ? Node->FindPin(Name) : nullptr;
+        return Result && !Result->bOrphanedPin ? Result : nullptr;
+    }
+
+    UEdGraphPin* Out(UEdGraphPin* Pin)
+    {
+        return Pin && Pin->LinkedTo.Num() == 1 ? Pin->LinkedTo[0] : nullptr;
+    }
+
+    UEdGraphNode* Owner(UEdGraphPin* Pin)
+    {
+        return Pin ? Pin->GetOwningNode() : nullptr;
+    }
+
+    UEdGraphPin* Source(UEdGraphPin* Input)
+    {
+        UEdGraphPin* Output = Out(Input);
+        while (Cast<UK2Node_Knot>(Owner(Output)))
+        {
+            Output = Out(Pin(Owner(Output), TEXT("InputPin")));
+        }
+        return Output;
+    }
+
+    bool Link(UEdGraphPin* Output, UEdGraphPin* Input)
+    {
+        if (Output && Input && Output->LinkedTo.Contains(Input))
+        {
+            return true;
+        }
+        if (Output && Input && Output->Direction == EGPD_Output && Input->Direction == EGPD_Input &&
+            Owner(Output)->GetGraph() == Owner(Input)->GetGraph())
+        {
+            Owner(Output)->Modify();
+            Owner(Input)->Modify();
+            for (UEdGraphPin* Previous : Input->LinkedTo)
+            {
+                Owner(Previous)->Modify();
+            }
+            const UEdGraphSchema* Schema = Owner(Output)->GetGraph()->GetSchema();
+            if (Schema && Schema->TryCreateConnection(Output, Input))
+            {
+                return true;
+            }
+        }
+        UE_LOG(LogReditusBlueprintRepair, Error, TEXT("Cannot wire %s to %s."),
+            Output ? *Output->PinName.ToString() : TEXT("(missing output)"),
+            Input ? *Input->PinName.ToString() : TEXT("(missing input)"));
+        return false;
+    }
+
+    void Unlink(UEdGraphPin* Output, UEdGraphPin* Input)
+    {
+        Owner(Output)->Modify();
+        Owner(Input)->Modify();
+        Output->BreakLinkTo(Input);
+    }
+
+    template<typename T, typename Setup>
+    T* AddNode(UEdGraph* Graph, int32 X, int32 Y, Setup Configure)
+    {
+        Graph->Modify();
+        FGraphNodeCreator<T> Creator(*Graph);
+        T* Node = Creator.CreateNode(false);
+        Node->NodePosX = X;
+        Node->NodePosY = Y;
+        Node->SetFlags(RF_Transactional);
+        Configure(Node);
+        Creator.Finalize();
+        return Node;
+    }
+
+    UK2Node_CallFunction* Call(UEdGraph* Graph, UFunction* Function, int32 X, int32 Y)
+    {
+        return Function ? AddNode<UK2Node_CallFunction>(Graph, X, Y,
+            [Function](UK2Node_CallFunction* Node) { Node->SetFromFunction(Function); }) : nullptr;
+    }
+
+    UFunction* Function(UEdGraphNode* Node)
+    {
+        auto* CallNode = Cast<UK2Node_CallFunction>(Node);
+        return CallNode ? CallNode->GetTargetFunction() : nullptr;
+    }
+
+    bool Calls(UEdGraphNode* Node, FName Name)
+    {
+        const auto* CallNode = Cast<UK2Node_CallFunction>(Node);
+        return CallNode && CallNode->FunctionReference.GetMemberName() == Name;
+    }
+
+    UK2Node_MacroInstance* Macro(UEdGraph* Graph, UEdGraph* MacroGraph, int32 X, int32 Y)
+    {
+        return MacroGraph ? AddNode<UK2Node_MacroInstance>(Graph, X, Y,
+            [MacroGraph](UK2Node_MacroInstance* Node) { Node->SetMacroGraph(MacroGraph); }) : nullptr;
+    }
+
+    UEdGraphPin* Field(UEdGraphNode* Node, const TCHAR* Name)
+    {
+        if (Node)
+        {
+            const FString Prefix = FString(Name) + TEXT("_");
+            for (UEdGraphPin* Candidate : Node->Pins)
+            {
+                if (Candidate && !Candidate->bOrphanedPin && Candidate->Direction == EGPD_Output &&
+                    (Candidate->PinName == FName(Name) || Candidate->PinName.ToString().StartsWith(Prefix)))
+                {
+                    return Candidate;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    bool RepairExpBar(UBlueprint* Blueprint)
+    {
+        auto* NextLevel = EventNode(Blueprint, TEXT("9E6F82D7484BE610258938B322D2F20A"));
+        auto* CurrentLevel = EventNode(Blueprint, TEXT("CDFAD25F4684A2A42D5165A54D0EB64D"));
+        auto* NextExponent = Pin(NextLevel, TEXT("exponent"));
+        auto* Exponent = Out(Pin(CurrentLevel, TEXT("exponent")));
+        if (!Calls(NextLevel, TEXT("GetExp")) || !Calls(CurrentLevel, TEXT("GetExp")) || !NextExponent || !Exponent)
+        {
+            return false;
+        }
+        if (NextExponent->LinkedTo.Num() == 0)
+        {
+            return Link(Exponent, NextExponent);
+        }
+        auto* NextSource = Source(NextExponent);
+        auto* CurrentSource = Source(Pin(CurrentLevel, TEXT("exponent")));
+        if (NextSource == CurrentSource)
+        {
+            return true;
+        }
+        auto* NextRow = Cast<UK2Node_BreakStruct>(Owner(NextSource));
+        auto* CurrentRow = Cast<UK2Node_BreakStruct>(Owner(CurrentSource));
+        return NextRow && CurrentRow && NextSource->PinName == CurrentSource->PinName &&
+            NextRow->StructType && NextRow->StructType == CurrentRow->StructType &&
+            Source(Pin(NextRow, NextRow->StructType->GetFName())) ==
+                Source(Pin(CurrentRow, CurrentRow->StructType->GetFName()));
+    }
+
+    UImage* GetPortrait(UWidgetBlueprint* Blueprint)
+    {
+        UWidgetTree* Tree = Blueprint->WidgetTree;
+        if (!Tree)
+        {
+            return nullptr;
+        }
+        const TCHAR* Names[] = {
+            TEXT("ReditusUnitPortrait"), TEXT("UnitPortrait"), TEXT("UnitImage"), TEXT("UnitThumbnail"),
+            TEXT("CharacterPortrait"), TEXT("PortraitImage")
+        };
+        for (const TCHAR* Name : Names)
+        {
+            if (auto* Image = Cast<UImage>(Tree->FindWidget(FName(Name))))
+            {
+                return Image;
+            }
+        }
+
+        // Use the outermost canvas containing the title for the header portrait.
+        auto* Canvas = Cast<UCanvasPanel>(Tree->RootWidget);
+        if (UWidget* Title = Tree->FindWidget(TEXT("UnitNameText")))
+        {
+            for (UPanelWidget* Parent = Title->GetParent(); Parent; Parent = Parent->GetParent())
+            {
+                if (auto* TitleCanvas = Cast<UCanvasPanel>(Parent))
+                {
+                    Canvas = TitleCanvas;
+                }
+            }
+        }
+        if (!Canvas || Tree->FindWidget(FName(Names[0])))
+        {
+            return nullptr;
+        }
+        Tree->Modify();
+        Canvas->Modify();
+        auto* Image = Tree->ConstructWidget<UImage>(UImage::StaticClass(), FName(Names[0]));
+        Image->SetFlags(RF_Transactional);
+        Image->SetVisibility(ESlateVisibility::HitTestInvisible);
+        auto* Slot = Canvas->AddChildToCanvas(Image);
+        Slot->SetAnchors(FAnchors(0.5f, 0.045f));
+        Slot->SetAlignment(FVector2D(0.5f, 0.5f));
+        Slot->SetPosition(FVector2D::ZeroVector);
+        Slot->SetSize(FVector2D(56.0f, 56.0f));
+        return Image;
+    }
+
+    bool RepairPortrait(UBlueprint* Blueprint, UEdGraphNode* NameText, UEdGraphNode* Stats)
+    {
+        auto* Before = Pin(NameText, TEXT("then"));
+        auto* After = Pin(Stats, TEXT("execute"));
+        if (auto* Existing = Owner(Out(Before)))
+        {
+            if (Calls(Existing, TEXT("SetBrushFromTexture")) && Out(Pin(Existing, TEXT("then"))) == After &&
+                Out(Pin(Existing, TEXT("Texture"))))
+            {
+                return true;
+            }
+        }
+        if (!Before || !After || Out(Before) != After)
+        {
+            return false;
+        }
+        auto* Texture = Field(EventNode(Blueprint, TEXT("A94C38CA44794D01740FBD9F6D13641D")), TEXT("thumbnail"));
+        auto* WidgetBlueprint = Cast<UWidgetBlueprint>(Blueprint);
+        auto* Image = WidgetBlueprint && Texture ? GetPortrait(WidgetBlueprint) : nullptr;
+        if (!Image)
+        {
+            UE_LOG(LogReditusBlueprintRepair, Warning, TEXT("No portrait target in BP_UnitDetails. Add an Image named UnitPortrait in the Designer and rerun the repair to attach the thumbnail."));
+            return true;
+        }
+        const FName ImageName = Image->GetFName();
+        auto* IsVariable = FindFProperty<FBoolProperty>(UWidget::StaticClass(), TEXT("bIsVariable"));
+        if (!IsVariable)
+        {
+            return false;
+        }
+        if (!IsVariable->GetPropertyValue_InContainer(Image) || !Blueprint->SkeletonGeneratedClass ||
+            !FindFProperty<FObjectPropertyBase>(Blueprint->SkeletonGeneratedClass, ImageName))
+        {
+            Image->Modify();
+            IsVariable->SetPropertyValue_InContainer(Image, true);
+            FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+            Before = Pin(NameText, TEXT("then"));
+            After = Pin(Stats, TEXT("execute"));
+            Texture = Field(EventNode(Blueprint, TEXT("A94C38CA44794D01740FBD9F6D13641D")), TEXT("thumbnail"));
+            if (!Before || !After || Out(Before) != After)
+            {
+                return false;
+            }
+        }
+
+        UEdGraph* Graph = NameText->GetGraph();
+        auto* Get = AddNode<UK2Node_VariableGet>(Graph, NameText->NodePosX + 60, NameText->NodePosY + 520,
+            [ImageName](UK2Node_VariableGet* Node) { Node->VariableReference.SetSelfMember(ImageName); });
+        auto* Brush = Call(Graph, UImage::StaticClass()->FindFunctionByName(TEXT("SetBrushFromTexture")),
+            NameText->NodePosX + 280, NameText->NodePosY + 490);
+        if (!Link(Pin(Get, ImageName), Pin(Brush, TEXT("self"))) || !Link(Texture, Pin(Brush, TEXT("Texture"))))
+        {
+            return false;
+        }
+        Unlink(Before, After);
+        return Link(Before, Pin(Brush, TEXT("execute"))) && Link(Pin(Brush, TEXT("then")), After);
+    }
+
+    bool RepairDetails(UBlueprint* Blueprint)
+    {
+        auto* Construct = EventNode(Blueprint, TEXT("BE061043452C96BC58D26E949BD32B9B"));
+        auto* Focus = EventNode(Blueprint, TEXT("0017FA554FF4ACDABDC3C3AC9B0ECE09"));
+        auto* ShowDetails = EventNode(Blueprint, TEXT("1F2FA6EA402DB1AF70DDFEA8C01AEDF5"));
+        auto* CurrentID = Pin(EventNode(Blueprint, TEXT("2429245348F38E8D1F8E9490F50BCC7F")), TEXT("CharacterID"));
+        auto* Data = Pin(EventNode(Blueprint, TEXT("BDFE164243D63B753B35B7912E6DC546")), TEXT("playerUnitData"));
+        auto* Begin = Pin(Construct, TEXT("then"));
+        auto* FocusIn = Pin(Focus, TEXT("execute"));
+        if (!Begin || !FocusIn || !CurrentID || !Data || !Calls(ShowDetails, TEXT("ShowUnitDetails")))
+        {
+            return false;
+        }
+        UEdGraph* Graph = Construct->GetGraph();
+        if (Out(Begin) == FocusIn)
+        {
+            auto* Refresh = Call(Graph, Function(ShowDetails), Construct->NodePosX + 260, Construct->NodePosY - 360);
+            if (!Link(CurrentID, Pin(Refresh, TEXT("CharacterID"))) || !Link(Data, Pin(Refresh, TEXT("playerUnitData"))))
+            {
+                return false;
+            }
+            Unlink(Begin, FocusIn);
+            if (!Link(Begin, Pin(Refresh, TEXT("execute"))))
+            {
+                return false;
+            }
+        }
+        else if (!Calls(Owner(Out(Begin)), TEXT("ShowUnitDetails")))
+        {
+            return false;
+        }
+
+        auto* EquipmentDone = Pin(EventNode(Blueprint, TEXT("F2BA350944A515BFFC41A3AE83AF13A9")), TEXT("then"));
+        auto* RowCore = EventNode(Blueprint, TEXT("D65773814C4A5CFFB386F1909956B10F"));
+        auto* RowCoreExec = Pin(RowCore, TEXT("execute"));
+        if (!EquipmentDone || !RowCoreExec || !Calls(RowCore, TEXT("UpdateCore")))
+        {
+            return false;
+        }
+        if (Out(EquipmentDone) == RowCoreExec)
+        {
+            auto* StructType = Cast<UScriptStruct>(Data->PinType.PinSubCategoryObject.Get());
+            if (!StructType || StructType->GetFName() != FName(TEXT("S_PlayerUnitData")))
+            {
+                return false;
+            }
+            auto* DataFields = AddNode<UK2Node_BreakStruct>(Graph, -800, -455,
+                [StructType](UK2Node_BreakStruct* Node) { Node->StructType = StructType; });
+            if (!Link(Data, Pin(DataFields, StructType->GetFName())))
+            {
+                return false;
+            }
+            struct FEquipmentSlot { const TCHAR* FieldName; const TCHAR* Guid; };
+            const FEquipmentSlot Slots[] = {
+                { TEXT("Weapon"), TEXT("36F2072A49E639BACD9FA6AD2FEEA6B3") },
+                { TEXT("Armor"), TEXT("CB8EF0364AC798D1BB4ACFBBEAF6A988") },
+                { TEXT("Accessory"), TEXT("E28E73254BDF586456C0EC90AC989251") },
+                { TEXT("Helm"), TEXT("3CE698F14686161632E87999F391B76F") },
+                { TEXT("Boots"), TEXT("256622FB4D8C835224FC5FA7273D1413") }
+            };
+            for (const FEquipmentSlot& Slot : Slots)
+            {
+                auto* Display = EventNode(Blueprint, Slot.Guid);
+                if (!Calls(Display, TEXT("ShowUnitEquipment")) ||
+                    !Link(Field(DataFields, Slot.FieldName), Pin(Display, TEXT("equipment"))))
+                {
+                    return false;
+                }
+            }
+            auto* HasCore = AddNode<UK2Node_IfThenElse>(Graph, RowCore->NodePosX - 200, RowCore->NodePosY - 255,
+                [](UK2Node_IfThenElse*) {});
+            auto* InstalledCore = Call(Graph, Function(RowCore), RowCore->NodePosX, RowCore->NodePosY - 315);
+            if (!Link(Field(DataFields, TEXT("IsCoreInstalled")), Pin(HasCore, TEXT("Condition"))) ||
+                !Link(Field(DataFields, TEXT("CurrentUnitAffinity")), Pin(InstalledCore, TEXT("ElementAffinity"))) ||
+                !Link(Out(Pin(RowCore, TEXT("self"))), Pin(InstalledCore, TEXT("self"))))
+            {
+                return false;
+            }
+            Unlink(EquipmentDone, RowCoreExec);
+            if (!Link(EquipmentDone, Pin(HasCore, TEXT("execute"))) ||
+                !Link(Pin(HasCore, TEXT("then")), Pin(InstalledCore, TEXT("execute"))) ||
+                !Link(Pin(HasCore, TEXT("else")), RowCoreExec))
+            {
+                return false;
+            }
+        }
+        else if (!Cast<UK2Node_IfThenElse>(Owner(Out(EquipmentDone))) ||
+            Out(Pin(Owner(Out(EquipmentDone)), TEXT("else"))) != RowCoreExec)
+        {
+            return false;
+        }
+
+        auto* SetTexture = EventNode(Blueprint, TEXT("974EE30F4AB55F8337B2C09A8B56DCCA"));
+        auto* SetSprite = EventNode(Blueprint, TEXT("B92752BB4F681D63ABEAC6A5E91705A9"));
+        auto* BeforeSprite = Pin(SetTexture, TEXT("then"));
+        auto* SpriteExec = Pin(SetSprite, TEXT("execute"));
+        if (!BeforeSprite || !SpriteExec)
+        {
+            return false;
+        }
+        if (Out(BeforeSprite) == SpriteExec)
+        {
+            auto* SpriteBrush = EventNode(Blueprint, TEXT("875BD54A4CE6570A6ADD6B8DA4B1E276"));
+            auto* Valid = Call(Graph, UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("IsValid")),
+                SetSprite->NodePosX - 255, SetSprite->NodePosY - 430);
+            auto* HasSprite = AddNode<UK2Node_IfThenElse>(Graph, SetSprite->NodePosX - 230, SetSprite->NodePosY - 230,
+                [](UK2Node_IfThenElse*) {});
+            if (!Link(Out(Pin(SpriteBrush, TEXT("Sprite"))), Pin(Valid, TEXT("Object"))) ||
+                !Link(Pin(Valid, TEXT("ReturnValue")), Pin(HasSprite, TEXT("Condition"))))
+            {
+                return false;
+            }
+            Unlink(BeforeSprite, SpriteExec);
+            if (!Link(BeforeSprite, Pin(HasSprite, TEXT("execute"))) || !Link(Pin(HasSprite, TEXT("then")), SpriteExec))
+            {
+                return false;
+            }
+        }
+        else if (!Cast<UK2Node_IfThenElse>(Owner(Out(BeforeSprite))) ||
+            Out(Pin(Owner(Out(BeforeSprite)), TEXT("then"))) != SpriteExec)
+        {
+            return false;
+        }
+
+        return RepairPortrait(Blueprint,
+            EventNode(Blueprint, TEXT("F34639914F54500AEFC8748A8D7CB8EC")),
+            EventNode(Blueprint, TEXT("6E289D9E46F6CBAF5B37B6B0E2928766")));
+    }
+
+    struct FAffinityCase
+    {
+        UEdGraphNode* Branch;
+        UEdGraphNode* Comparison;
+    };
+
+    struct FAffinityBranch
+    {
+        UEdGraphNode* Art = nullptr;
+        const TCHAR* Element = nullptr;
+        TArray<FAffinityCase> Cases;
+    };
+
+    const TCHAR* const ResponseNames[] = {
+        TEXT("Normal"), TEXT("Weak"), TEXT("Resist"), TEXT("Null"), TEXT("Absorb")
+    };
+
+    bool FindIcons(FAffinityBranch& Group)
+    {
+        const float Multipliers[] = {1.0f, 1.5f, 0.5f, 0.0f, -1.0f};
+        UEdGraphPin* Next = Out(Pin(Group.Art, TEXT("then")));
+        for (int32 Index = 0; Index < UE_ARRAY_COUNT(Multipliers); ++Index)
+        {
+            auto* Branch = Cast<UK2Node_IfThenElse>(Owner(Next));
+            auto* Test = Owner(Out(Pin(Branch, TEXT("Condition"))));
+            auto* A = Pin(Test, TEXT("A"));
+            auto* B = Pin(Test, TEXT("B"));
+            auto* TestResult = Pin(Test, TEXT("ReturnValue"));
+            auto* Icon = Out(Pin(Branch, TEXT("then")));
+            auto* IconDone = Pin(Owner(Icon), TEXT("then"));
+            if (!Branch || !A || !B || A->PinType.PinCategory != UEdGraphSchema_K2::PC_Float ||
+                A->LinkedTo.Num() || FCString::Atof(*A->DefaultValue) != 0.0f || B->LinkedTo.Num() ||
+                FCString::Atof(*B->DefaultValue) != Multipliers[Index] ||
+                Next->LinkedTo.Num() != 1 || !Calls(Owner(Icon), TEXT("SetBrush")) || Icon->LinkedTo.Num() != 1 ||
+                !IconDone || IconDone->LinkedTo.Num() || !TestResult || TestResult->LinkedTo.Num() != 1)
+            {
+                return false;
+            }
+            Group.Cases.Add({Branch, Test});
+            Next = Out(Pin(Branch, TEXT("else")));
+        }
+        return Next == nullptr;
+    }
+
+    bool SetEnumLiteral(const UEdGraphSchema_K2* Schema, UEdGraphPin* Input, UEnum* Enum, const TCHAR* Name)
+    {
+        const int64 Value = Enum->GetValueByNameString(Name);
+        if (!Input || Value == INDEX_NONE || Input->PinType.PinSubCategoryObject.Get() != Enum)
+        {
+            return false;
+        }
+
+        Schema->TrySetDefaultValue(*Input, Name);
+        if (Enum->GetValueByNameString(Input->DefaultValue) != Value)
+        {
+            Schema->TrySetDefaultValue(*Input, Enum->GetNameByValue(Value).ToString());
+        }
+        return Enum->GetValueByNameString(Input->DefaultValue) == Value;
+    }
+
+    bool RepairResistanceIcons(UBlueprint* Blueprint)
+    {
+        auto* Elements = EventNode(Blueprint, TEXT("CCCEB57F4BA66313C05C669848E7EBA3"));
+        auto* Map = Pin(EventNode(Blueprint, TEXT("AF90118048B8457323A845822F0A14E1")), TEXT("RobotCore"));
+        auto* Rules = FindObject<UClass>(nullptr, TEXT("/Script/Chapter1Reditus.ReditusElementDamageRules"));
+        auto* Resolve = Rules ? Rules->FindFunctionByName(TEXT("GetElementResponse")) : nullptr;
+        auto* ResponseEnum = FindObject<UEnum>(nullptr, TEXT("/Script/Chapter1Reditus.EReditusElementResponse"));
+        auto* ElementEnum = Map ? Cast<UEnum>(Map->PinType.PinSubCategoryObject.Get()) : nullptr;
+        // Use the stock Blueprint node through reflection. No switch setup API is needed.
+        auto* EnumEqualityClass = FindObject<UClass>(nullptr, TEXT("/Script/BlueprintGraph.K2Node_EnumEquality"));
+        if (!Elements || !Map || !Resolve || !ResponseEnum || !ElementEnum || !EnumEqualityClass ||
+            Map->PinType.ContainerType != EPinContainerType::Map)
+        {
+            return false;
+        }
+        struct FElement { const TCHAR* Case; const TCHAR* Element; };
+        const FElement Cases[] = {
+            { TEXT("NewEnumerator11"), TEXT("Phys") }, { TEXT("NewEnumerator3"), TEXT("Water") },
+            { TEXT("NewEnumerator4"), TEXT("Earth") }, { TEXT("NewEnumerator5"), TEXT("Fire") },
+            { TEXT("NewEnumerator7"), TEXT("Wind") }, { TEXT("NewEnumerator9"), TEXT("Dark") },
+            { TEXT("NewEnumerator10"), TEXT("Holy") }, { TEXT("NewEnumerator12"), TEXT("Spirit") },
+            { TEXT("NewEnumerator13"), TEXT("Lightning") }
+        };
+        TArray<FAffinityBranch> Groups;
+        for (const FElement& Case : Cases)
+        {
+            auto* Art = Owner(Out(Pin(Elements, Case.Case)));
+            while (Cast<UK2Node_Knot>(Art) || Calls(Art, TEXT("PrintString")))
+            {
+                const FName Output = Cast<UK2Node_Knot>(Art) ? FName(TEXT("OutputPin")) : FName(TEXT("then"));
+                Art = Owner(Out(Pin(Art, Output)));
+            }
+            if (!Calls(Art, TEXT("SetBrush")))
+            {
+                return false;
+            }
+            auto* FirstBranch = Owner(Out(Pin(Art, TEXT("then"))));
+            auto* Equality = Owner(Out(Pin(FirstBranch, TEXT("Condition"))));
+            if (Equality && Equality->IsA(EnumEqualityClass) && Function(Owner(Out(Pin(Equality, TEXT("A"))))) == Resolve)
+            {
+                continue;
+            }
+            FAffinityBranch& Group = Groups.AddDefaulted_GetRef();
+            Group.Art = Art;
+            Group.Element = Case.Element;
+            if (!FindIcons(Group))
+            {
+                return false;
+            }
+        }
+
+        UEdGraph* Graph = Elements->GetGraph();
+        const auto* Schema = Cast<UEdGraphSchema_K2>(Graph->GetSchema());
+        if (!Schema)
+        {
+            return false;
+        }
+        Graph->Modify();
+        for (const FAffinityBranch& Group : Groups)
+        {
+            auto* Lookup = Call(Graph, Resolve, Group.Art->NodePosX + 260, Group.Art->NodePosY + 170);
+            if (!SetEnumLiteral(Schema, Pin(Lookup, TEXT("Element")), ElementEnum, Group.Element) ||
+                !Link(Map, Pin(Lookup, TEXT("ElementResponses"))))
+            {
+                return false;
+            }
+            for (int32 Index = 0; Index < UE_ARRAY_COUNT(ResponseNames); ++Index)
+            {
+                const auto& Case = Group.Cases[Index];
+                auto* Equality = NewObject<UEdGraphNode>(Graph, EnumEqualityClass, NAME_None, RF_Transactional);
+                Equality->NodePosX = Case.Comparison->NodePosX;
+                Equality->NodePosY = Case.Comparison->NodePosY;
+                Graph->AddNode(Equality, false, false);
+                Equality->CreateNewGuid();
+                Equality->PostPlacedNewNode();
+                Equality->AllocateDefaultPins();
+                if (!Link(Pin(Lookup, TEXT("ReturnValue")), Pin(Equality, TEXT("A"))) ||
+                    !SetEnumLiteral(Schema, Pin(Equality, TEXT("B")), ResponseEnum, ResponseNames[Index]) ||
+                    !Link(Pin(Equality, TEXT("ReturnValue")), Pin(Case.Branch, TEXT("Condition"))))
+                {
+                    return false;
+                }
+                Graph->RemoveNode(Case.Comparison);
+            }
+        }
+        return true;
+    }
+
+    bool GuardContinue(UEdGraph* DoOnce, UEdGraphPin* Destination, const TArray<UEdGraphPin*>& Sources)
+    {
+        if (!DoOnce || !Destination)
+        {
+            return false;
+        }
+        if (auto* Existing = Cast<UK2Node_MacroInstance>(Owner(Out(Destination))))
+        {
+            if (Existing->GetMacroGraph() == DoOnce)
+            {
+                auto* Input = Pin(Existing, TEXT("execute"));
+                if (!Input || Input->LinkedTo.Num() != Sources.Num() || Out(Pin(Existing, TEXT("Completed"))) != Destination)
+                {
+                    return false;
+                }
+                for (UEdGraphPin* Source : Sources)
+                {
+                    if (Out(Source) != Input)
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+        if (Destination->LinkedTo.Num() != Sources.Num())
+        {
+            return false;
+        }
+        for (UEdGraphPin* Source : Sources)
+        {
+            if (Out(Source) != Destination)
+            {
+                return false;
+            }
+        }
+        auto* DestNode = Owner(Destination);
+        auto* Gate = Macro(DestNode->GetGraph(), DoOnce, DestNode->NodePosX - 200, DestNode->NodePosY - 190);
+        auto* StartClosed = Pin(Gate, TEXT("Start Closed"));
+        if (!StartClosed)
+        {
+            return false;
+        }
+        StartClosed->DefaultValue = TEXT("false");
+        for (UEdGraphPin* Source : Sources)
+        {
+            Unlink(Source, Destination);
+            if (!Link(Source, Pin(Gate, TEXT("execute"))))
+            {
+                return false;
+            }
+        }
+        return Link(Pin(Gate, TEXT("Completed")), Destination);
+    }
+
+    bool CapturePreAwardLevels(UBlueprint* Blueprint)
+    {
+        const TCHAR* LevelGraph = TEXT("GetLeveledUpUnits");
+        auto* DeadKeys = EventNode(Blueprint, TEXT("31ADFE7440C8A6D42AD4D58989A3C9CA"));
+        auto* Award = EventNode(Blueprint, TEXT("F9499289437D605F8A87B28CA95C4EE2"));
+        auto* Input = Pin(Award, TEXT("execute"));
+        if (Input && Owner(Out(Input)) && Owner(Out(Input))->NodeComment == LevelSnapshotComment)
+        {
+            return true;
+        }
+        auto* Before = Pin(DeadKeys, TEXT("then"));
+        auto* Controller = Out(Pin(Award, TEXT("self")));
+        auto* Battle = Out(Pin(Owner(Out(Pin(Award, TEXT("totalExp")))), TEXT("self")));
+        auto* ExistingLoop = Find<UK2Node_MacroInstance>(Blueprint, LevelGraph, TEXT("018D7D8140C0BB32C7E1A0BD06F570FF"));
+        auto* ExistingData = Find<UK2Node_VariableGet>(Blueprint, LevelGraph, TEXT("F4BF3F7A47887868DD7E228DAAB92434"));
+        auto* ExistingLevels = Find<UK2Node_VariableGet>(Blueprint, LevelGraph, TEXT("A61F08DC418C07B82057B59DA31EF261"));
+        auto* MapLibrary = FindObject<UClass>(nullptr, TEXT("/Script/Engine.BlueprintMapLibrary"));
+        if (!Input || Out(Before) != Input || !Controller || !Battle || !ExistingLoop || !ExistingData ||
+            !ExistingLevels || !MapLibrary || !Calls(Award, TEXT("UpdatePlayerUnitsDataBattleOver")))
+        {
+            return false;
+        }
+        UEdGraph* Graph = Award->GetGraph();
+        const int32 X = Award->NodePosX - 480;
+        const int32 Y = Award->NodePosY + 900;
+        auto* Data = AddNode<UK2Node_VariableGet>(Graph, X + 200, Y + 400,
+            [ExistingData](UK2Node_VariableGet* Node) { Node->VariableReference = ExistingData->VariableReference; });
+        auto* Levels = AddNode<UK2Node_VariableGet>(Graph, X - 430, Y + 225,
+            [ExistingLevels](UK2Node_VariableGet* Node) { Node->VariableReference = ExistingLevels->VariableReference; });
+        auto* Clear = Call(Graph, MapLibrary->FindFunctionByName(TEXT("Map_Clear")), X - 190, Y);
+        auto* Keys = Call(Graph, Function(DeadKeys), X + 30, Y);
+        auto* Loop = Macro(Graph, ExistingLoop->GetMacroGraph(), X + 265, Y);
+        auto* FindData = Call(Graph, Function(Find(Blueprint, LevelGraph, TEXT("0B6454A44AEFD630A20E5FA2DF57C25E"))),
+            X + 465, Y + 255);
+        auto* Stats = Call(Graph, Function(Find(Blueprint, LevelGraph, TEXT("265AA1304E3244BA6E30AB8244CC72E9"))),
+            X + 755, Y - 120);
+        auto* Found = AddNode<UK2Node_IfThenElse>(Graph, X + 1065, Y - 120, [](UK2Node_IfThenElse*) {});
+        auto* Add = Call(Graph, Function(Find(Blueprint, LevelGraph, TEXT("8757260F40D3E8BCC44C33AA2FAB8A7A"))),
+            X + 1260, Y - 120);
+        if (!Loop)
+        {
+            return false;
+        }
+        Loop->NodeComment = LevelSnapshotComment;
+        Loop->bCommentBubbleVisible = true;
+        auto* PartyMap = Pin(Data, TEXT("PlayerUnitDataID"));
+        auto* LevelMap = Pin(Levels, TEXT("playerUnitLevels"));
+        if (!Link(Controller, Pin(Data, TEXT("self"))) || !Link(Battle, Pin(Levels, TEXT("self"))) ||
+            !Link(LevelMap, Pin(Clear, TEXT("TargetMap"))) || !Link(PartyMap, Pin(Keys, TEXT("TargetMap"))) ||
+            !Link(Pin(Keys, TEXT("Keys")), Pin(Loop, TEXT("Array"))) ||
+            !Link(PartyMap, Pin(FindData, TEXT("TargetMap"))) ||
+            !Link(Pin(Loop, TEXT("Array Element")), Pin(FindData, TEXT("Key"))) ||
+            !Link(Pin(Loop, TEXT("Array Element")), Pin(Stats, TEXT("CharacterID"))) ||
+            !Link(Pin(FindData, TEXT("Value")), Pin(Stats, TEXT("playerUnitData"))) ||
+            !Link(Pin(Stats, TEXT("Found")), Pin(Found, TEXT("Condition"))) ||
+            !Link(LevelMap, Pin(Add, TEXT("TargetMap"))) ||
+            !Link(Pin(Loop, TEXT("Array Element")), Pin(Add, TEXT("Key"))) ||
+            !Link(Pin(Stats, TEXT("level")), Pin(Add, TEXT("Value"))) ||
+            !Link(Pin(Clear, TEXT("then")), Pin(Keys, TEXT("execute"))) ||
+            !Link(Pin(Keys, TEXT("then")), Pin(Loop, TEXT("Exec"))) ||
+            !Link(Pin(Loop, TEXT("LoopBody")), Pin(Stats, TEXT("execute"))) ||
+            !Link(Pin(Stats, TEXT("then")), Pin(Found, TEXT("execute"))) ||
+            !Link(Pin(Found, TEXT("then")), Pin(Add, TEXT("execute"))))
+        {
+            return false;
+        }
+        Unlink(Before, Input);
+        return Link(Before, Pin(Clear, TEXT("execute"))) && Link(Pin(Loop, TEXT("Completed")), Input);
+    }
+
+    bool RepairLevelUpExit(UBlueprint* Blueprint)
+    {
+        auto* Continue = Pin(EventNode(Blueprint, TEXT("71F9982B4FAA2DBD66D8719CBB11A54A")), TEXT("then"));
+        auto* Levels = Pin(EventNode(Blueprint, TEXT("BDA8ED7A4B58984EEB4028A21FEFAFCB")), TEXT("execute"));
+        auto* FirstBattle = EventNode(Blueprint, TEXT("7BF1F2364A6C77231EDE55992E7EF7D2"));
+        auto* FirstBattleIn = Pin(FirstBattle, TEXT("execute"));
+        auto* OrdinaryVictory = Pin(FirstBattle, TEXT("else"));
+        auto* NoLevelUp = Pin(EventNode(Blueprint, TEXT("B6D93A9445BBEDC7403CE88E26AAE782")), TEXT("else"));
+        auto* LastLevelUp = Pin(EventNode(Blueprint, TEXT("02CBC4244909D108048174A841A7ACC3")), TEXT("then"));
+        auto* Explore = Pin(EventNode(Blueprint, TEXT("FB400825485978568842468BFD56C591")), TEXT("execute"));
+        if (!Continue || !Levels || !FirstBattleIn || !OrdinaryVictory || !NoLevelUp || !LastLevelUp || !Explore)
+        {
+            return false;
+        }
+        if (Out(Continue) == Levels && Out(NoLevelUp) == FirstBattleIn &&
+            Out(LastLevelUp) == FirstBattleIn && Out(OrdinaryVictory) == Explore)
+        {
+            return true;
+        }
+        auto* FinalExplore = Out(LastLevelUp);
+        if (Out(Continue) != FirstBattleIn || Out(OrdinaryVictory) != Levels ||
+            Out(NoLevelUp) != Explore || !Calls(Owner(FinalExplore), TEXT("SwitchToExploreMode")))
+        {
+            return false;
+        }
+        // Run progression for the prologue victory before its existing story continuation.
+        Unlink(Continue, FirstBattleIn);
+        Unlink(OrdinaryVictory, Levels);
+        Unlink(NoLevelUp, Explore);
+        Unlink(LastLevelUp, FinalExplore);
+        return Link(Continue, Levels) && Link(NoLevelUp, FirstBattleIn) &&
+            Link(LastLevelUp, FirstBattleIn) && Link(OrdinaryVictory, Explore);
+    }
+
+    bool Compile(UBlueprint* Blueprint)
+    {
+        FCompilerResultsLog Log;
+        FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection, &Log);
+        return Log.NumErrors == 0 && Blueprint->Status != BS_Error;
+    }
+
+    void Repair()
+    {
+        if (!GEditor || GEditor->PlayWorld)
+        {
+            UE_LOG(LogReditusBlueprintRepair, Error, TEXT("Stop Play before running Reditus.RepairCharactersAndVictory."));
+            return;
+        }
+        auto* Details = Load(TEXT("UI/MainMenu/BP_UnitDetails.BP_UnitDetails"));
+        auto* Resistance = Load(TEXT("UI/BP_CoreElementalWidgetsResistancesContainers.BP_CoreElementalWidgetsResistancesContainers"));
+        auto* Exp = Load(TEXT("UI/BP_ExpBar.BP_ExpBar"));
+        auto* Victory = Load(TEXT("UI/Dialogues/BP_VictoryDialogue.BP_VictoryDialogue"));
+        auto* LevelUp = Load(TEXT("UI/Dialogues/BP_LevelUpDialogue.BP_LevelUpDialogue"));
+        auto* Battle = Load(TEXT("Battle/BP_BattleController.BP_BattleController"));
+        const TArray<UBlueprint*> Blueprints = { Resistance, Details, Exp, Victory, LevelUp, Battle };
+        for (UBlueprint* Blueprint : Blueprints)
+        {
+            if (!Blueprint)
+            {
+                UE_LOG(LogReditusBlueprintRepair, Error, TEXT("A required Reditus Blueprint did not load. No edits were made."));
+                return;
+            }
+        }
+        auto* Once = Find<UK2Node_MacroInstance>(Battle, TEXT("EventGraph"), TEXT("C0E7872E4305FFD18699F998513AF43B"));
+        UEdGraph* DoOnce = Once ? Once->GetMacroGraph() : nullptr;
+        if (!DoOnce || DoOnce->GetFName() != FName(TEXT("DoOnce")))
+        {
+            UE_LOG(LogReditusBlueprintRepair, Error, TEXT("Could not locate the project's Do Once macro. No edits were made."));
+            return;
+        }
+
+        const TCHAR* Failed = nullptr;
+        {
+            const FScopedTransaction Transaction(NSLOCTEXT("ReditusBlueprintRepair", "RepairCharactersVictory", "Repair Characters and victory Blueprints"));
+            if (!Transaction.IsOutstanding())
+            {
+                return;
+            }
+            for (UBlueprint* Blueprint : Blueprints)
+            {
+                Blueprint->Modify();
+            }
+            if (!RepairResistanceIcons(Resistance)) Failed = TEXT("elemental resistance widgets");
+            else if (!RepairDetails(Details)) Failed = TEXT("Characters details");
+            else if (!RepairExpBar(Exp)) Failed = TEXT("EXP bar");
+            else if (!GuardContinue(DoOnce,
+                Pin(EventNode(Victory, TEXT("5288ADC8456F7F52CFD1AAA2D23097FD")), TEXT("execute")),
+                { Pin(EventNode(Victory, TEXT("C9B9B2F44299BA8FE3ECE8A923249B24")), TEXT("then")) }))
+                Failed = TEXT("victory Continue");
+            else if (!GuardContinue(DoOnce,
+                Pin(EventNode(LevelUp, TEXT("7D6C786E48BF82879DA433AF3C3BE20B")), TEXT("execute")),
+                { Pin(EventNode(LevelUp, TEXT("31ED92CF443392750825418403005981")), TEXT("then")),
+                  Pin(EventNode(LevelUp, TEXT("971D4BE849D5AA130309C2BEBB1397C8")), TEXT("then")) }))
+                Failed = TEXT("level-up Continue");
+            else if (!CapturePreAwardLevels(Battle)) Failed = TEXT("pre-award party levels");
+            else if (!RepairLevelUpExit(Battle)) Failed = TEXT("prologue level-up continuation");
+
+            if (!Failed)
+            {
+                for (UBlueprint* Blueprint : Blueprints)
+                {
+                    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+                    if (!Compile(Blueprint))
+                    {
+                        Failed = TEXT("Blueprint compilation");
+                        UE_LOG(LogReditusBlueprintRepair, Error, TEXT("Compile errors in %s."), *Blueprint->GetName());
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (Failed)
+        {
+            const bool Undone = GEditor->UndoTransaction(false);
+            if (Undone)
+            {
+                for (UBlueprint* Blueprint : Blueprints)
+                {
+                    Compile(Blueprint);
+                }
+            }
+            UE_LOG(LogReditusBlueprintRepair, Error, TEXT("Repair stopped at %s. %s"), Failed,
+                Undone ? TEXT("Graph edits were undone.") : TEXT("Undo failed. Leave the affected Blueprints unsaved."));
+            return;
+        }
+        UE_LOG(LogReditusBlueprintRepair, Display, TEXT("Characters and victory Blueprints repaired and compiled. Save All to keep the graph changes."));
+    }
+}
+
+class FReditusBlueprintRepairEditorModule : public IModuleInterface
+{
+public:
+    virtual void StartupModule() override
+    {
+        Command = IConsoleManager::Get().RegisterConsoleCommand(TEXT("Reditus.RepairCharactersAndVictory"),
+            TEXT("Repair the Reditus Characters screen, EXP bar and victory flow."),
+            FConsoleCommandDelegate::CreateStatic(&ReditusBlueprintRepair::Repair), ECVF_Default);
+    }
+
+    virtual void ShutdownModule() override
+    {
+        if (Command)
+        {
+            IConsoleManager::Get().UnregisterConsoleObject(Command);
+        }
+    }
+
+private:
+    IConsoleObject* Command = nullptr;
+};
+
+IMPLEMENT_MODULE(FReditusBlueprintRepairEditorModule, ReditusBlueprintRepairEditor)

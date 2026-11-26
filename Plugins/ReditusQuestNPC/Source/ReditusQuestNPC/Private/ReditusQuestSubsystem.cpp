@@ -6,11 +6,13 @@
 #include "ReditusQuestItemRouting.h"
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
+#include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SaveGame.h"
 #include "Kismet/GameplayStatics.h"
 #include "UObject/StructOnScope.h"
 #include "UObject/UnrealType.h"
+#include "Widgets/Layout/SBox.h"
 #include <algorithm>
 
 DEFINE_LOG_CATEGORY_STATIC(LogReditusQuests, Log, All);
@@ -545,6 +547,7 @@ bool UReditusQuestSubsystem::ImportQuestState(const FReditusQuestSaveData& Data,
     if (!Candidate.Import(Records, Why)) { Error = FText::FromString(Wide(Why)); return false; }
     Runtime = MoveTemp(Candidate); WorldProgress = MoveTemp(WorldCandidate); Deliveries = MoveTemp(Pending);
     AddedNotices.Empty(); CompletedNotices.Empty(); DefeatEventIDs.Empty();
+    PendingHUDNotices.Reset();
     if (NotificationView.IsValid()) NotificationView->ClearNotices();
     // No start/completion events, quest chains or reward callbacks are replayed by loading.
     bImporting = false;
@@ -557,6 +560,7 @@ void UReditusQuestSubsystem::ResetQuestStateForNewGame()
     TGuardValue<bool> Guard(bImporting, true);
     CancelNPCStoryWork(); SequenceQueue.Empty(); EndSequence(false);
     Runtime.Reset(); WorldProgress.Reset(); PendingNPCBattles.Empty(); Deliveries.Empty(); AddedNotices.Empty(); CompletedNotices.Empty(); DefeatEventIDs.Empty();
+    PendingHUDNotices.Reset();
     if (NotificationView.IsValid()) NotificationView->ClearNotices();
     bImporting = false; OnQuestStateRestored.Broadcast();
 }
@@ -632,14 +636,7 @@ void UReditusQuestSubsystem::Tick(float DeltaTime)
         for (const auto& Delivery : Deliveries) PendingDeliveryQuests.insert(Narrow(Delivery.Key));
         if (Runtime.Tick(World->GetDeltaSeconds(), PendingDeliveryQuests)) FlushChanges();
     }
-    if ((!NotificationView.IsValid() || NotificationView->GetWorld() != World) && GetQuestTimers().Num() > 0)
-    {
-        if (auto* PC = UGameplayStatics::GetPlayerController(GetGameInstance(), 0))
-        {
-            auto* View = CreateWidget<UReditusQuestNotificationsWidget>(PC);
-            if (View) { View->AddToViewport(80); NotificationView = View; }
-        }
-    }
+    UpdateQuestHUD(World);
 }
 
 void UReditusQuestSubsystem::Deinitialize()
@@ -650,8 +647,9 @@ void UReditusQuestSubsystem::Deinitialize()
     // Unbind first: teardown must not grant objective progress or start new quests.
     OnQuestSequenceFinished.Clear();
     EndSequence(false);
-    if (NotificationView.IsValid()) NotificationView->RemoveFromParent();
-    NotificationView.Reset(); JournalBindings.Empty();
+    RemoveQuestHUD();
+    PendingHUDNotices.Reset();
+    JournalBindings.Empty();
     Super::Deinitialize();
 }
 
@@ -695,18 +693,55 @@ void UReditusQuestSubsystem::NotifyQuest(FDataTableRowHandle Quest, EReditusQues
         || Row->Rewards.Experience > 0 || Row->Rewards.Items.Num() > 0))
         Notice.Detail = GetQuestRewardSummary(Quest);
     OnQuestNotification.Broadcast(Notice);
-    if (!ShowQuestNotifications) return;
-    auto* PC = UGameplayStatics::GetPlayerController(GetGameInstance(), 0);
-    if (!PC) return;
-    if (!NotificationView.IsValid() || NotificationView->GetWorld() != PC->GetWorld())
-    {
-        auto* View = CreateWidget<UReditusQuestNotificationsWidget>(PC);
-        if (!View) return;
-        View->AddToViewport(80); NotificationView = View;
-    }
-    NotificationView->Enqueue(Notice);
+    // A quest can start from a sequence finish delegate. Attach its HUD on the
+    // subsystem tick, after that callback has returned.
+    const UWorld* World = GetTickableGameObjectWorld();
+    if (ShowQuestNotifications && !bSubsystemStopped && World && World->GetNetMode() != NM_DedicatedServer)
+        PendingHUDNotices.Add(Notice);
 }
 
+void UReditusQuestSubsystem::UpdateQuestHUD(UWorld* World)
+{
+    if (!ShowQuestNotifications) PendingHUDNotices.Reset();
+    auto* Player = UGameplayStatics::GetPlayerController(World, 0);
+    auto* Viewport = GetGameInstance()->GetGameViewportClient();
+    auto* View = NotificationView.Get();
+    if (!View || !NotificationLayer.IsValid() || View->GetWorld() != World
+        || View->GetOwningPlayer() != Player || NotificationViewport.Get() != Viewport)
+    {
+        RemoveQuestHUD();
+        View = nullptr;
+    }
+    if (World->bIsTearingDown || !IsValid(Player) || !Player->IsLocalController()
+        || !Viewport || !Viewport->Viewport) return;
+
+    if (!View)
+    {
+        if (PendingHUDNotices.Num() == 0 && GetQuestTimers().Num() == 0) return;
+        View = CreateWidget<UReditusQuestNotificationsWidget>(Player);
+        if (!View) return;
+        const TSharedRef<SWidget> Layer = SNew(SBox)
+            .Visibility(EVisibility::HitTestInvisible)
+            [View->TakeWidget()];
+        const int32 QuestHUDZOrder = 90;
+        Viewport->AddViewportWidgetContent(Layer, QuestHUDZOrder);
+        NotificationLayer = Layer;
+        NotificationViewport = Viewport;
+        NotificationView = View;
+    }
+    for (const auto& Notice : PendingHUDNotices) View->Enqueue(Notice);
+    PendingHUDNotices.Reset();
+}
+
+void UReditusQuestSubsystem::RemoveQuestHUD()
+{
+    if (auto* Viewport = NotificationViewport.Get())
+        if (const auto Layer = NotificationLayer.Pin())
+            Viewport->RemoveViewportWidgetContent(Layer.ToSharedRef());
+    NotificationLayer.Reset();
+    NotificationViewport.Reset();
+    NotificationView.Reset();
+}
 
 bool UReditusQuestSubsystem::ReportEnemyDefeated(AActor* Enemy, FName EnemyID)
 {

@@ -204,6 +204,19 @@ with tempfile.TemporaryDirectory(prefix="reditus-step-delivery-check-") as tempo
     subprocess.run([str(binary)], check=True)
 print("PASS: actual native start/inventory refresh/turn-in, choice lookup, step delivery and confirmation; pre-owned/returning items, stale readiness, missing payout handler, one confirmed reward, duplicate receipts and multi-step handoffs.")
 print("PASS: cinematic timer gate and timed arrival adapter; playing and dialogue pauses, finished held frames, clock continuation, single in-time reward, expired arrival and cancelled delivery retry.")
+notify = subsystem_source.split("void UReditusQuestSubsystem::NotifyQuest(", 1)[1].split("void UReditusQuestSubsystem::UpdateQuestHUD(", 1)[0]
+assert "PendingHUDNotices.Add(Notice);" in notify and "OnQuestNotification.Broadcast(Notice);" in notify
+assert not any(call in notify for call in ("CreateWidget", "Enqueue(", "UpdateQuestHUD(", "AddToViewport", "SetInputMode"))
+hud_start = "void UReditusQuestSubsystem::UpdateQuestHUD("
+hud_lifecycle = hud_start + subsystem_source.split(hud_start, 1)[1].split("bool UReditusQuestSubsystem::ReportEnemyDefeated(", 1)[0]
+with tempfile.TemporaryDirectory(prefix="reditus-quest-hud-check-") as temporary:
+    cpp = Path(temporary) / "quest_hud_mount_test.cpp"
+    binary = Path(temporary) / "quest_hud_mount_test"
+    cpp.write_text((tests / "quest_hud_mount_test.cpp").read_text().replace("// ACTUAL_HUD_LIFECYCLE", hud_lifecycle))
+    subprocess.run([os.environ.get("CXX", "g++"), "-std=c++14", "-Wall", "-Wextra", "-Werror", "-pedantic",
+                    "-fsanitize=undefined", "-fno-sanitize-recover=all", str(cpp), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
+print("PASS: quest HUD defers mounting, attaches without hit testing, retries on viewport readiness, and handles world changes and timer-only display.")
 ui = (module / "Private/ReditusQuestUI.cpp").read_text()
 journal = "    bool MatchesPage(" + ui.split("    bool MatchesPage(", 1)[1].split("    UClass* QuestRowClass(", 1)[0]
 with tempfile.TemporaryDirectory(prefix="reditus-quest-journal-check-") as temporary:
@@ -263,8 +276,9 @@ for marker, start, end in [
     ("// ACTUAL_CONTROLLER_ACTOR", "    ALevelSequenceActor* ControllerSequenceActor(", "    bool SkipKey("),
     ("// ACTUAL_CONFIGURE", "bool UReditusSequenceSkipSubsystem::Configure(", "bool UReditusSequenceSkipSubsystem::HasActiveSequence("),
     ("// ACTUAL_HAS_ACTIVE", "bool UReditusSequenceSkipSubsystem::HasActiveSequence(", "bool UReditusSequenceSkipSubsystem::CanCapture("),
-    ("// ACTUAL_CLEAR", "void UReditusSequenceSkipSubsystem::ClearSequence(", "void UReditusSequenceSkipSubsystem::SequenceEnded("),
-    ("// ACTUAL_SEQUENCE_ENDED", "void UReditusSequenceSkipSubsystem::SequenceEnded(", "void UReditusSequenceSkipSubsystem::ShowBlockedNotice("),
+    ("// ACTUAL_CLEAR", "void UReditusSequenceSkipSubsystem::ClearSequence(", "void UReditusSequenceSkipSubsystem::SequenceStarted("),
+    ("// ACTUAL_NOTICE_LIFECYCLE", "void UReditusSequenceSkipSubsystem::SequenceStarted(", "void UReditusSequenceSkipSubsystem::SetAutoAdvance("),
+    ("// ACTUAL_RESTORE_INPUT", "void UReditusSequenceSkipSubsystem::RestoreGameplayInput(", "bool UReditusSequenceSkipSubsystem::BeginAttempt("),
     ("// ACTUAL_ATTEMPT", "bool UReditusSequenceSkipSubsystem::BeginAttempt(", "bool UReditusSequenceSkipSubsystem::HandleKey("),
     ("// ACTUAL_KEY", "bool UReditusSequenceSkipSubsystem::HandleKey(", "bool UReditusSequenceSkipSubsystem::HandleTrigger("),
     ("// ACTUAL_TRIGGER", "bool UReditusSequenceSkipSubsystem::HandleTrigger(", "void UReditusSequenceSkipSubsystem::SetMouseHeld("),
@@ -281,7 +295,7 @@ with tempfile.TemporaryDirectory(prefix="reditus-sequence-skip-check-") as tempo
     subprocess.run([os.environ.get("CXX", "g++"), "-std=c++14", "-Wall", "-Wextra", "-Werror", "-pedantic",
                     "-fsanitize=undefined", "-fno-sanitize-recover=all", str(cpp), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
-print("PASS: scene registration with the exported unwired actor pin, protected and permitted holds, single finish handoff, timer-driven dialogue closure, authored sequence cue, manual resume and replacement guards.")
+print("PASS: scene registration, first-play prompt, protected and permitted holds, single finish handoff, input restoration, timer-driven dialogue closure and replacement guards.")
 
 notice = "void UReditusSequenceSkipNotice::SetMessage(" + skip_source.split("void UReditusSequenceSkipNotice::SetMessage(", 1)[1].split("void UReditusSequenceSkipSubsystem::Initialize(", 1)[0]
 with tempfile.TemporaryDirectory(prefix="reditus-skip-notice-") as temporary:

@@ -274,6 +274,7 @@ void UReditusQuestJournalBinding::Select(int32 Index)
 
 TSharedRef<SWidget> UReditusQuestNotificationsWidget::RebuildWidget()
 {
+    bIsFocusable = false;
     WidgetTree = NewObject<UWidgetTree>(this, TEXT("QuestHUDTree"));
     // This is the font referenced by the supplied quest journal/button assets.
     QuestFont = LoadObject<UFont>(nullptr, TEXT("/Game/DialogueSystem/Font/final_fantasy_36_font_Font.final_fantasy_36_font_Font"));

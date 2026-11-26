@@ -186,7 +186,7 @@ private:
     void RefreshNativeMenuEntries(bool bOpen);
     bool IsBattleMoveUnlocked(AActor* Unit,FName MoveID,bool bOverdrive) const;
     void ClearNativeMenu();
-    bool BeginATBListTargeting(AActor* Unit,FName ID,EReditusHUDCommand Command,bool bFromNativeMenu = false);
+    bool BeginATBListTargeting(AActor* Unit,FName ID,EReditusHUDCommand Command);
     bool SubmitATBListAction(AActor* Unit,FName ID,EReditusHUDCommand Command,UClass* LegacyClass,
         const TArray<AActor*>& TargetUnits,FName TargetMode);
     void AdoptLegacyAllyTargeting(AActor* Unit);

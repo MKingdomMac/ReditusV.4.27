@@ -1,0 +1,289 @@
+diff --git a/Plugins/ReditusQuestNPC/ReditusQuestNPC.uplugin b/Plugins/ReditusQuestNPC/ReditusQuestNPC.uplugin
+index d6e350f14efa9e02b1944bae908c03a17a39fdf3..43348e3db21fdab561305c402fabd8eecb0997f6 100644
+--- a/Plugins/ReditusQuestNPC/ReditusQuestNPC.uplugin
++++ b/Plugins/ReditusQuestNPC/ReditusQuestNPC.uplugin
+@@ -1,7 +1,7 @@
+ {
+   "FileVersion": 3,
+-  "Version": 43,
+-  "VersionName": "2.9.11",
++  "Version": 44,
++  "VersionName": "2.9.12",
+   "FriendlyName": "Reditus Quests, NPCs and Dialogue UI",
+   "Description": "Quest graph editor and catalogue, linked existing dialogues, branching objectives, saved choices, checked handoffs, NPC outcomes and dialogue presentation.",
+   "Category": "Reditus",
+diff --git a/Plugins/ReditusQuestNPC/Source/ReditusQuestNPC/Private/ReditusSequenceSkip.cpp b/Plugins/ReditusQuestNPC/Source/ReditusQuestNPC/Private/ReditusSequenceSkip.cpp
+index cf3e7354e429a4a87c6c8700145960867a94a1ac..23578b50fa0118e16541189813befeb99f952ff9 100644
+--- a/Plugins/ReditusQuestNPC/Source/ReditusQuestNPC/Private/ReditusSequenceSkip.cpp
++++ b/Plugins/ReditusQuestNPC/Source/ReditusQuestNPC/Private/ReditusSequenceSkip.cpp
+@@ -25,9 +25,12 @@
+ #include "Components/VerticalBoxSlot.h"
+ #include "Components/AudioComponent.h"
+ #include "UObject/UnrealType.h"
++#include "UObject/StructOnScope.h"
+ #include "Styling/CoreStyle.h"
+ #include "UnrealClient.h"
+ 
++DEFINE_LOG_CATEGORY_STATIC(LogReditusSequenceSkip, Log, All);
++
+ namespace
+ {
+     ALevelSequenceActor* ControllerSequenceActor(const APlayerController* Controller)
+@@ -43,6 +46,36 @@ namespace
+         return Key == EKeys::LeftShift || Key == EKeys::RightShift || Key == EKeys::Gamepad_RightTrigger;
+     }
+ 
++    const FBoolProperty* LegacyInputBlockField(APlayerController* Controller)
++    {
++        return IsValid(Controller) ? FindFProperty<FBoolProperty>(Controller->GetClass(), TEXT("isInputBlocked")) : nullptr;
++    }
++
++    bool IsLegacyInputBlocked(APlayerController* Controller)
++    {
++        const auto* Field = LegacyInputBlockField(Controller);
++        return Field && Field->GetPropertyValue_InContainer(Controller);
++    }
++
++    void UnblockLegacyInput(APlayerController* Controller)
++    {
++        // Match the controller's existing finish event, including its mobile UI update.
++        auto* Event = Controller->FindFunction(TEXT("BlockPlayerInput"));
++        if (ReditusQuestNPCReflection::DelegateSignature(Event, true))
++        {
++            const auto* IsBlock = FindFProperty<FBoolProperty>(Event, TEXT("isBlock"));
++            if (IsBlock && IsBlock->HasAnyPropertyFlags(CPF_Parm))
++            {
++                FStructOnScope Parameters(Event);
++                IsBlock->SetPropertyValue_InContainer(Parameters.GetStructMemory(), false);
++                Controller->ProcessEvent(Event, Parameters.GetStructMemory());
++                return;
++            }
++        }
++        if (const auto* Field = LegacyInputBlockField(Controller))
++            Field->SetPropertyValue_InContainer(Controller, false);
++    }
++
+     class FSequenceSkipInput : public IInputProcessor
+     {
+         TWeakObjectPtr<UReditusSequenceSkipSubsystem> Owner;
+@@ -143,6 +176,7 @@ void UReditusSequenceSkipSubsystem::RegisterInput()
+ void UReditusSequenceSkipSubsystem::Deinitialize()
+ {
+     bStopped = true;
++    PendingInputController.Reset();
+     ClearSequence();
+     if (NoticeWidget) NoticeWidget->RemoveFromParent();
+     NoticeWidget = nullptr;
+@@ -182,6 +216,15 @@ bool UReditusSequenceSkipSubsystem::Configure(ALevelSequenceActor* Actor, bool A
+     SequencePlayer = Actor->GetSequencePlayer();
+     OnSkipped = Handoff;
+     bAllowSkip = AllowSkip && OnSkipped.IsBound();
++    PendingInputController.Reset();
++    LastUnregisteredSequence.Reset();
++    bUsesControllerSequence = ControllerSequenceActor(Controller) == Actor;
++    bPlaybackStarted = HasActiveSequence();
++    if (IsValid(Controller) && !bPlaybackStarted)
++    {
++        bSequenceMayOwnMoveLock = Actor->PlaybackSettings.bDisableMovementInput && !Controller->IsMoveInputIgnored();
++        bSequenceMayOwnLookLock = Actor->PlaybackSettings.bDisableLookAtInput && !Controller->IsLookInputIgnored();
++    }
+     bNeedTriggerRelease = LastTriggerValue > .2f || (IsValid(Controller)
+         && Controller->GetInputAnalogKeyState(EKeys::Gamepad_RightTriggerAxis) > .2f);
+     if (IsValid(Controller) && Controller->IsLocalController()) Controller->bShowMouseCursor = false;
+@@ -191,6 +234,8 @@ bool UReditusSequenceSkipSubsystem::Configure(ALevelSequenceActor* Actor, bool A
+     SequencePlayer->OnStop.AddUniqueDynamic(this, &UReditusSequenceSkipSubsystem::SequenceEnded);
+     if (AllowSkip && !OnSkipped.IsBound())
+         UE_LOG(LogTemp, Warning, TEXT("Configure Level Sequence Skipping needs an On Skipped handoff before Allow Skip can be enabled."));
++    UE_LOG(LogReditusSequenceSkip, Display, TEXT("Configured %s (Allow Skip=%d, handoff bound=%d)."),
++        *GetNameSafe(Actor), AllowSkip, OnSkipped.IsBound());
+     RegisterInput();
+     ShowSkipPrompt();
+     return !AllowSkip || bAllowSkip;
+@@ -232,6 +277,8 @@ void UReditusSequenceSkipSubsystem::ClearSequence()
+     SequencePlayer = nullptr;
+     OnSkipped.Unbind();
+     SetAutoAdvance(nullptr, false);
++    bUsesControllerSequence = bPlaybackStarted = false;
++    bSequenceMayOwnMoveLock = bSequenceMayOwnLookLock = false;
+     bAllowSkip = false;
+     bKeyHeld = bTriggerHeld = bMouseHeld = false;
+     bNeedTriggerRelease = LastTriggerValue > .2f;
+@@ -240,22 +287,33 @@ void UReditusSequenceSkipSubsystem::ClearSequence()
+ 
+ void UReditusSequenceSkipSubsystem::SequenceStarted()
+ {
++    bPlaybackStarted = true;
+     ShowSkipPrompt();
+ }
+ 
+ void UReditusSequenceSkipSubsystem::SequenceEnded()
+ {
+-    ClearSequence();
++    // A finish listener can already have registered or started the next scene.
++    if (bPlaybackStarted && !HasActiveSequence()) ClearSequence();
+ }
+ 
+ UReditusSequenceSkipNotice* UReditusSequenceSkipSubsystem::EnsureNoticeWidget()
+ {
+-    if (IsValid(NoticeWidget)) return NoticeWidget;
+-    auto* Player = UGameplayStatics::GetPlayerController(GetTickableGameObjectWorld(), 0);
+-    if (!IsValid(Player) || !Player->IsLocalController() || !GetGameInstance()->GetGameViewportClient()) return nullptr;
+-    NoticeWidget = CreateWidget<UReditusSequenceSkipNotice>(Player);
+-    if (NoticeWidget) NoticeWidget->AddToViewport(1000);
+-    return NoticeWidget;
++    if (!IsValid(NoticeWidget))
++    {
++        auto* Player = UGameplayStatics::GetPlayerController(GetTickableGameObjectWorld(), 0);
++        auto* Game = GetGameInstance();
++        if (!IsValid(Player) || !Player->IsLocalController() || !Game || !Game->GetGameViewportClient()) return nullptr;
++        NoticeWidget = CreateWidget<UReditusSequenceSkipNotice>(Player);
++    }
++    if (!IsValid(NoticeWidget)) return nullptr;
++    if (!NoticeWidget->IsInViewport())
++    {
++        NoticeWidget->AddToViewport(1000);
++        if (bAllowSkip && NoticeWidget->IsInViewport())
++            UE_LOG(LogReditusSequenceSkip, Display, TEXT("Skip UI shown for %s."), *GetNameSafe(SequenceActor));
++    }
++    return NoticeWidget->IsInViewport() ? NoticeWidget : nullptr;
+ }
+ 
+ bool UReditusSequenceSkipSubsystem::ShowSkipPrompt()
+@@ -320,20 +378,30 @@ void UReditusSequenceSkipSubsystem::DismissSequenceDialogue()
+             Field->SetObjectPropertyValue_InContainer(Controller, nullptr);
+ }
+ 
+-void UReditusSequenceSkipSubsystem::RestoreGameplayInput(APlayerController* Controller)
++void UReditusSequenceSkipSubsystem::RestoreGameplayInput()
+ {
++    auto* Controller = PendingInputController.Get();
++    PendingInputController.Reset();
+     UWorld* World = GetTickableGameObjectWorld();
+     if (!IsValid(Controller) || !World || World->bIsTearingDown || Controller->GetWorld() != World
+         || !Controller->IsLocalController() || UGameplayStatics::GetPlayerController(World, 0) != Controller
+-        || IsValid(SequenceActor) || FindSequencePlayer(Controller) || !ReditusQuestSequenceGate::IsExploring(Controller)) return;
++        || IsValid(SequenceActor) || FindSequencePlayer(Controller) || !ReditusQuestSequenceGate::IsExploring(Controller)
++        || UGameplayStatics::IsGamePaused(World)) return;
+ 
+     const auto* Dialogue = Cast<UUserWidget>(ReditusQuestNPCReflection::ReadObject(Controller, TEXT("DialogueWidget")));
+     if (IsValid(Dialogue) && Dialogue->IsInViewport() && Dialogue->IsVisible()) return;
+-
+-    // Removing the dialogue does not reset the controller's input mode. Do this
+-    // before the authored handoff, which may open another UI or start another scene.
+-    Controller->SetInputMode(FInputModeGameOnly());
++    // Respect an input lock newly taken by the authored handoff.
++    const bool bLegacyBlocked = IsLegacyInputBlocked(Controller);
++    if (bLegacyBlocked && !bRestoreLegacyInput) return;
++    if (bLegacyBlocked) UnblockLegacyInput(Controller);
++    if (bRestoreMoveInput && Controller->IsMoveInputIgnored()) Controller->SetIgnoreMoveInput(false);
++    if (bRestoreLookInput && Controller->IsLookInputIgnored()) Controller->SetIgnoreLookInput(false);
++
++    // Restore focus after the finish graph and teardown of the old UI.
+     Controller->EnableInput(Controller);
++    Controller->SetInputMode(FInputModeGameOnly());
++    UE_LOG(LogReditusSequenceSkip, Display, TEXT("Restored skip input: move ignored=%d, look ignored=%d, Blueprint blocked=%d."),
++        Controller->IsMoveInputIgnored(), Controller->IsLookInputIgnored(), IsLegacyInputBlocked(Controller));
+ }
+ 
+ bool UReditusSequenceSkipSubsystem::BeginAttempt()
+@@ -415,8 +483,24 @@ void UReditusSequenceSkipSubsystem::Tick(float DeltaTime)
+     }
+     if (bAutoAdvance && !IsAutoAdvanceEnabled(AutoSequence.Get()))
+         SetAutoAdvance(nullptr, false);
+-    if (SequenceActor && !HasActiveSequence()) ClearSequence();
+-    if (!NoticeWidget) ShowSkipPrompt();
++    UWorld* World = GetTickableGameObjectWorld();
++    auto* Controller = UGameplayStatics::GetPlayerController(World, 0);
++    auto* CurrentActor = ControllerSequenceActor(Controller);
++    if (SequenceActor && (!IsValid(SequenceActor) || SequenceActor->GetWorld() != World || !IsValid(SequencePlayer)
++        || (bUsesControllerSequence && CurrentActor != SequenceActor) || (bPlaybackStarted && !HasActiveSequence())))
++        ClearSequence();
++    if (HasActiveSequence())
++    {
++        bPlaybackStarted = true;
++        if (!IsValid(NoticeWidget) || !NoticeWidget->IsInViewport()) ShowSkipPrompt();
++    }
++    else if (IsValid(CurrentActor) && CurrentActor != LastUnregisteredSequence.Get()
++        && FindSequencePlayer(Controller))
++    {
++        LastUnregisteredSequence = CurrentActor;
++        UE_LOG(LogReditusSequenceSkip, Warning, TEXT("%s started without Configure Level Sequence Skipping."), *GetNameSafe(CurrentActor));
++    }
++    if (PendingInputController.IsValid()) RestoreGameplayInput();
+     UpdateDialogueContinuation();
+     if (!CanCapture())
+     {
+@@ -446,7 +530,9 @@ void UReditusSequenceSkipSubsystem::Tick(float DeltaTime)
+     // observer. A Stop or dialogue callback can configure the next scene.
+     auto Handoff = OnSkipped;
+     auto* Player = SequencePlayer;
+-    const TWeakObjectPtr<APlayerController> Controller(UGameplayStatics::GetPlayerController(GetTickableGameObjectWorld(), 0));
++    const TWeakObjectPtr<APlayerController> SkipController(Controller);
++    const bool bRestoreNativeMove = bSequenceMayOwnMoveLock;
++    const bool bRestoreNativeLook = bSequenceMayOwnLookLock;
+     ClearSequence();
+     auto Finished = Player->OnFinished;
+     const bool bUseFinishBinding = Finished.Contains(Handoff);
+@@ -463,16 +549,31 @@ void UReditusSequenceSkipSubsystem::Tick(float DeltaTime)
+         Player->SetPlaybackPosition(EndPosition);
+         if (IsValid(Player)) Player->StopAtCurrentTime();
+     }
+-    RestoreGameplayInput(Controller.Get());
++    // Only release a movement/look lock still present after Stop. A new lock
++    // taken inside the handoff can then keep its own input state.
++    const bool bRestoreMove = bRestoreNativeMove && SkipController.IsValid() && SkipController->IsMoveInputIgnored();
++    const bool bRestoreLook = bRestoreNativeLook && SkipController.IsValid() && SkipController->IsLookInputIgnored();
++    const bool bRestoreBlueprint = IsLegacyInputBlocked(SkipController.Get());
+     if (bUseFinishBinding) Finished.Broadcast();
+     else Handoff.ExecuteIfBound();
++    if (!IsValid(SequenceActor) && World == GetTickableGameObjectWorld() && SkipController.IsValid())
++    {
++        PendingInputController = SkipController;
++        bRestoreLegacyInput = bRestoreBlueprint;
++        bRestoreMoveInput = bRestoreMove;
++        bRestoreLookInput = bRestoreLook;
++    }
+ }
+ 
+ bool UReditusSequenceSkipLibrary::ConfigureLevelSequenceSkipping(const UObject* WorldContextObject,
+     ALevelSequenceActor* SequenceActor, FReditusSequenceSkipHandoff OnSkipped, bool AllowSkip)
+ {
+     if (!SequenceActor)
+-        SequenceActor = ControllerSequenceActor(Cast<APlayerController>(WorldContextObject));
++    {
++        const auto* Controller = Cast<APlayerController>(WorldContextObject);
++        if (!Controller) Controller = UGameplayStatics::GetPlayerController(WorldContextObject, 0);
++        SequenceActor = ControllerSequenceActor(Controller);
++    }
+     auto* Instance = UGameplayStatics::GetGameInstance(WorldContextObject);
+     auto* System = Instance ? Instance->GetSubsystem<UReditusSequenceSkipSubsystem>() : nullptr;
+     return System && System->Configure(SequenceActor, AllowSkip, OnSkipped);
+diff --git a/Plugins/ReditusQuestNPC/Source/ReditusQuestNPC/Public/ReditusSequenceSkip.h b/Plugins/ReditusQuestNPC/Source/ReditusQuestNPC/Public/ReditusSequenceSkip.h
+index ae2cdd43e7c83810d23b2e6809cc48e2f8da71ec..f54952963d6b8f7d0729b7f532ec0f4f2e96cbd6 100644
+--- a/Plugins/ReditusQuestNPC/Source/ReditusQuestNPC/Public/ReditusSequenceSkip.h
++++ b/Plugins/ReditusQuestNPC/Source/ReditusQuestNPC/Public/ReditusSequenceSkip.h
+@@ -68,7 +68,7 @@ private:
+     void ShowHoldProgress(float Progress);
+     void HideHoldProgress();
+     void DismissSequenceDialogue();
+-    void RestoreGameplayInput(APlayerController* Controller);
++    void RestoreGameplayInput();
+     void RegisterInput();
+     void UpdateDialogueContinuation();
+     void ClearDialogueObservation();
+@@ -86,6 +86,15 @@ private:
+     TWeakObjectPtr<UUserWidget> ObservedDialogue;
+     TWeakObjectPtr<APlayerController> DialogueController;
+     TWeakObjectPtr<UMovieSceneSequencePlayer> DialogueSequence;
++    TWeakObjectPtr<ALevelSequenceActor> LastUnregisteredSequence;
++    TWeakObjectPtr<APlayerController> PendingInputController;
++    bool bUsesControllerSequence = false;
++    bool bPlaybackStarted = false;
++    bool bSequenceMayOwnMoveLock = false;
++    bool bSequenceMayOwnLookLock = false;
++    bool bRestoreLegacyInput = false;
++    bool bRestoreMoveInput = false;
++    bool bRestoreLookInput = false;
+     bool bContinueRequested = false;
+     bool bPlaySequenceCue = false;
+     bool bAutoAdvance = false;

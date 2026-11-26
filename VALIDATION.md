@@ -1,3 +1,26 @@
+# Version 2.9.13 — quest HUD during cutscene handoff
+
+- Quest delegates still broadcast during quest changes. The default HUD queues those notices and attaches during the subsystem tick in a hit-test-invisible Slate layer. The countdown shares that layer.
+- Standalone checks exercise deferred attachment, late viewport creation, replacement across maps, timer-only display and cleanup. The timed destination check also verifies that a dialogue hand-in completes the quest and pays once after reaching the destination.
+- Native UE4.27 compilation and a play test with the compiled quest at the skip handoff are pending.
+
+# Version 2.9.12 — deferred playback and input handoff
+
+- A configured sequence remains registered while waiting to play. Starting playback shows the prompt before dialogue, and removal from the viewport during playback is retried. Existing Allow Skip and finish delegate settings control both immediate and deferred playback.
+- Skip still hands off to the authored event once. The next game tick restores exploration input after that handoff, including the controller's Blueprint input gate and any movement/look input lock attributable to the old scene. Release of the old lock is guarded by the local controller, world, game state and next scene or dialogue.
+- Standalone checks model viewport attachment, the actual imported playback order, deferred focus restoration, a new handoff input lock, and already blocked movement. UE4.27 compilation and in-editor testing require the game project.
+
+# Version 2.9.11 — immediate Skip prompt and game input recovery
+
+- The playback start delegates show a non-focusable prompt for a registered, skippable sequence. Release before the one-second hold completes to restore the prompt. Finish, stop and world changes clear it. Protected scenes still display a timed message on a skip attempt.
+- Skip restores the local exploration controller's game input mode and enables controller input after the old scene stops. A different sequence, visible replacement dialogue or changed world guards against restoring input over the new presentation. The existing authored finish bindings still run once.
+- The standalone checks compile the updated sequence methods with stand-ins and verify prompt and input transitions. Rebuild and play a same-map sequence in UE4.27 to verify the controller and input focus in the actual editor.
+
+# Version 2.9.10 — level-sequence finish event on Skip
+
+- The exported controller wires `EventOnFinished` to the sequence player's `OnFinished` and to the skip configuration. Skip uses the original finish bindings after stopping the player, including when a stop listener replaces the live bindings. A scene with a distinct skip-only callback uses that callback.
+- Standalone checks exercise both paths, repeated holds, protected scenes and a stop listener that changes the next finish bindings. Rebuild and play both finish paths in UE4.27 to verify the actual Blueprint callback.
+
 # Version 2.9.5 — timed destination and cinematic pause
 
 - Both the quest clock and its HUD pause status use the same sequence check. It recognizes external Level Sequence players and pauses between dialogue cues. Quest-owned scenes still use their authored pause setting.

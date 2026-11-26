@@ -40,6 +40,19 @@ namespace
         const void* Address=Value->ContainerPtrToValuePtr<void>(Object);
         return Value->IsInteger() ? static_cast<double>(Value->GetSignedIntPropertyValue(Address)) : Value->GetFloatingPointPropertyValue(Address);
     }
+
+    void InitializeMissingPlayerStaminaCap(AActor* Unit)
+    {
+        const auto* Maximum = FindFProperty<FIntProperty>(Unit->GetClass(), TEXT("MaxStamina"));
+        const auto* Current = FindFProperty<FIntProperty>(Unit->GetClass(), TEXT("CurrentStamina"));
+        if (!Maximum || !Current || Maximum->GetPropertyValue_InContainer(Unit) > 0) return;
+
+        // InitializePlayerUnitID puts the party row's Max Stamina in CurrentStamina.
+        // Legacy stagger expiry restores CurrentStamina from the separate MaxStamina field.
+        const int32 StartingStamina = Current->GetPropertyValue_InContainer(Unit);
+        if (StartingStamina > 0) Maximum->SetPropertyValue_InContainer(Unit, StartingStamina);
+    }
+
     bool ReadBool(const UObject* Object,FName PropertyName)
     {
         const FBoolProperty* Value=IsValid(Object) ? FindFProperty<FBoolProperty>(Object->GetClass(),PropertyName) : nullptr;
@@ -279,6 +292,15 @@ namespace
             Field->SetObjectPropertyValue_InContainer(Unit,nullptr);
         if (auto* Field=FindFProperty<FIntProperty>(Unit->GetClass(),TEXT("CurrentAmpPointsInPlay")))
             Field->SetPropertyValue_InContainer(Unit,0);
+        if (IsLegacyPlayer(Unit))
+        {
+            // SubtractAmpPoints charges this separate value at End Turn.
+            // A command forfeited before execution must not leave a charge behind.
+            if (auto* Spend = FindFProperty<FIntProperty>(Unit->GetClass(), TEXT("Points to subract")))
+                Spend->SetPropertyValue_InContainer(Unit, 0);
+            if (auto* Boosted = FindFProperty<FBoolProperty>(Unit->GetClass(), TEXT("IsBoostedState")))
+                Boosted->SetPropertyValue_InContainer(Unit, false);
+        }
         ClearAmpParticle(Unit);
     }
 
@@ -359,6 +381,7 @@ bool UReditusATBComponent::RegisterUnit(AActor* Unit,float FallbackSpeed)
     UnitIDs.Add(Unit,Identity);
     if (IsLegacyPlayer(Unit))
     {
+        InitializeMissingPlayerStaminaCap(Unit);
         auto* Health=Unit->FindComponentByClass<UReditusRollingHPComponent>();
         if (!Health)
         {
@@ -974,6 +997,9 @@ void UReditusATBComponent::DispatchActionWhenReady(int32 ActionToken, double Ela
     SpendProfiledEnemyAmp(*Saved);
     Saved->bExecutionDispatched = true;
     Copy = *Saved;
+    // The legacy controller copies AmpCommitted into CurrentAmpPointsInPlay.
+    // Native enemy AMP already scales each hit using the spent points.
+    if (Copy.bManagedEnemyAmp) Copy.AmpCommitted = 0;
     OnExecuteActionRequested.Broadcast(Copy);
 }
 

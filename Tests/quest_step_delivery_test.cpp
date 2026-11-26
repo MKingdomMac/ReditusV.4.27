@@ -300,6 +300,22 @@ int main()
         assert(S.Runtime.GetState("Quest") == State::Completed && Odin.Inventory["Ring"] == 1);
         assert(!Destination.ReportObjectiveReached("GamaciaEntry") && Odin.Inventory["Ring"] == 1);
 
+        UReditusQuestSubsystem DialogueHandIn;
+        APlayerController DialoguePlayer;
+        DialogueHandIn.Player = &DialoguePlayer;
+        DialogueHandIn.BuiltInRewardsApply = true;
+        DialogueHandIn.OnQuestDeliveryRequested.Bound = false;
+        Destination.System = &DialogueHandIn;
+        Destination.bTurnInQuestOnArrival = false;
+        assert(DialogueHandIn.Runtime.AddDefinition(Q, Error) && DialogueHandIn.StartQuest(Handle));
+        assert(Destination.ReportObjectiveReached("GamaciaEntry"));
+        assert(DialogueHandIn.Runtime.GetState("Quest") == State::Ready && DialoguePlayer.Inventory.empty());
+        assert(!DialogueHandIn.Runtime.Tick(30));
+        assert(DialogueHandIn.TurnInDialogueQuest(Handle, &DialoguePlayer));
+        assert(DialogueHandIn.Runtime.GetState("Quest") == State::Completed && DialoguePlayer.Inventory["Ring"] == 1);
+        assert(!DialogueHandIn.TurnInDialogueQuest(Handle, &DialoguePlayer));
+        Destination.bTurnInQuestOnArrival = true;
+
         UReditusQuestSubsystem Late;
         Late.World = &World; Late.Player = &Odin; Late.BuiltInRewardsApply = true;
         Destination.System = &Late;

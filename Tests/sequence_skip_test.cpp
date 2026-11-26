@@ -3,11 +3,14 @@
 #include <algorithm>
 #include <utility>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #define TEXT(Value) Value
 #define UE_LOG(...) do {} while (false)
 #define AddUniqueDynamic AddUnique
 #define RemoveDynamic Remove
+#define NSLOCTEXT(Namespace, Key, Value) Value
 struct FKey
 {
     int Value;
@@ -34,18 +37,32 @@ template<class T> const T* Cast(const UObject* Object) { return dynamic_cast<con
 struct FReditusSequenceSkipHandoff
 {
     std::function<void()> Callback;
+    const void* Identity = nullptr;
     bool IsBound() const { return bool(Callback); }
     void Unbind() { Callback = {}; }
     void ExecuteIfBound() const { if (Callback) Callback(); }
 };
 struct Event
 {
-    int Bindings = 0;
-    template<class T> void AddUnique(T*, void(T::*)()) { ++Bindings; }
-    template<class T> void Remove(T*, void(T::*)()) { Bindings = 0; }
+    std::function<void()> Observer;
+    template<class T> void AddUnique(T* Object, void(T::*Function)())
+    { Observer = [Object, Function]() { (Object->*Function)(); }; }
+    template<class T> void Remove(T*, void(T::*)()) { Observer = {}; }
+    std::vector<FReditusSequenceSkipHandoff> Authored;
+    bool Contains(const FReditusSequenceSkipHandoff& Delegate) const
+    {
+        return std::any_of(Authored.begin(), Authored.end(), [&](const FReditusSequenceSkipHandoff& Binding)
+            { return Binding.Identity == Delegate.Identity; });
+    }
+    void Broadcast()
+    {
+        const auto Snapshot = *this;
+        if (Snapshot.Observer) Snapshot.Observer();
+        for (const auto& Binding : Snapshot.Authored) Binding.ExecuteIfBound();
+    }
 };
 struct APlayerController;
-struct UWorld : UObject { APlayerController* Controller = nullptr; };
+struct UWorld : UObject { APlayerController* Controller = nullptr; bool bIsTearingDown = false, Paused = false; };
 struct FFrameNumber { int Value; explicit FFrameNumber(int ValueIn) : Value(ValueIn) {} };
 struct FFrameTime
 {
@@ -66,32 +83,53 @@ struct FMovieSceneSequencePlaybackParams
 template<class T> struct TWeakObjectPtr
 {
     T* Value = nullptr;
+    TWeakObjectPtr() = default;
+    explicit TWeakObjectPtr(T* Other) : Value(Other) {}
     TWeakObjectPtr& operator=(T* Other) { Value = Other; return *this; }
     void Reset() { Value = nullptr; }
     bool IsValid() const { return ::IsValid(Value); }
     T* Get() const { return IsValid() ? Value : nullptr; }
     T* operator->() const { return Value; }
 };
+struct FInputModeGameOnly {};
 struct APlayerController : UObject
 {
     UWorld* World = nullptr;
     UObject* CurrentSequence = nullptr;
     UObject* DialogueWidget = nullptr;
     bool bShowMouseCursor = true;
+    bool GameOnly = false, InputEnabled = false, Exploring = true;
+    bool LegacyBlocked = false;
+    int MoveLocks = 0, LookLocks = 0;
+    int InputModeRestores = 0;
     bool IsLocalController() const { return true; }
     UWorld* GetWorld() const { return World; }
     float GetInputAnalogKeyState(FKey) const { return 0; }
+    void SetInputMode(FInputModeGameOnly) { GameOnly = true; ++InputModeRestores; }
+    void EnableInput(APlayerController* Controller) { assert(Controller == this); InputEnabled = true; }
+    bool IsMoveInputIgnored() const { return MoveLocks > 0; }
+    bool IsLookInputIgnored() const { return LookLocks > 0; }
+    void SetIgnoreMoveInput(bool Block) { MoveLocks = std::max(0, MoveLocks + (Block ? 1 : -1)); }
+    void SetIgnoreLookInput(bool Block) { LookLocks = std::max(0, LookLocks + (Block ? 1 : -1)); }
 };
+namespace ReditusQuestSequenceGate
+{
+    bool IsExploring(APlayerController* Controller) { return Controller->Exploring; }
+}
 struct UReditusSequenceSkipSubsystem;
 struct UGameInstance
 {
     UReditusSequenceSkipSubsystem* System = nullptr;
+    bool HasViewport = true;
     template<class T> T* GetSubsystem() { return System; }
+    bool GetGameViewportClient() const { return HasViewport; }
 };
 struct UGameplayStatics
 {
     static APlayerController* GetPlayerController(UWorld* World, int) { return World ? World->Controller : nullptr; }
+    static APlayerController* GetPlayerController(const UObject* Object, int);
     static UGameInstance* GetGameInstance(const UObject* Context) { return Context ? Context->Instance : nullptr; }
+    static bool IsGamePaused(UWorld* World) { return World->Paused; }
 };
 struct UMovieSceneSequencePlayer : UObject
 {
@@ -100,7 +138,7 @@ struct UMovieSceneSequencePlayer : UObject
     int Position = 23, DialogueCloses = 0, Jumps = 0;
     int Plays = 0;
     UWorld* World = nullptr;
-    Event OnFinished, OnStop;
+    Event OnPlay, OnPlayReverse, OnFinished, OnStop;
     bool IsPlaying() const { return Playing; }
     bool IsPaused() const { return Paused; }
     UWorld* GetWorld() const { return World; }
@@ -112,13 +150,14 @@ struct UMovieSceneSequencePlayer : UObject
         assert(DialogueCloses > 0); // Dialogue closes only after the hold completes.
         Position = Params.Frame.Value; ++Jumps;
     }
-    void StopAtCurrentTime() { ++Stops; Playing = Paused = false; }
-    void Play() { ++Plays; Playing = true; Paused = false; }
+    void StopAtCurrentTime() { ++Stops; Playing = Paused = false; OnStop.Broadcast(); }
+    void Play() { ++Plays; Playing = true; Paused = false; OnPlay.Broadcast(); }
 };
 struct ALevelSequenceActor : UObject
 {
     UMovieSceneSequencePlayer* Player = nullptr;
     UWorld* World = nullptr;
+    struct Settings { bool bDisableMovementInput = false, bDisableLookAtInput = false; } PlaybackSettings;
     UWorld* GetWorld() const { return World; }
     UMovieSceneSequencePlayer* GetSequencePlayer() const { return Player; }
 };
@@ -155,12 +194,24 @@ namespace ReditusQuestNPCReflection
     }
     bool BindDialogueRemoved(UUserWidget* Widget, UReditusSequenceSkipSubsystem* System, bool Add);
 }
-struct UReditusSequenceSkipNotice
+struct UReditusSequenceSkipNotice : UObject
 {
-    int Removals = 0;
+    int Removals = 0, BlockedNotices = 0;
+    bool OnScreen = false, AllowViewportAttach = true;
+    std::string Message;
+    float Progress = -1;
     UWorld* World = nullptr;
     UWorld* GetWorld() const { return World; }
-    void RemoveFromParent() { ++Removals; }
+    bool IsInViewport() const { return OnScreen; }
+    void AddToViewport(int) { OnScreen = AllowViewportAttach; }
+    void RemoveFromParent() { OnScreen = false; ++Removals; }
+    void SetMessage(const char* Text)
+    {
+        Message = Text;
+        Progress = -1;
+        if (Message == "This scene can't be skipped.") ++BlockedNotices;
+    }
+    void SetProgress(float Value) { Progress = Value; }
 };
 struct FMath
 {
@@ -190,18 +241,30 @@ struct UReditusSequenceSkipSubsystem
     TWeakObjectPtr<UUserWidget> ObservedDialogue;
     TWeakObjectPtr<APlayerController> DialogueController;
     TWeakObjectPtr<UMovieSceneSequencePlayer> DialogueSequence;
+    TWeakObjectPtr<ALevelSequenceActor> LastUnregisteredSequence;
+    TWeakObjectPtr<APlayerController> PendingInputController;
+    bool bUsesControllerSequence = false, bPlaybackStarted = false;
+    bool bSequenceMayOwnMoveLock = false, bSequenceMayOwnLookLock = false;
+    bool bRestoreLegacyInput = false, bRestoreMoveInput = false, bRestoreLookInput = false;
     bool bContinueRequested = false, bPlaySequenceCue = false;
-    float Progress = 0;
     float LastTriggerValue = 0;
     double HeldSeconds = 0, NoticeSeconds = 0, LastTime = 0;
-    int Notices = 0;
     UWorld* GetTickableGameObjectWorld() const { return World; }
+    UGameInstance* GetGameInstance() const { return World->Controller->Instance; }
     void RegisterInput() {}
     bool CanCapture() const { return Capture && HasActiveSequence(); }
-    void ShowBlockedNotice() { ++Notices; NoticeSeconds = 2; Popup.World = World; NoticeWidget = &Popup; bShowingProgress = false; }
-    void ShowHoldProgress(float Value) { Progress = Value; bShowingProgress = true; }
-    void HideHoldProgress() { bShowingProgress = false; Progress = 0; }
-    void DismissSequenceDialogue() { ++SequencePlayer->DialogueCloses; }
+    UReditusSequenceSkipNotice* EnsureNoticeWidget();
+    bool ShowSkipPrompt();
+    void ShowBlockedNotice();
+    void ShowHoldProgress(float Value);
+    void HideHoldProgress();
+    void RestoreGameplayInput();
+    void DismissSequenceDialogue()
+    {
+        auto* Actor = Cast<ALevelSequenceActor>(World->Controller->CurrentSequence);
+        assert(Actor && Actor->Player);
+        ++Actor->Player->DialogueCloses;
+    }
     void SetAutoAdvance(UMovieSceneSequencePlayer*, bool);
     bool IsAutoAdvanceEnabled(UMovieSceneSequencePlayer*) const;
     bool Configure(ALevelSequenceActor*, bool, FReditusSequenceSkipHandoff);
@@ -215,6 +278,7 @@ struct UReditusSequenceSkipSubsystem
     void ClearDialogueObservation();
     void UpdateDialogueContinuation();
     void ClearSequence();
+    void SequenceStarted();
     void SequenceEnded();
     bool BeginAttempt();
     bool HandleKey(const FKey&, bool, bool = false);
@@ -222,6 +286,19 @@ struct UReditusSequenceSkipSubsystem
     void SetMouseHeld(bool);
     void Tick(float);
 };
+APlayerController* UGameplayStatics::GetPlayerController(const UObject* Object, int)
+{
+    const auto* Game = GetGameInstance(Object);
+    return Game && Game->System ? GetPlayerController(Game->System->World, 0) : nullptr;
+}
+bool IsLegacyInputBlocked(APlayerController* Controller) { return IsValid(Controller) && Controller->LegacyBlocked; }
+void UnblockLegacyInput(APlayerController* Controller) { Controller->LegacyBlocked = false; }
+template<class T> T* CreateWidget(APlayerController* Player)
+{
+    auto& Popup = Player->Instance->System->Popup;
+    Popup.World = Player->World;
+    return &Popup;
+}
 using uint8 = unsigned char;
 struct UReditusSequenceSkipLibrary
 {
@@ -238,7 +315,8 @@ bool ReditusQuestNPCReflection::BindDialogueRemoved(UUserWidget* Widget, UReditu
 // ACTUAL_CONFIGURE
 // ACTUAL_HAS_ACTIVE
 // ACTUAL_CLEAR
-// ACTUAL_SEQUENCE_ENDED
+// ACTUAL_NOTICE_LIFECYCLE
+// ACTUAL_RESTORE_INPUT
 // ACTUAL_ATTEMPT
 // ACTUAL_KEY
 // ACTUAL_TRIGGER
@@ -270,8 +348,8 @@ int main()
     World.Controller = &Controller;
     Controller.World = &World;
     Controller.Instance = &Instance;
-    int Handoffs = 0;
-    FReditusSequenceSkipHandoff Finish{[&]() { ++Handoffs; }};
+    int Handoffs = 0, FinishListeners = 0, NewFinishListeners = 0;
+    FReditusSequenceSkipHandoff Finish{[&]() { ++Handoffs; }, &Handoffs};
 
     assert(!System.Configure(&OtherActor, true, Finish));
     // Reproduce the uploaded PlayLevelSequence graph: Current Sequence is set,
@@ -279,22 +357,23 @@ int main()
     Controller.CurrentSequence = &Actor;
     assert(UReditusSequenceSkipLibrary::ConfigureLevelSequenceSkipping(&Controller, nullptr, Finish, false));
     assert(System.SequencePlayer == &Player && !Controller.bShowMouseCursor);
+    assert(!System.Popup.OnScreen);
     assert(!System.HandleKey(EKeys::Other, true));
     assert(System.HandleKey(EKeys::LeftShift, true));
     Advance(System, 12);
-    assert(Player.Stops == 0 && Handoffs == 0 && System.Notices == 1);
+    assert(Player.Stops == 0 && Handoffs == 0 && System.Popup.BlockedNotices == 1 && !System.Popup.OnScreen);
     assert(System.HandleKey(EKeys::LeftShift, true, true));
-    assert(System.Notices == 1);
+    assert(System.Popup.BlockedNotices == 1);
     System.HandleKey(EKeys::LeftShift, false);
 
     System.HandleTrigger(.8f);
     System.HandleTrigger(.8f);
-    assert(System.Notices == 2);
+    assert(System.Popup.BlockedNotices == 2);
     Advance(System);
     assert(Player.Stops == 0);
     System.HandleTrigger(0);
     System.SetMouseHeld(true);
-    assert(System.Notices == 3);
+    assert(System.Popup.BlockedNotices == 3);
     Advance(System);
     assert(Player.Stops == 0 && Handoffs == 0);
     System.SetMouseHeld(false);
@@ -305,29 +384,70 @@ int main()
     Advance(System);
     assert(Handoffs == 0 && Player.Stops == 0);
 
-    assert(UReditusSequenceSkipLibrary::ConfigureLevelSequenceSkipping(&Controller, nullptr, Finish, true));
+    Player.Playing = false;
+    Actor.PlaybackSettings = {true, true};
+    Controller.MoveLocks = 0;
+    Controller.LookLocks = 1; // The sequence does not own this pre-existing lock.
+    UObject CallingActor;
+    CallingActor.Instance = &Instance;
+    assert(UReditusSequenceSkipLibrary::ConfigureLevelSequenceSkipping(&CallingActor, nullptr, Finish, true));
+    Advance(System, 12);
+    assert(System.SequenceActor == &Actor && !System.HasActiveSequence());
+    assert(!System.Popup.OnScreen);
+    // Playback itself exposes the prompt before any dialogue exists or a tick runs.
+    Player.Playing = true;
+    Controller.MoveLocks = 1;
+    Player.OnPlay.Broadcast();
+    assert(System.Popup.OnScreen && System.Popup.Message == "Hold Shift or RT to skip");
+    System.Popup.RemoveFromParent();
+    System.Popup.AllowViewportAttach = false;
+    Advance(System, 1);
+    assert(!System.Popup.OnScreen);
+    System.Popup.AllowViewportAttach = true;
+    Advance(System, 1);
+    assert(System.Popup.OnScreen);
+    Advance(System, 12);
+    assert(System.Popup.OnScreen && System.Popup.Progress < 0.f);
+    // The exported controller binds the same callback after Play. A stop
+    // listener can replace the live bindings before the old handoff runs.
+    Player.OnFinished.Authored = {Finish, {[&]() {
+        assert(!Player.Playing && !System.Popup.OnScreen && !Controller.GameOnly && !Controller.InputEnabled);
+        Controller.Exploring = true;
+        ++FinishListeners;
+    }, &FinishListeners}};
+    Player.OnStop.Authored = {{[&]() {
+        Player.OnFinished.Authored = {{[&]() { ++NewFinishListeners; }, &NewFinishListeners}};
+    }, nullptr}};
     System.HandleKey(EKeys::LeftShift, true);
     Advance(System, 2);
-    assert(Player.Stops == 0 && System.Progress > .39f && System.Progress < .41f);
+    assert(Player.Stops == 0 && System.Popup.Progress > .39f && System.Popup.Progress < .41f);
     assert(Player.DialogueCloses == 0 && Player.Position == 23); // Holding fills before touching dialogue/timeline.
     System.HandleKey(EKeys::LeftShift, false);
     Advance(System);
-    assert(Player.Stops == 0 && !System.bShowingProgress);
+    assert(Player.Stops == 0 && !System.bShowingProgress && System.Popup.OnScreen && System.Popup.Progress < 0.f);
+    Controller.Exploring = false;
+    Controller.LegacyBlocked = true;
     System.HandleKey(EKeys::LeftShift, true);
     Advance(System);
     assert(Player.Stops == 1 && Handoffs == 1 && !System.HasActiveSequence());
     assert(Player.Position == 199 && Player.Jumps == 1 && Player.DialogueCloses == 1);
+    assert(FinishListeners == 1 && NewFinishListeners == 0);
+    Advance(System, 1);
+    assert(Controller.GameOnly && Controller.InputEnabled && Controller.InputModeRestores == 1);
+    assert(!Controller.LegacyBlocked && Controller.MoveLocks == 0 && Controller.LookLocks == 1);
+    Player.OnStop.Authored.clear();
     assert(System.HandleKey(EKeys::LeftShift, true, true)); // Held repeats cannot reach the old close-dialogue action.
     Advance(System, 10);
     assert(Player.Stops == 1 && Handoffs == 1);
     System.HandleKey(EKeys::LeftShift, false);
 
-    // Paused sequences can use an explicitly enabled skip handoff.
+    // Distinct skip callbacks keep their own handoff and omit finish listeners.
     Player.Paused = true;
     assert(System.Configure(&Actor, true, Finish));
     System.HandleTrigger(.8f);
     Advance(System);
     assert(Player.Stops == 2 && Handoffs == 2);
+    assert(FinishListeners == 1 && NewFinishListeners == 0);
     Player.Playing = true;
     assert(System.Configure(&Actor, true, Finish));
     System.HandleTrigger(.8f);
@@ -355,8 +475,11 @@ int main()
     // Natural finish only clears registration. It never invokes the skip path.
     System.World = &World;
     assert(System.Configure(&Actor, true, Finish));
-    System.SequenceEnded();
-    assert(!System.OnSkipped.IsBound() && Handoffs == 3);
+    assert(System.Popup.OnScreen);
+    Player.OnFinished.Authored.clear();
+    Player.Playing = false;
+    Player.OnFinished.Broadcast();
+    assert(!System.OnSkipped.IsBound() && !System.Popup.OnScreen && Handoffs == 3);
 
     Player.Playing = true;
     System.SetAutoAdvance(&Player, true);
@@ -426,5 +549,53 @@ int main()
     Dialogue.OnRemoved();
     Advance(System, 1);
     assert(Player.Plays == 4);
+
+    // If stopping the old scene opens another dialogue or starts a new scene,
+    // the old input mode cleanup must leave that new presentation in control.
+    System.Capture = true;
+    Controller.CurrentSequence = &Actor;
+    Controller.InputEnabled = Controller.GameOnly = false;
+    const int RestoresBefore = Controller.InputModeRestores;
+    bool HandoffRan = false;
+    FReditusSequenceSkipHandoff LastFinish{[&]() { HandoffRan = true; }, &HandoffRan};
+    assert(System.Configure(&Actor, true, LastFinish));
+    Player.OnStop.Authored = {{[&]() { Controller.DialogueWidget = &Replacement; }, nullptr}};
+    System.HandleKey(EKeys::LeftShift, true);
+    Advance(System);
+    assert(HandoffRan && !Controller.InputEnabled && Controller.InputModeRestores == RestoresBefore);
+    System.HandleKey(EKeys::LeftShift, false);
+
+    Controller.DialogueWidget = nullptr;
+    Player.Playing = true;
+    HandoffRan = false;
+    assert(System.Configure(&Actor, true, LastFinish));
+    OtherActor.World = OtherPlayer.World = &World;
+    OtherPlayer.Playing = false;
+    Player.OnStop.Authored = {{[&]() {
+        Controller.CurrentSequence = &OtherActor;
+        assert(System.Configure(&OtherActor, true, LastFinish));
+    }, nullptr}};
+    System.HandleKey(EKeys::LeftShift, true);
+    Advance(System, 5);
+    // Floating point accumulation may reach one second on the next tick.
+    if (!HandoffRan) Advance(System, 1);
+    assert(HandoffRan && System.SequenceActor == &OtherActor && Controller.InputModeRestores == RestoresBefore);
+    OtherPlayer.Playing = true;
+    OtherPlayer.OnPlayReverse.Broadcast();
+    assert(System.Popup.OnScreen);
+    OtherPlayer.Playing = false;
+    OtherPlayer.OnStop.Broadcast();
+    assert(!System.Popup.OnScreen && !System.SequenceActor);
+
+    // A new lock explicitly taken by the authored finish graph stays in place.
+    Controller.CurrentSequence = &Actor;
+    assert(System.Configure(&Actor, true, {[&]() { Controller.LegacyBlocked = true; }, &Controller}));
+    Player.OnStop.Authored.clear();
+    Player.Playing = true;
+    Player.OnPlay.Broadcast();
+    System.HandleKey(EKeys::LeftShift, false);
+    System.HandleKey(EKeys::LeftShift, true);
+    Advance(System, 7);
+    assert(Controller.LegacyBlocked && !Controller.InputEnabled && Controller.InputModeRestores == RestoresBefore);
     return 0;
 }

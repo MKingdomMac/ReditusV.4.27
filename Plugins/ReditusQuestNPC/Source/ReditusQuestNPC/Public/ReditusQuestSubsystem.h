@@ -10,6 +10,8 @@
 
 class APlayerController;
 class AActor;
+class SWidget;
+class UGameViewportClient;
 class USaveGame;
 class UReditusQuestNotificationsWidget;
 class ULevelSequencePlayer;
@@ -177,6 +179,8 @@ private:
     void FinishInternal(FDataTableRowHandle Quest);
     bool BuildStepDelivery(FDataTableRowHandle Quest, FName ActionID, FReditusQuestDelivery& Delivery) const;
     void NotifyQuest(FDataTableRowHandle Quest, EReditusQuestNoticeKind Kind);
+    void UpdateQuestHUD(UWorld* World);
+    void RemoveQuestHUD();
     void PumpSequences();
     bool AreQuestTimersPaused() const;
     void EndSequence(bool Completed);
@@ -190,7 +194,10 @@ private:
     UPROPERTY(Transient) TMap<FString, FReditusQuestDelivery> Deliveries;
     UPROPERTY(Transient) TArray<FDataTableRowHandle> AddedNotices;
     UPROPERTY(Transient) TArray<FDataTableRowHandle> CompletedNotices;
+    UPROPERTY(Transient) TArray<FReditusQuestNotification> PendingHUDNotices;
     TWeakObjectPtr<UReditusQuestNotificationsWidget> NotificationView;
+    TWeakObjectPtr<UGameViewportClient> NotificationViewport;
+    TWeakPtr<SWidget> NotificationLayer;
     UPROPERTY(Transient) TArray<UReditusQuestJournalBinding*> JournalBindings;
     UPROPERTY(Transient) TArray<FReditusQuestSequence> SequenceQueue;
     UPROPERTY(Transient) FReditusQuestSequence ActiveSequence;
