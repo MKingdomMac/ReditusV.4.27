@@ -276,16 +276,37 @@ const FReditusEnemyAIProfile* UReditusEnemyCombatAIComponent::FindProfile() cons
 {
     const AActor* Enemy = GetOwner();
     if (!IsValid(Enemy)) return nullptr;
-    if (IsValid(AIProfile.DataTable) && !AIProfile.RowName.IsNone())
-    {
-        return AIProfile.DataTable->GetRowStruct() == FReditusEnemyAIProfile::StaticStruct()
-            ? AIProfile.GetRow<FReditusEnemyAIProfile>(TEXT("Enemy class AI profile")) : nullptr;
-    }
-    if (!IsValid(ProfileTable) || ProfileTable->GetRowStruct() != FReditusEnemyAIProfile::StaticStruct()) return nullptr;
     const uint8* RowData = FindEnemyDefinition();
-    if (!RowData) return nullptr;
-    const auto* ProfileIDProperty = FindFProperty<FNameProperty>(EnemyDefinitions->GetRowStruct(), TEXT("AIProfileID"));
-    const FName ProfileID = ProfileIDProperty ? ProfileIDProperty->GetPropertyValue_InContainer(RowData) : NAME_None;
+    const UScriptStruct* RowType = RowData ? EnemyDefinitions->GetRowStruct() : nullptr;
+    const auto* ProfileProperty = RowData ? FindFProperty<FStructProperty>(RowType, TEXT("AIProfile")) : nullptr;
+    if (ProfileProperty && ProfileProperty->Struct == FDataTableRowHandle::StaticStruct())
+    {
+        const auto& Handle = *ProfileProperty->ContainerPtrToValuePtr<FDataTableRowHandle>(RowData);
+        if (IsValid(Handle.DataTable) && !Handle.RowName.IsNone() &&
+            Handle.DataTable->GetRowStruct() == FReditusEnemyAIProfile::StaticStruct())
+        {
+            if (const auto* Profile = Handle.DataTable->FindRow<FReditusEnemyAIProfile>(
+                Handle.RowName, TEXT("Enemy definition AI profile"), false))
+            {
+                return Profile;
+            }
+        }
+    }
+
+    if (IsValid(AIProfile.DataTable) && !AIProfile.RowName.IsNone() &&
+        AIProfile.DataTable->GetRowStruct() == FReditusEnemyAIProfile::StaticStruct())
+    {
+        if (const auto* Profile = AIProfile.DataTable->FindRow<FReditusEnemyAIProfile>(
+            AIProfile.RowName, TEXT("Enemy class AI profile"), false))
+        {
+            return Profile;
+        }
+    }
+
+    const auto* ProfileIDProperty = RowData ? FindFProperty<FNameProperty>(RowType, TEXT("AIProfileID")) : nullptr;
+    if (!ProfileIDProperty || !IsValid(ProfileTable) ||
+        ProfileTable->GetRowStruct() != FReditusEnemyAIProfile::StaticStruct()) return nullptr;
+    const FName ProfileID = ProfileIDProperty->GetPropertyValue_InContainer(RowData);
     return ProfileID.IsNone() ? nullptr : ProfileTable->FindRow<FReditusEnemyAIProfile>(
         ProfileID, TEXT("Enemy definition AI profile"), false);
 }

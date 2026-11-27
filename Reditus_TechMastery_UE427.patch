@@ -1,0 +1,1236 @@
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
+index 33dcbaa..aeb7351 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusEnemyCombatAIComponent.cpp
+@@ -276,16 +276,37 @@ const FReditusEnemyAIProfile* UReditusEnemyCombatAIComponent::FindProfile() cons
+ {
+     const AActor* Enemy = GetOwner();
+     if (!IsValid(Enemy)) return nullptr;
+-    if (IsValid(AIProfile.DataTable) && !AIProfile.RowName.IsNone())
++    const uint8* RowData = FindEnemyDefinition();
++    const UScriptStruct* RowType = RowData ? EnemyDefinitions->GetRowStruct() : nullptr;
++    const auto* ProfileProperty = RowData ? FindFProperty<FStructProperty>(RowType, TEXT("AIProfile")) : nullptr;
++    if (ProfileProperty && ProfileProperty->Struct == FDataTableRowHandle::StaticStruct())
+     {
+-        return AIProfile.DataTable->GetRowStruct() == FReditusEnemyAIProfile::StaticStruct()
+-            ? AIProfile.GetRow<FReditusEnemyAIProfile>(TEXT("Enemy class AI profile")) : nullptr;
++        const auto& Handle = *ProfileProperty->ContainerPtrToValuePtr<FDataTableRowHandle>(RowData);
++        if (IsValid(Handle.DataTable) && !Handle.RowName.IsNone() &&
++            Handle.DataTable->GetRowStruct() == FReditusEnemyAIProfile::StaticStruct())
++        {
++            if (const auto* Profile = Handle.DataTable->FindRow<FReditusEnemyAIProfile>(
++                Handle.RowName, TEXT("Enemy definition AI profile"), false))
++            {
++                return Profile;
++            }
++        }
+     }
+-    if (!IsValid(ProfileTable) || ProfileTable->GetRowStruct() != FReditusEnemyAIProfile::StaticStruct()) return nullptr;
+-    const uint8* RowData = FindEnemyDefinition();
+-    if (!RowData) return nullptr;
+-    const auto* ProfileIDProperty = FindFProperty<FNameProperty>(EnemyDefinitions->GetRowStruct(), TEXT("AIProfileID"));
+-    const FName ProfileID = ProfileIDProperty ? ProfileIDProperty->GetPropertyValue_InContainer(RowData) : NAME_None;
++
++    if (IsValid(AIProfile.DataTable) && !AIProfile.RowName.IsNone() &&
++        AIProfile.DataTable->GetRowStruct() == FReditusEnemyAIProfile::StaticStruct())
++    {
++        if (const auto* Profile = AIProfile.DataTable->FindRow<FReditusEnemyAIProfile>(
++            AIProfile.RowName, TEXT("Enemy class AI profile"), false))
++        {
++            return Profile;
++        }
++    }
++
++    const auto* ProfileIDProperty = RowData ? FindFProperty<FNameProperty>(RowType, TEXT("AIProfileID")) : nullptr;
++    if (!ProfileIDProperty || !IsValid(ProfileTable) ||
++        ProfileTable->GetRowStruct() != FReditusEnemyAIProfile::StaticStruct()) return nullptr;
++    const FName ProfileID = ProfileIDProperty->GetPropertyValue_InContainer(RowData);
+     return ProfileID.IsNone() ? nullptr : ProfileTable->FindRow<FReditusEnemyAIProfile>(
+         ProfileID, TEXT("Enemy definition AI profile"), false);
+ }
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryLibrary.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryLibrary.cpp
+new file mode 100644
+index 0000000..460a1b5
+--- /dev/null
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryLibrary.cpp
+@@ -0,0 +1,377 @@
++#include "ReditusTechMasteryLibrary.h"
++#include "ReditusTechMasteryRules.h"
++#include "Engine/DataTable.h"
++#include "Engine/GameInstance.h"
++#include "Engine/World.h"
++#include "GameFramework/Actor.h"
++#include "GameFramework/PlayerController.h"
++#include "GameFramework/SaveGame.h"
++#include "Kismet/GameplayStatics.h"
++#include "UObject/StructOnScope.h"
++#include "UObject/UnrealType.h"
++
++DEFINE_LOG_CATEGORY_STATIC(LogReditusTechMastery, Log, All);
++
++namespace ReditusTechMasteryRuntime
++{
++    const TCHAR* SkillTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Skills.DT_Skills");
++    const TCHAR* EnemyTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Enemies.DT_Enemies");
++    const TCHAR* PartyTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_PartyMembers.DT_PartyMembers");
++    const TCHAR* FunctionLibraryPath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Controllers/BP_JRPGFunctionLibrary.BP_JRPGFunctionLibrary_C");
++
++    template <typename Field>
++    const Field* FindField(const UStruct* Type, FName Name)
++    {
++        if (!Type) return nullptr;
++        if (const auto* Exact = FindFProperty<Field>(Type, Name)) return Exact;
++        const FString Prefix = Name.ToString() + TEXT("_");
++        for (TFieldIterator<Field> It(Type); It; ++It)
++        {
++            if (It->GetName().StartsWith(Prefix)) return *It;
++        }
++        return nullptr;
++    }
++
++    UObject* ObjectField(const UObject* Owner, FName Name)
++    {
++        const auto* Field = IsValid(Owner) ? FindFProperty<FObjectPropertyBase>(Owner->GetClass(), Name) : nullptr;
++        return Field ? Field->GetObjectPropertyValue_InContainer(Owner) : nullptr;
++    }
++
++    FName NameField(const UObject* Owner, FName Name)
++    {
++        const auto* Field = IsValid(Owner) ? FindFProperty<FNameProperty>(Owner->GetClass(), Name) : nullptr;
++        return Field ? Field->GetPropertyValue_InContainer(Owner) : NAME_None;
++    }
++
++    struct FRow
++    {
++        const UScriptStruct* Type = nullptr;
++        const uint8* Data = nullptr;
++    };
++
++    FRow FindRow(const TCHAR* TablePath, FName ID)
++    {
++        if (ID.IsNone()) return {};
++        auto* Table = LoadObject<UDataTable>(nullptr, TablePath, nullptr, LOAD_NoWarn | LOAD_Quiet);
++        return IsValid(Table) ? FRow{Table->GetRowStruct(), Table->GetRowMap().FindRef(ID)} : FRow{};
++    }
++
++    FText DisplayName(const FRow& Row, FName ID)
++    {
++        const auto* Field = FindField<FTextProperty>(Row.Type, TEXT("DisplayName"));
++        if (!Row.Data || !Field) return FText::FromString(ID.ToString());
++        const FText Value = Field->GetPropertyValue_InContainer(Row.Data);
++        return Value.IsEmpty() ? FText::FromString(ID.ToString()) : Value;
++    }
++
++    int32 Requirement(const FRow& Row)
++    {
++        const auto* Field = FindField<FIntProperty>(Row.Type, TEXT("MasteryPointsRequired"));
++        return Row.Data && Field ? Field->GetPropertyValue_InContainer(Row.Data) : 0;
++    }
++
++    UGameInstance* Instance(const UObject* Context)
++    {
++        UWorld* World = IsValid(Context) ? Context->GetWorld() : nullptr;
++        return World ? World->GetGameInstance() : nullptr;
++    }
++
++    UReditusTechMasterySubsystem* Subsystem(const UObject* Context)
++    {
++        UGameInstance* Game = Instance(Context);
++        return Game ? Game->GetSubsystem<UReditusTechMasterySubsystem>() : nullptr;
++    }
++
++    FReditusTechMasterySaveData* SaveData(const UObject* Context, bool bCreateSave = false)
++    {
++        UGameInstance* Game = Instance(Context);
++        if (!Game) return nullptr;
++        const auto* Slot = FindFProperty<FObjectProperty>(Game->GetClass(), TEXT("jRPGSaveGame"));
++        if (!Slot || !Slot->PropertyClass->IsChildOf(USaveGame::StaticClass())) return nullptr;
++        UObject* Save = Slot->GetObjectPropertyValue_InContainer(Game);
++        if (!IsValid(Save) && bCreateSave)
++        {
++            Save = UGameplayStatics::CreateSaveGameObject(Slot->PropertyClass);
++            Slot->SetObjectPropertyValue_InContainer(Game, Save);
++        }
++        const auto* Field = IsValid(Save) ? FindFProperty<FStructProperty>(Save->GetClass(), TEXT("TechMastery")) : nullptr;
++        return Field && Field->Struct == FReditusTechMasterySaveData::StaticStruct()
++            ? Field->ContainerPtrToValuePtr<FReditusTechMasterySaveData>(Save) : nullptr;
++    }
++
++    const FReditusCharacterMastery* CharacterProgress(const UObject* Context, FName CharacterID)
++    {
++        const auto* Save = SaveData(Context);
++        return Save && !CharacterID.IsNone() ? Save->Characters.Find(CharacterID) : nullptr;
++    }
++
++    void ReadNameArray(const FArrayProperty* Array, const void* Owner, TArray<FName>& Out)
++    {
++        const auto* Element = Array ? CastField<FNameProperty>(Array->Inner) : nullptr;
++        if (!Element || !Owner) return;
++        FScriptArrayHelper Values(Array, Array->ContainerPtrToValuePtr<void>(Owner));
++        for (int32 Index = 0; Index < Values.Num(); ++Index)
++        {
++            FName Name = Element->GetPropertyValue(Values.GetRawPtr(Index));
++            if (!Name.IsNone()) Out.AddUnique(Name);
++        }
++    }
++
++    const void* FindUnitData(const UObject* Controller, FName CharacterID, const UScriptStruct*& OutType)
++    {
++        if (!IsValid(Controller) || CharacterID.IsNone()) return nullptr;
++        const auto* Map = FindFProperty<FMapProperty>(Controller->GetClass(), TEXT("PlayerUnitDataID"));
++        const auto* Key = Map ? CastField<FNameProperty>(Map->KeyProp) : nullptr;
++        const auto* Value = Map ? CastField<FStructProperty>(Map->ValueProp) : nullptr;
++        if (!Key || !Value) return nullptr;
++        FScriptMapHelper Units(Map, Map->ContainerPtrToValuePtr<void>(Controller));
++        for (int32 Index = 0; Index < Units.GetMaxIndex(); ++Index)
++        {
++            if (Units.IsValidIndex(Index) && Key->GetPropertyValue(Units.GetKeyPtr(Index)) == CharacterID)
++            {
++                OutType = Value->Struct;
++                return Units.GetValuePtr(Index);
++            }
++        }
++        return nullptr;
++    }
++
++    void ReadEquippedTechs(UObject* Context, const void* Unit, const UScriptStruct* UnitType, TArray<FName>& Out)
++    {
++        if (!Unit || !UnitType) return;
++        auto* Class = LoadClass<UObject>(nullptr, FunctionLibraryPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
++        auto* GetSkills = Class ? Class->FindFunctionByName(TEXT("GetEquipmentSkills")) : nullptr;
++        if (!GetSkills) return;
++        const auto* Input = FindFProperty<FStructProperty>(GetSkills, TEXT("unitData"));
++        const auto* Output = FindFProperty<FArrayProperty>(GetSkills, TEXT("equipmentBattleSkills"));
++        if (!Input || Input->Struct != UnitType || !Output || !CastField<FNameProperty>(Output->Inner)) return;
++        FStructOnScope Args(GetSkills);
++        Input->CopyCompleteValue(Input->ContainerPtrToValuePtr<void>(Args.GetStructMemory()), Unit);
++        if (const auto* World = FindFProperty<FObjectPropertyBase>(GetSkills, TEXT("__WorldContext")))
++        {
++            World->SetObjectPropertyValue_InContainer(Args.GetStructMemory(), Context);
++        }
++        Class->GetDefaultObject()->ProcessEvent(GetSkills, Args.GetStructMemory());
++        ReadNameArray(Output, Args.GetStructMemory(), Out);
++    }
++
++    bool ReadBossFlag(const UStruct* Type, const void* Value, bool& bIsBoss)
++    {
++        const auto* Options = Value && Type ? FindFProperty<FStructProperty>(Type, TEXT("BossDeath")) : nullptr;
++        const auto* Flag = Options ? FindFProperty<FBoolProperty>(Options->Struct, TEXT("bIsBoss")) : nullptr;
++        if (!Flag) return false;
++        bIsBoss = Flag->GetPropertyValue_InContainer(Options->ContainerPtrToValuePtr<void>(Value));
++        return true;
++    }
++
++    bool IsBoss(AActor* Enemy, const FRow& Row)
++    {
++        bool bIsBoss = false;
++        if (ReadBossFlag(Row.Type, Row.Data, bIsBoss)) return bIsBoss;
++        UObject* Component = ObjectField(Enemy, TEXT("EnemyDeathVisual"));
++        if (IsValid(Component) && ReadBossFlag(Component->GetClass(), Component, bIsBoss)) return bIsBoss;
++        UFunction* GetStyle = IsValid(Component) ? Component->FindFunction(TEXT("GetDeathStyle")) : nullptr;
++        if (!GetStyle || GetStyle->NumParms != 1) return false;
++        const auto* Return = GetStyle->GetReturnProperty();
++        const auto* Enum = CastField<FEnumProperty>(Return);
++        const auto* Byte = CastField<FByteProperty>(Return);
++        if (!Enum && !(Byte && Byte->Enum)) return false;
++
++        FStructOnScope Args(GetStyle);
++        Component->ProcessEvent(GetStyle, Args.GetStructMemory());
++        const int64 Value = Enum
++            ? Enum->GetUnderlyingProperty()->GetSignedIntPropertyValue(Enum->ContainerPtrToValuePtr<void>(Args.GetStructMemory()))
++            : Byte->GetPropertyValue_InContainer(Args.GetStructMemory());
++        const UEnum* Style = Enum ? Enum->GetEnum() : Byte->Enum;
++        const FString Name = Style->GetNameStringByValue(Value);
++        return Name == TEXT("BossDissolve") || Name == TEXT("BossCameraShake");
++    }
++
++    int32 ResolveMasteryReward(AActor* Enemy, bool bTableEnemy)
++    {
++        const FRow Row = bTableEnemy ? FindRow(EnemyTablePath, NameField(Enemy, TEXT("EnemyID"))) : FRow{};
++        int32 Override = 0;
++        if (Row.Data)
++        {
++            if (const auto* Field = FindField<FIntProperty>(Row.Type, TEXT("MasteryRewardOverride")))
++            {
++                Override = Field->GetPropertyValue_InContainer(Row.Data);
++            }
++        }
++        else if (const auto* Field = FindFProperty<FIntProperty>(Enemy->GetClass(), TEXT("MasteryRewardOverride")))
++        {
++            Override = Field->GetPropertyValue_InContainer(Enemy);
++        }
++        return ReditusTechMasteryRules::ResolveEnemyReward(Override, Override <= 0 && IsBoss(Enemy, Row));
++    }
++
++    void SetText(UObject* TextWidget, const FText& Text)
++    {
++        UFunction* Setter = IsValid(TextWidget) ? TextWidget->FindFunction(TEXT("SetText")) : nullptr;
++        const auto* Input = Setter ? FindFProperty<FTextProperty>(Setter, TEXT("InText")) : nullptr;
++        if (!Input || Setter->NumParms != 1) return;
++        FStructOnScope Args(Setter);
++        Input->SetPropertyValue_InContainer(Args.GetStructMemory(), Text);
++        TextWidget->ProcessEvent(Setter, Args.GetStructMemory());
++    }
++
++    FText StageText(const FReditusCharacterMastery* Mastery, FName SkillID, int32 Required)
++    {
++        if (Mastery && Mastery->Learned.Contains(SkillID)) return NSLOCTEXT("ReditusMastery", "Learned", "Learned");
++        const int32 Progress = Mastery ? Mastery->Progress.FindRef(SkillID) : 0;
++        return FText::Format(NSLOCTEXT("ReditusMastery", "Progress", "Mastery {0}/{1}"),
++            FText::AsNumber(FMath::Clamp(Progress, 0, Required)), FText::AsNumber(Required));
++    }
++}
++
++void UReditusTechMasteryLibrary::BeginMasteryEncounter(AActor* Battle)
++{
++    using namespace ReditusTechMasteryRuntime;
++    if (auto* System = Subsystem(Battle))
++    {
++        for (auto It = System->Encounters.CreateIterator(); It; ++It)
++        {
++            if (!It.Key().IsValid()) It.RemoveCurrent();
++        }
++        System->Encounters.Add(Battle, FReditusEncounterMastery());
++    }
++}
++
++void UReditusTechMasteryLibrary::IncludeEnemyMasteryReward(AActor* Battle, AActor* Enemy, bool bTableEnemy)
++{
++    using namespace ReditusTechMasteryRuntime;
++    auto* System = Subsystem(Battle);
++    if (!System || !IsValid(Enemy)) return;
++    auto& Encounter = System->Encounters.FindOrAdd(Battle);
++    if (!Encounter.bAwarded)
++    {
++        Encounter.Reward = ReditusTechMasteryRules::IncludeEnemyReward(Encounter.Reward, ResolveMasteryReward(Enemy, bTableEnemy));
++    }
++}
++
++void UReditusTechMasteryLibrary::AwardVictoryMastery(AActor* BattleController)
++{
++    using namespace ReditusTechMasteryRuntime;
++    auto* Battle = Cast<AActor>(ObjectField(BattleController, TEXT("currentBattle")));
++    auto* System = Subsystem(Battle);
++    if (!System) return;
++    auto& Encounter = System->Encounters.FindOrAdd(Battle);
++    if (Encounter.bAwarded) return;
++
++    auto* Controller = ObjectField(BattleController, TEXT("jRPGPlayerController"));
++    auto* Save = SaveData(Battle, true);
++    auto* Units = FindFProperty<FArrayProperty>(Battle->GetClass(), TEXT("playerUnits"));
++    auto* UnitElement = Units ? CastField<FObjectPropertyBase>(Units->Inner) : nullptr;
++    if (!Save || !IsValid(Controller) || !UnitElement)
++    {
++        UE_LOG(LogReditusTechMastery, Warning, TEXT("Mastery could not read the battle participants or active save data."));
++        return;
++    }
++
++    FScriptArrayHelper Participants(Units, Units->ContainerPtrToValuePtr<void>(Battle));
++    TSet<FName> Counted;
++    for (int32 Index = 0; Index < Participants.Num(); ++Index)
++    {
++        UObject* Unit = UnitElement->GetObjectPropertyValue(Participants.GetRawPtr(Index));
++        const FName CharacterID = NameField(Unit, TEXT("CharacterID"));
++        if (CharacterID.IsNone() || Counted.Contains(CharacterID)) continue;
++        Counted.Add(CharacterID);
++
++        const UScriptStruct* UnitType = nullptr;
++        const void* UnitData = FindUnitData(Controller, CharacterID, UnitType);
++        TArray<FName> Skills;
++        ReadEquippedTechs(BattleController, UnitData, UnitType, Skills);
++        for (FName SkillID : Skills)
++        {
++            const FRow Row = FindRow(SkillTablePath, SkillID);
++            const int32 Required = Requirement(Row);
++            if (Required <= 0) continue;
++            auto& Character = Save->Characters.FindOrAdd(CharacterID);
++            if (Character.Learned.Contains(SkillID)) continue;
++
++            int32& Progress = Character.Progress.FindOrAdd(SkillID);
++            Progress = ReditusTechMasteryRules::Advance(Progress, Encounter.Reward, Required);
++            Encounter.bAnyProgress = true;
++            if (Progress >= Required)
++            {
++                Character.Learned.Add(SkillID);
++                Encounter.Learned.Add(FText::Format(NSLOCTEXT("ReditusMastery", "MasteredTech", "{0} learned {1}"),
++                    DisplayName(FindRow(PartyTablePath, CharacterID), CharacterID), DisplayName(Row, SkillID)));
++            }
++        }
++    }
++    Encounter.bAwarded = true;
++}
++
++void UReditusTechMasteryLibrary::AppendLearnedTechs(UObject* SkillOwner)
++{
++    using namespace ReditusTechMasteryRuntime;
++    FName CharacterID = NameField(SkillOwner, TEXT("CharacterID"));
++    if (CharacterID.IsNone()) CharacterID = NameField(SkillOwner, TEXT("CastingUnit"));
++    const auto* Mastery = CharacterProgress(SkillOwner, CharacterID);
++    if (!Mastery || Mastery->Learned.Num() == 0) return;
++
++    const auto* Skills = FindFProperty<FArrayProperty>(SkillOwner->GetClass(), TEXT("availableBattleSkills"));
++    const auto* Element = Skills ? CastField<FNameProperty>(Skills->Inner) : nullptr;
++    if (!Element) return;
++    TArray<FName> Existing;
++    ReadNameArray(Skills, SkillOwner, Existing);
++    FScriptArrayHelper Target(Skills, Skills->ContainerPtrToValuePtr<void>(SkillOwner));
++    for (FName Skill : Mastery->Learned)
++    {
++        if (!Skill.IsNone() && !Existing.Contains(Skill))
++        {
++            Element->SetPropertyValue(Target.GetRawPtr(Target.AddValue()), Skill);
++            Existing.Add(Skill);
++        }
++    }
++}
++
++FText UReditusTechMasteryLibrary::FormatVictoryMastery(UObject* VictoryWidget, const FText& RewardText)
++{
++    using namespace ReditusTechMasteryRuntime;
++    auto* System = Subsystem(VictoryWidget);
++    if (!System) return RewardText;
++    UObject* Unit = ObjectField(VictoryWidget, TEXT("PlayerUnitBase"));
++    UObject* Controller = ObjectField(Unit, TEXT("battleController"));
++    if (!IsValid(Controller))
++    {
++        Controller = ObjectField(UGameplayStatics::GetPlayerController(VictoryWidget, 0), TEXT("battleController"));
++    }
++    auto* Battle = Cast<AActor>(ObjectField(Controller, TEXT("currentBattle")));
++    const auto* Encounter = System->Encounters.Find(Battle);
++    if (!Encounter || !Encounter->bAnyProgress) return RewardText;
++
++    FText Text = FText::Format(NSLOCTEXT("ReditusMastery", "VictoryReward", "{0}   Mastery +{1}"),
++        RewardText, FText::AsNumber(Encounter->Reward));
++    for (const FText& Learned : Encounter->Learned)
++    {
++        Text = FText::Format(NSLOCTEXT("ReditusMastery", "Line", "{0}\n{1}"), Text, Learned);
++    }
++    return Text;
++}
++
++void UReditusTechMasteryLibrary::ShowMasteryOnSkillButton(UObject* Menu, UObject* SkillButton, FName SkillID)
++{
++    using namespace ReditusTechMasteryRuntime;
++    const FRow Row = FindRow(SkillTablePath, SkillID);
++    const int32 Needed = Requirement(Row);
++    if (Needed <= 0) return;
++    FName CharacterID = NameField(Menu, TEXT("CastingUnit"));
++    const bool bEquipmentPreview = CharacterID.IsNone();
++    if (bEquipmentPreview) CharacterID = NameField(Menu, TEXT("CharacterID"));
++    if (CharacterID.IsNone()) return;
++
++    const auto* Mastery = CharacterProgress(Menu, CharacterID);
++    if (!bEquipmentPreview && !(Mastery && Mastery->Learned.Contains(SkillID)))
++    {
++        const auto* Unit = FindFProperty<FStructProperty>(Menu->GetClass(), TEXT("playerUnitData"));
++        TArray<FName> Skills;
++        if (Unit) ReadEquippedTechs(Menu, Unit->ContainerPtrToValuePtr<void>(Menu), Unit->Struct, Skills);
++        if (!Skills.Contains(SkillID)) return;
++    }
++    SetText(ObjectField(SkillButton, TEXT("SkillName")),
++        FText::Format(NSLOCTEXT("ReditusMastery", "TechName", "{0}   {1}"),
++            DisplayName(Row, SkillID), StageText(Mastery, SkillID, Needed)));
++}
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryRules.h b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryRules.h
+new file mode 100644
+index 0000000..4868c6d
+--- /dev/null
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryRules.h
+@@ -0,0 +1,22 @@
++#pragma once
++
++namespace ReditusTechMasteryRules
++{
++    inline int ResolveEnemyReward(int Override, bool bBoss)
++    {
++        return Override > 0 ? Override : bBoss ? 2 : 1;
++    }
++
++    inline int IncludeEnemyReward(int Current, int Enemy)
++    {
++        return Enemy > Current ? Enemy : Current;
++    }
++
++    // Clamp stored progress and stop at the requirement without overflowing on large rewards.
++    inline int Advance(int Previous, int Award, int Required)
++    {
++        if (Award <= 0 || Required <= 0) return Previous;
++        const int Progress = Previous < 0 ? 0 : Previous > Required ? Required : Previous;
++        return Award >= Required - Progress ? Required : Progress + Award;
++    }
++}
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusTechMasteryLibrary.h b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusTechMasteryLibrary.h
+new file mode 100644
+index 0000000..901bdd8
+--- /dev/null
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusTechMasteryLibrary.h
+@@ -0,0 +1,70 @@
++#pragma once
++
++#include "CoreMinimal.h"
++#include "Kismet/BlueprintFunctionLibrary.h"
++#include "Subsystems/GameInstanceSubsystem.h"
++#include "ReditusTechMasteryLibrary.generated.h"
++
++class AActor;
++
++USTRUCT()
++struct FReditusCharacterMastery
++{
++    GENERATED_BODY()
++
++    UPROPERTY(SaveGame)
++    TMap<FName, int32> Progress;
++
++    UPROPERTY(SaveGame)
++    TArray<FName> Learned;
++};
++
++USTRUCT(BlueprintType)
++struct REDITUSTABLEBUFFS_API FReditusTechMasterySaveData
++{
++    GENERATED_BODY()
++
++    UPROPERTY(SaveGame)
++    TMap<FName, FReditusCharacterMastery> Characters;
++};
++
++struct FReditusEncounterMastery
++{
++    int32 Reward = 1;
++    bool bAwarded = false;
++    bool bAnyProgress = false;
++    TArray<FText> Learned;
++};
++
++UCLASS()
++class REDITUSTABLEBUFFS_API UReditusTechMasterySubsystem : public UGameInstanceSubsystem
++{
++    GENERATED_BODY()
++
++    friend class UReditusTechMasteryLibrary;
++    TMap<TWeakObjectPtr<AActor>, FReditusEncounterMastery> Encounters;
++};
++
++UCLASS()
++class REDITUSTABLEBUFFS_API UReditusTechMasteryLibrary : public UBlueprintFunctionLibrary
++{
++    GENERATED_BODY()
++public:
++    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
++    static void BeginMasteryEncounter(AActor* Battle);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
++    static void IncludeEnemyMasteryReward(AActor* Battle, AActor* Enemy, bool bTableEnemy);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
++    static void AwardVictoryMastery(AActor* BattleController);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
++    static void AppendLearnedTechs(UObject* SkillOwner);
++
++    UFUNCTION(BlueprintPure, Category="Reditus|Tech Mastery")
++    static FText FormatVictoryMastery(UObject* VictoryWidget, const FText& RewardText);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
++    static void ShowMasteryOnSkillButton(UObject* Menu, UObject* SkillButton, FName SkillID);
++};
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusTechMasteryInstall.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusTechMasteryInstall.cpp
+new file mode 100644
+index 0000000..5563de0
+--- /dev/null
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusTechMasteryInstall.cpp
+@@ -0,0 +1,667 @@
++#include "ReditusEnemyCombatAIComponent.h"
++#include "ReditusTechMasteryLibrary.h"
++
++#include "EdGraph/EdGraph.h"
++#include "EdGraph/EdGraphPin.h"
++#include "EdGraphSchema_K2.h"
++#include "Editor.h"
++#include "Engine/Blueprint.h"
++#include "Engine/DataTable.h"
++#include "Engine/SCS_Node.h"
++#include "Engine/SimpleConstructionScript.h"
++#include "Engine/UserDefinedStruct.h"
++#include "HAL/IConsoleManager.h"
++#include "K2Node_CallFunction.h"
++#include "K2Node_CustomEvent.h"
++#include "K2Node_Knot.h"
++#include "K2Node_Self.h"
++#include "K2Node_Variable.h"
++#include "Kismet2/BlueprintEditorUtils.h"
++#include "Kismet2/KismetEditorUtilities.h"
++#include "Kismet2/StructureEditorUtils.h"
++#include "KismetCompiler.h"
++#include "Misc/OutputDeviceRedirector.h"
++#include "Misc/ScopeExit.h"
++#include "ScopedTransaction.h"
++#include "UObject/UnrealType.h"
++#include "UserDefinedStructure/UserDefinedStructEditorData.h"
++
++DEFINE_LOG_CATEGORY_STATIC(LogReditusMasteryInstall, Log, All);
++
++namespace ReditusTechMasteryInstall
++{
++    const TCHAR* EnemyBlueprintPath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Units/EnemyUnits/BP_EnemyUnitBase.BP_EnemyUnitBase");
++    const TCHAR* EnemyTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Enemies.DT_Enemies");
++    const TCHAR* ProfileTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_EnemyAIProfiles.DT_EnemyAIProfiles");
++    const TCHAR* SkillTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Skills.DT_Skills");
++    const FName MasteryCostName(TEXT("MasteryPointsRequired"));
++    const FName RewardOverrideName(TEXT("MasteryRewardOverride"));
++    const FName SaveVariableName(TEXT("TechMastery"));
++
++    bool CheckEditor()
++    {
++        if (GEditor && !GEditor->PlayWorld) return true;
++        UE_LOG(LogReditusMasteryInstall, Error, TEXT("Stop Play in Editor before running this command."));
++        return false;
++    }
++
++    bool IsProfileTable(const UDataTable* Table)
++    {
++        return IsValid(Table) && Table->GetRowStruct() == FReditusEnemyAIProfile::StaticStruct();
++    }
++
++    UDataTable* DefaultProfileTable()
++    {
++        auto* Enemy = LoadObject<UBlueprint>(nullptr, EnemyBlueprintPath);
++        if (Enemy && Enemy->SimpleConstructionScript)
++        {
++            for (auto* Node : Enemy->SimpleConstructionScript->GetAllNodes())
++            {
++                const auto* AI = Node ? Cast<UReditusEnemyCombatAIComponent>(Node->ComponentTemplate) : nullptr;
++                if (AI && IsProfileTable(AI->ProfileTable)) return AI->ProfileTable;
++            }
++        }
++        return LoadObject<UDataTable>(nullptr, ProfileTablePath);
++    }
++
++    void MigrateEnemyProfiles()
++    {
++        if (!CheckEditor()) return;
++        auto* Enemies = LoadObject<UDataTable>(nullptr, EnemyTablePath);
++        auto* Profiles = DefaultProfileTable();
++        const UScriptStruct* RowType = Enemies ? Enemies->GetRowStruct() : nullptr;
++        const auto* HandleField = RowType ? FindFProperty<FStructProperty>(RowType, TEXT("AIProfile")) : nullptr;
++        const auto* IDField = RowType ? FindFProperty<FNameProperty>(RowType, TEXT("AIProfileID")) : nullptr;
++        if (!HandleField || HandleField->Struct != FDataTableRowHandle::StaticStruct() || !IDField || !IsProfileTable(Profiles))
++        {
++            UE_LOG(LogReditusMasteryInstall, Error, TEXT("DT_Enemies AI Profile or DT_EnemyAIProfiles has an unexpected type."));
++            return;
++        }
++
++        const FScopedTransaction Transaction(NSLOCTEXT("ReditusMastery", "MigrateProfiles", "Migrate enemy AI profiles"));
++        if (!Transaction.IsOutstanding()) return;
++        int32 Migrated = 0;
++        int32 Preset = 0;
++        int32 Unresolved = 0;
++        for (const auto& Entry : Enemies->GetRowMap())
++        {
++            if (!Entry.Value) continue;
++            auto& Handle = *HandleField->ContainerPtrToValuePtr<FDataTableRowHandle>(Entry.Value);
++            if (!Handle.RowName.IsNone()) continue;
++            const FName ID = IDField->GetPropertyValue_InContainer(Entry.Value);
++            const UDataTable* Candidate = Handle.DataTable ? Handle.DataTable : Profiles;
++            if (!ID.IsNone() && (!IsProfileTable(Candidate) || !Candidate->GetRowMap().Contains(ID)))
++            {
++                ++Unresolved;
++                UE_LOG(LogReditusMasteryInstall, Warning, TEXT("%s keeps its legacy AI profile ID %s. The selected table has no matching profile."),
++                    *Entry.Key.ToString(), *ID.ToString());
++                continue;
++            }
++            if (ID.IsNone() && Handle.DataTable) continue;
++            if (Migrated + Preset == 0)
++            {
++                Enemies->SetFlags(RF_Transactional);
++                Enemies->Modify();
++            }
++            if (!Handle.DataTable) Handle.DataTable = Profiles;
++            if (ID.IsNone())
++            {
++                ++Preset;
++            }
++            else
++            {
++                Handle.RowName = ID;
++                IDField->SetPropertyValue_InContainer(Entry.Value, NAME_None);
++                ++Migrated;
++            }
++        }
++        if (Migrated + Preset > 0) Enemies->MarkPackageDirty();
++        UE_LOG(LogReditusMasteryInstall, Display, TEXT("Enemy AI profile migration complete. %d moved, %d table pickers set, %d legacy IDs kept. Save DT_Enemies."),
++            Migrated, Preset, Unresolved);
++    }
++
++    UEdGraphPin* Pin(UEdGraphNode* Node, FName Name)
++    {
++        auto* Result = Node ? Node->FindPin(Name) : nullptr;
++        return Result && !Result->bOrphanedPin ? Result : nullptr;
++    }
++
++    UEdGraphPin* OneLink(const UEdGraphPin* Input)
++    {
++        return Input && Input->LinkedTo.Num() == 1 ? Input->LinkedTo[0] : nullptr;
++    }
++
++    UEdGraphPin* Source(UEdGraphPin* Input)
++    {
++        auto* Link = OneLink(Input);
++        TSet<UEdGraphNode*> Visited;
++        while (Link)
++        {
++            auto* Knot = Cast<UK2Node_Knot>(Link->GetOwningNode());
++            if (!Knot) return Link;
++            if (Visited.Contains(Knot)) return nullptr;
++            Visited.Add(Knot);
++            Link = OneLink(Pin(Knot, TEXT("InputPin")));
++        }
++        return nullptr;
++    }
++
++    UEdGraphNode* FindAnchor(UBlueprint* Blueprint, const TCHAR* ID)
++    {
++        FGuid Guid;
++        if (!Blueprint || !FGuid::ParseExact(ID, EGuidFormats::Digits, Guid)) return nullptr;
++        for (UEdGraph* Graph : Blueprint->UbergraphPages)
++        {
++            if (!Graph) continue;
++            for (UEdGraphNode* Node : Graph->Nodes)
++            {
++                if (Node && Node->NodeGuid == Guid) return Node;
++            }
++        }
++        return nullptr;
++    }
++
++    bool IsCall(const UEdGraphNode* Node, FName Name)
++    {
++        const auto* Call = Cast<UK2Node_CallFunction>(Node);
++        return Call && Call->FunctionReference.GetMemberName() == Name;
++    }
++
++    bool IsVariable(const UEdGraphNode* Node, FName Name)
++    {
++        const auto* Var = Cast<UK2Node_Variable>(Node);
++        return Var && Var->VariableReference.GetMemberName() == Name;
++    }
++
++    bool IsOutputOf(UEdGraphPin* Input, FName Name)
++    {
++        const auto* Output = Source(Input);
++        return Output && Output->PinName == Name;
++    }
++
++    template <typename NodeType>
++    NodeType* AddNode(UEdGraph* Graph, UEdGraphNode* Anchor, int32 OffsetY)
++    {
++        auto* Node = NewObject<NodeType>(Graph, NAME_None, RF_Transactional);
++        Graph->AddNode(Node, false, false);
++        Node->CreateNewGuid();
++        Node->NodePosX = Anchor->NodePosX + 48;
++        Node->NodePosY = Anchor->NodePosY + OffsetY;
++        return Node;
++    }
++
++    bool Link(UEdGraphPin* Output, UEdGraphPin* Input)
++    {
++        if (!Output || !Input) return false;
++        auto* Graph = Output->GetOwningNode()->GetGraph();
++        const auto* Schema = Cast<UEdGraphSchema_K2>(Graph->GetSchema());
++        if (!Schema) return false;
++        Output->GetOwningNode()->Modify();
++        Input->GetOwningNode()->Modify();
++        return Schema->TryCreateConnection(Output, Input);
++    }
++
++    struct FExecSite
++    {
++        UEdGraphPin* Then = nullptr;
++        FName Function;
++        FName SelfParameter;
++        TArray<TPair<FName, UEdGraphPin*>> Inputs;
++        bool bTableEnemy = false;
++    };
++
++    bool AddExecSite(TArray<FExecSite>& Sites, UEdGraphNode* Anchor, FName Function, FName SelfParameter,
++        TArray<TPair<FName, UEdGraphPin*>> Inputs = {}, bool bTableEnemy = false)
++    {
++        auto* Then = Pin(Anchor, UEdGraphSchema_K2::PN_Then);
++        if (!Then || Then->LinkedTo.Num() > 1) return false;
++        for (const auto& Input : Inputs)
++        {
++            if (!Input.Value || Input.Value->Direction != EGPD_Output) return false;
++        }
++        Sites.Add(FExecSite{Then, Function, SelfParameter, MoveTemp(Inputs), bTableEnemy});
++        return true;
++    }
++
++    UK2Node_CallFunction* AddCall(UEdGraphNode* Anchor, FName FunctionName, FName SelfParameter)
++    {
++        auto* Function = UReditusTechMasteryLibrary::StaticClass()->FindFunctionByName(FunctionName);
++        if (!Function) return nullptr;
++
++        auto* Graph = Anchor->GetGraph();
++        Graph->Modify();
++        auto* Call = AddNode<UK2Node_CallFunction>(Graph, Anchor, 164);
++        Call->SetFromFunction(Function);
++        Call->AllocateDefaultPins();
++        auto* Self = AddNode<UK2Node_Self>(Graph, Anchor, 254);
++        Self->NodePosX -= 128;
++        Self->AllocateDefaultPins();
++        return Link(Pin(Self, UEdGraphSchema_K2::PN_Self), Pin(Call, SelfParameter)) ? Call : nullptr;
++    }
++
++    bool IsSelfInput(UEdGraphNode* Node, FName Name)
++    {
++        const auto* Self = Source(Pin(Node, Name));
++        return Self && Self->GetOwningNode()->IsA<UK2Node_Self>();
++    }
++
++    bool WireExec(const FExecSite& Site, bool& bChanged)
++    {
++        auto* ExistingNext = OneLink(Site.Then);
++        if (ExistingNext && IsCall(ExistingNext->GetOwningNode(), Site.Function))
++        {
++            auto* Call = ExistingNext->GetOwningNode();
++            if (!IsSelfInput(Call, Site.SelfParameter)) return false;
++            for (const auto& Input : Site.Inputs)
++            {
++                if (OneLink(Pin(Call, Input.Key)) != Input.Value) return false;
++            }
++            const auto* TableInput = Pin(Call, TEXT("bTableEnemy"));
++            return !TableInput || (TableInput->DefaultValue == TEXT("true")) == Site.bTableEnemy;
++        }
++
++        auto* Call = AddCall(Site.Then->GetOwningNode(), Site.Function, Site.SelfParameter);
++        if (!Call) return false;
++        for (const auto& Input : Site.Inputs)
++        {
++            if (!Link(Input.Value, Pin(Call, Input.Key))) return false;
++        }
++        if (auto* TableInput = Pin(Call, TEXT("bTableEnemy")))
++        {
++            TableInput->DefaultValue = Site.bTableEnemy ? TEXT("true") : TEXT("false");
++        }
++        if (ExistingNext)
++        {
++            Site.Then->GetOwningNode()->Modify();
++            ExistingNext->GetOwningNode()->Modify();
++            Site.Then->BreakLinkTo(ExistingNext);
++            if (!Link(Pin(Call, UEdGraphSchema_K2::PN_Then), ExistingNext)) return false;
++        }
++        bChanged = true;
++        return Link(Site.Then, Pin(Call, UEdGraphSchema_K2::PN_Execute));
++    }
++
++    bool WireVictoryText(UEdGraphPin* Input, bool& bChanged)
++    {
++        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, FormatVictoryMastery);
++        auto* Original = OneLink(Input);
++        if (!Original) return false;
++        if (IsCall(Original->GetOwningNode(), Function))
++        {
++            return IsSelfInput(Original->GetOwningNode(), TEXT("VictoryWidget")) &&
++                OneLink(Pin(Original->GetOwningNode(), TEXT("RewardText"))) != nullptr;
++        }
++
++        auto* Call = AddCall(Input->GetOwningNode(), Function, TEXT("VictoryWidget"));
++        if (!Call || !Link(Original, Pin(Call, TEXT("RewardText")))) return false;
++        Original->GetOwningNode()->Modify();
++        Input->GetOwningNode()->Modify();
++        Original->BreakLinkTo(Input);
++        bChanged = true;
++        return Link(Pin(Call, UEdGraphSchema_K2::PN_ReturnValue), Input);
++    }
++
++    bool FindAppendSite(UBlueprint* Blueprint, const TCHAR* ID, TArray<FExecSite>& Sites)
++    {
++        auto* Append = FindAnchor(Blueprint, ID);
++        if (!IsCall(Append, TEXT("Array_Append")) ||
++            !IsOutputOf(Pin(Append, TEXT("TargetArray")), TEXT("availableBattleSkills")) ||
++            !IsOutputOf(Pin(Append, TEXT("SourceArray")), TEXT("equipmentBattleSkills"))) return false;
++        return AddExecSite(Sites, Append, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, AppendLearnedTechs),
++            TEXT("SkillOwner"));
++    }
++
++    bool FindSkillButtonSite(UBlueprint* Blueprint, const TCHAR* CreateID, const TCHAR* AddID, TArray<FExecSite>& Sites)
++    {
++        auto* Create = FindAnchor(Blueprint, CreateID);
++        auto* Add = FindAnchor(Blueprint, AddID);
++        auto* Widget = Pin(Create, UEdGraphSchema_K2::PN_ReturnValue);
++        auto* Skill = Source(Pin(Create, TEXT("skill")));
++        if (!Widget || !Skill || Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
++            Source(Pin(Add, TEXT("Content"))) != Widget ||
++            OneLink(Pin(Create, UEdGraphSchema_K2::PN_Then)) != Pin(Add, UEdGraphSchema_K2::PN_Execute)) return false;
++        TArray<TPair<FName, UEdGraphPin*>> Inputs;
++        Inputs.Emplace(FName(TEXT("SkillButton")), Widget);
++        Inputs.Emplace(FName(TEXT("SkillID")), Skill);
++        return AddExecSite(Sites, Add, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, ShowMasteryOnSkillButton),
++            TEXT("Menu"), MoveTemp(Inputs));
++    }
++
++    bool FindRewardSite(UBlueprint* Battle, const TCHAR* SetID, const TCHAR* GetterID,
++        bool bTableEnemy, TArray<FExecSite>& Sites)
++    {
++        auto* SetGold = FindAnchor(Battle, SetID);
++        auto* Gold = FindAnchor(Battle, GetterID);
++        if (!IsVariable(SetGold, TEXT("totalGoldReward")) || !IsVariable(Gold, TEXT("goldReward"))) return false;
++        TArray<TPair<FName, UEdGraphPin*>> Inputs;
++        Inputs.Emplace(FName(TEXT("Enemy")), OneLink(Pin(Gold, UEdGraphSchema_K2::PN_Self)));
++        return AddExecSite(Sites, SetGold, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, IncludeEnemyMasteryReward),
++            TEXT("Battle"), MoveTemp(Inputs), bTableEnemy);
++    }
++
++    FBPVariableDescription* FindVariable(UBlueprint* Blueprint, FName Name)
++    {
++        return Blueprint->NewVariables.FindByPredicate([Name](const FBPVariableDescription& Var) { return Var.VarName == Name; });
++    }
++
++    bool PrepareVariable(UBlueprint* Blueprint, FName Name, const FEdGraphPinType& Type,
++        const TCHAR* DefaultValue, EPropertyFlags Flag, FText Category)
++    {
++        auto* Var = FindVariable(Blueprint, Name);
++        if (!Var)
++        {
++            Blueprint->Modify();
++            if (!FBlueprintEditorUtils::AddMemberVariable(Blueprint, Name, Type, DefaultValue)) return false;
++            Var = FindVariable(Blueprint, Name);
++        }
++        if (!Var || Var->VarType.PinCategory != Type.PinCategory || Var->VarType.ContainerType != Type.ContainerType ||
++            Var->VarType.PinSubCategoryObject.Get() != Type.PinSubCategoryObject.Get()) return false;
++        if ((Var->PropertyFlags & Flag) == 0 || !Var->Category.EqualTo(Category))
++        {
++            Blueprint->Modify();
++            Var->PropertyFlags |= Flag;
++            Var->Category = Category;
++            FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
++        }
++        return true;
++    }
++
++    using FRowSnapshot = TMap<FName, TMap<FName, FString>>;
++
++    FString TextValue(const FProperty* Property, const uint8* Row)
++    {
++        FString Result;
++        Property->ExportTextItem(Result, Property->ContainerPtrToValuePtr<void>(Row), nullptr, nullptr, PPF_None);
++        return Result;
++    }
++
++    FRowSnapshot SnapshotRows(const UDataTable* Table)
++    {
++        FRowSnapshot Result;
++        for (const auto& Row : Table->GetRowMap())
++        {
++            if (!Row.Value) continue;
++            auto& Values = Result.Add(Row.Key);
++            for (TFieldIterator<FProperty> Field(Table->GetRowStruct()); Field; ++Field)
++            {
++                Values.Add(Field->GetFName(), TextValue(*Field, Row.Value));
++            }
++        }
++        return Result;
++    }
++
++    bool RowsPreserved(const UDataTable* Table, const FRowSnapshot& Original)
++    {
++        if (Original.Num() != Table->GetRowMap().Num()) return false;
++        for (const auto& Row : Original)
++        {
++            const uint8* Data = Table->GetRowMap().FindRef(Row.Key);
++            if (!Data) return false;
++            for (const auto& Value : Row.Value)
++            {
++                const auto* Field = FindFProperty<FProperty>(Table->GetRowStruct(), Value.Key);
++                if (!Field || TextValue(Field, Data) != Value.Value) return false;
++            }
++        }
++        return true;
++    }
++
++    bool PrepareSkillTable(UDataTable* Table)
++    {
++        auto* Struct = Table ? Cast<UUserDefinedStruct>(const_cast<UScriptStruct*>(Table->GetRowStruct())) : nullptr;
++        if (!Struct) return false;
++        const auto& Variables = FStructureEditorUtils::GetVarDesc(Struct);
++        for (const auto& Var : Variables)
++        {
++            if (Var.FriendlyName == MasteryCostName.ToString())
++            {
++                return FindFProperty<FIntProperty>(Struct, Var.VarName) != nullptr;
++            }
++        }
++
++        const auto Original = SnapshotRows(Table);
++        Table->SetFlags(RF_Transactional);
++        Struct->SetFlags(RF_Transactional);
++        Table->Modify();
++        Struct->Modify();
++        FEdGraphPinType Type;
++        Type.PinCategory = UEdGraphSchema_K2::PC_Int;
++        if (!FStructureEditorUtils::AddVariable(Struct, Type)) return false;
++        const FGuid NewId = FStructureEditorUtils::GetVarDesc(Struct).Last().VarGuid;
++        if (!FStructureEditorUtils::RenameVariable(Struct, NewId, MasteryCostName.ToString()) ||
++            !RowsPreserved(Table, Original))
++        {
++            UE_LOG(LogReditusMasteryInstall, Error, TEXT("DT_Skills could not preserve its original rows during the new field change."));
++            return false;
++        }
++        const auto* Var = FStructureEditorUtils::GetVarDescByGuid(Struct, NewId);
++        const auto* Cost = Var ? FindFProperty<FIntProperty>(Struct, Var->VarName) : nullptr;
++        if (!Cost) return false;
++        if (uint8* Sample = Table->GetRowMap().FindRef(TEXT("ProtectOtherBuff")))
++        {
++            Cost->SetPropertyValue_InContainer(Sample, 4);
++            UE_LOG(LogReditusMasteryInstall, Display, TEXT("ProtectOtherBuff now takes 4 Mastery to learn."));
++        }
++        Struct->MarkPackageDirty();
++        Table->MarkPackageDirty();
++        return true;
++    }
++
++    class FScopedMasteryCompileLog final : public FOutputDevice
++    {
++    public:
++        FScopedMasteryCompileLog()
++        {
++            if (GLog) GLog->AddOutputDevice(this);
++        }
++
++        ~FScopedMasteryCompileLog() override
++        {
++            if (GLog) GLog->RemoveOutputDevice(this);
++        }
++
++        void Serialize(const TCHAR* Message, ELogVerbosity::Type Verbosity, const FName& Category) override
++        {
++            static const FName EnsureCategory(TEXT("LogOutputDevice"));
++            if (IsInGameThread() && Category == EnsureCategory && Verbosity == ELogVerbosity::Error &&
++                FCString::Strstr(Message, TEXT("Ensure condition failed")))
++            {
++                bSawEnsure = true;
++            }
++        }
++
++        bool SawEnsure() const { return bSawEnsure; }
++
++    private:
++        bool bSawEnsure = false;
++    };
++
++    bool Compile(UBlueprint* Blueprint, const FScopedMasteryCompileLog& CompileLog)
++    {
++        if (CompileLog.SawEnsure()) return false;
++        UE_LOG(LogReditusMasteryInstall, Display, TEXT("Compiling %s for Tech Mastery."), *Blueprint->GetName());
++        FCompilerResultsLog Results;
++        FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection, &Results);
++        if (!CompileLog.SawEnsure() && Blueprint->Status != BS_Error && Results.NumErrors == 0 &&
++            IsValid(Blueprint->GeneratedClass)) return true;
++        UE_LOG(LogReditusMasteryInstall, Error, TEXT("Blueprint compile failed for %s."), *Blueprint->GetName());
++        return false;
++    }
++
++    bool InstallMasteryAssets(const FScopedMasteryCompileLog& CompileLog)
++    {
++        auto* Battle = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_BattleBase.BP_BattleBase"));
++        auto* Controller = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_BattleController.BP_BattleController"));
++        auto* Enemy = LoadObject<UBlueprint>(nullptr, EnemyBlueprintPath);
++        auto* Player = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Units/PlayerUnits/BP_PlayerUnitBase.BP_PlayerUnitBase"));
++        auto* Save = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Controllers/BP_JRPGSaveGame.BP_JRPGSaveGame"));
++        auto* Techs = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/MainMenu/BP_SkillDetails.BP_SkillDetails"));
++        auto* Gear = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/MainMenu/BP_WearEquipmentUI.BP_WearEquipmentUI"));
++        auto* Victory = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/Dialogues/BP_VictoryDialogue.BP_VictoryDialogue"));
++        auto* Skills = LoadObject<UDataTable>(nullptr, SkillTablePath);
++        if (CompileLog.SawEnsure() || !Battle || !Controller || !Enemy || !Player || !Save || !Techs || !Gear ||
++            !Victory || !Skills) return false;
++
++        TArray<FExecSite> Sites;
++        auto* ResetGold = FindAnchor(Battle, TEXT("10AD59C84060B26E6F8C7EA984C06FF0"));
++        auto* Win = Cast<UK2Node_CustomEvent>(FindAnchor(Controller, TEXT("C39DA34845132315640F28A93D2F594D")));
++        auto* Text = FindAnchor(Victory, TEXT("4D5B57DD467530E748DCB5B7A6836A7F"));
++        auto* VictoryInput = Pin(Text, TEXT("InText"));
++        const TCHAR* MissingSite = nullptr;
++        if (!IsVariable(ResetGold, TEXT("totalGoldReward")) ||
++            !AddExecSite(Sites, ResetGold, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, BeginMasteryEncounter), TEXT("Battle")))
++            MissingSite = TEXT("BP_BattleBase SpawnEnemyUnits reward reset");
++        else if (!FindRewardSite(Battle, TEXT("08F7C92D445FB01B1CC19BA9DC4BF7FF"), TEXT("D1F2378E4AB0CDE53A043D8D5024DCAC"), false, Sites))
++            MissingSite = TEXT("BP_BattleBase class enemy reward");
++        else if (!FindRewardSite(Battle, TEXT("ED77EEB74AB4A4DD6555DBAFC4178CB6"), TEXT("CE46EB2D4DC1133803D62C973C018EC1"), true, Sites))
++            MissingSite = TEXT("BP_BattleBase table enemy reward");
++        else if (!Win || Win->CustomFunctionName != TEXT("PlayerWon") ||
++            !AddExecSite(Sites, Win, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, AwardVictoryMastery), TEXT("BattleController")))
++            MissingSite = TEXT("BP_BattleController PlayerWon");
++        else if (!FindAppendSite(Player, TEXT("66D5FF074EBAEED9BE1BE9AB930CCDAA"), Sites))
++            MissingSite = TEXT("BP_PlayerUnitBase battle skill list");
++        else if (!FindAppendSite(Techs, TEXT("2AA7894643B79D38E785CD856C4E5A28"), Sites) ||
++            !FindSkillButtonSite(Techs, TEXT("3069397149BA7916814F9EA62D76ADCE"), TEXT("6AC32975428E4DA5DDF8A29D6108C19A"), Sites))
++            MissingSite = TEXT("BP_SkillDetails Tech list");
++        else if (!FindSkillButtonSite(Gear, TEXT("B78885A940BA80540BB02FAD9C38F0F8"), TEXT("40BDEFA045A2D2E9125CE482DE09C5F4"), Sites))
++            MissingSite = TEXT("BP_WearEquipmentUI skill button");
++        else if (!IsCall(Text, TEXT("SetText")) ||
++            !IsOutputOf(Pin(Text, UEdGraphSchema_K2::PN_Self), TEXT("ExpRewardText")) || !OneLink(VictoryInput))
++            MissingSite = TEXT("BP_VictoryDialogue EXP text");
++
++        if (MissingSite)
++        {
++            UE_LOG(LogReditusMasteryInstall, Error, TEXT("Could not identify %s. The installer made no asset edits."), MissingSite);
++            return false;
++        }
++
++        bool bSuccess = false;
++        {
++            const FScopedTransaction Transaction(NSLOCTEXT("ReditusMastery", "Install", "Install Reditus Tech Mastery"));
++            if (!Transaction.IsOutstanding()) return false;
++            TSet<UBlueprint*> Changed;
++            bSuccess = true;
++            for (const auto& Site : Sites)
++            {
++                auto* Blueprint = FBlueprintEditorUtils::FindBlueprintForGraph(Site.Then->GetOwningNode()->GetGraph());
++                if (!Blueprint)
++                {
++                    bSuccess = false;
++                    break;
++                }
++                Blueprint->Modify();
++                bool bChanged = false;
++                bSuccess = WireExec(Site, bChanged) && !CompileLog.SawEnsure();
++                if (!bSuccess)
++                {
++                    UE_LOG(LogReditusMasteryInstall, Error, TEXT("Could not connect %s in %s."),
++                        *Site.Function.ToString(), *Blueprint->GetName());
++                    break;
++                }
++                if (bChanged) Changed.Add(Blueprint);
++            }
++            if (bSuccess)
++            {
++                Victory->Modify();
++                bool bChanged = false;
++                bSuccess = WireVictoryText(VictoryInput, bChanged) && !CompileLog.SawEnsure();
++                if (bChanged) Changed.Add(Victory);
++            }
++            if (bSuccess)
++            {
++                FEdGraphPinType SaveType;
++                SaveType.PinCategory = UEdGraphSchema_K2::PC_Struct;
++                SaveType.PinSubCategoryObject = FReditusTechMasterySaveData::StaticStruct();
++                FEdGraphPinType RewardType;
++                RewardType.PinCategory = UEdGraphSchema_K2::PC_Int;
++                bSuccess = PrepareVariable(Save, SaveVariableName, SaveType, TEXT(""), CPF_SaveGame, FText::FromString(TEXT("Tech Mastery"))) &&
++                    !CompileLog.SawEnsure() &&
++                    PrepareVariable(Enemy, RewardOverrideName, RewardType, TEXT("0"), CPF_Edit, FText::FromString(TEXT("Rewards"))) &&
++                    !CompileLog.SawEnsure() &&
++                    PrepareSkillTable(Skills) && !CompileLog.SawEnsure();
++            }
++            if (bSuccess)
++            {
++                for (auto* Blueprint : Changed)
++                {
++                    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
++                }
++                for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory})
++                {
++                    if (!Compile(Blueprint, CompileLog))
++                    {
++                        bSuccess = false;
++                        break;
++                    }
++                }
++            }
++        }
++        // A failed reinstancing can leave temporary classes in this session. Undo can compile again.
++        if (CompileLog.SawEnsure()) return false;
++        if (!bSuccess)
++        {
++            const bool bUndone = GEditor->UndoTransaction(false);
++            if (bUndone)
++            {
++                for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory})
++                {
++                    if (!Compile(Blueprint, CompileLog)) break;
++                }
++            }
++            UE_LOG(LogReditusMasteryInstall, Error, TEXT("Tech Mastery installation stopped. Undo result: %s. Close without saving the affected assets if any edits remain."),
++                bUndone ? TEXT("success") : TEXT("failed"));
++            return false;
++        }
++        return true;
++    }
++
++    void InstallMastery()
++    {
++        if (!CheckEditor()) return;
++        static bool bNeedsEditorRestart = false;
++        if (bNeedsEditorRestart)
++        {
++            UE_LOG(LogReditusMasteryInstall, Error, TEXT("Restart the editor after the previous Blueprint compiler assertion."));
++            return;
++        }
++
++        // UE 4.27's updated path moves dependent skeleton classes together during recompilation.
++        auto* SkeletonUpdate = IConsoleManager::Get().FindConsoleVariable(TEXT("BP.bEnableSkelReinstUpdate"));
++        const bool bEnableForInstall = SkeletonUpdate && SkeletonUpdate->GetInt() == 0;
++        const auto Priority = SkeletonUpdate
++            ? static_cast<EConsoleVariableFlags>(SkeletonUpdate->GetFlags() & ECVF_SetByMask)
++            : ECVF_SetByConstructor;
++        if (bEnableForInstall) SkeletonUpdate->Set(1, Priority);
++        ON_SCOPE_EXIT
++        {
++            if (bEnableForInstall) SkeletonUpdate->Set(0, Priority);
++        };
++
++        const FScopedMasteryCompileLog CompileLog;
++        const bool bInstalled = InstallMasteryAssets(CompileLog);
++        if (CompileLog.SawEnsure())
++        {
++            bNeedsEditorRestart = true;
++            UE_LOG(LogReditusMasteryInstall, Error,
++                TEXT("Unreal reported an assertion during installation. Leave this run's Mastery changes unsaved and restart the editor."));
++        }
++        else if (bInstalled)
++        {
++            UE_LOG(LogReditusMasteryInstall, Display, TEXT("Tech Mastery installation complete. Save All before starting Play."));
++        }
++        else
++        {
++            UE_LOG(LogReditusMasteryInstall, Error, TEXT("Tech Mastery installation failed. See the preceding messages."));
++        }
++    }
++
++    FAutoConsoleCommand MigrateCommand(
++        TEXT("Reditus.MigrateEnemyAIProfiles"),
++        TEXT("Convert existing DT_Enemies AI profile IDs to row handles."),
++        FConsoleCommandDelegate::CreateStatic(&MigrateEnemyProfiles));
++
++    FAutoConsoleCommand InstallCommand(
++        TEXT("Reditus.InstallTechMastery"),
++        TEXT("Install the Reditus Tech Mastery Blueprint hooks and skill field."),
++        FConsoleCommandDelegate::CreateStatic(&InstallMastery));
++}
+diff --git a/Source/Chapter1Reditus/Data/ReditusEnemyDefinition.h b/Source/Chapter1Reditus/Data/ReditusEnemyDefinition.h
+index 784eaac..934b783 100644
+--- a/Source/Chapter1Reditus/Data/ReditusEnemyDefinition.h
++++ b/Source/Chapter1Reditus/Data/ReditusEnemyDefinition.h
+@@ -308,6 +308,10 @@ public:
+ 	TArray<FReditusEnemySkillEntry> Skills;
+ 
+ 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI")
++	FDataTableRowHandle AIProfile;
++
++	// Serialized for existing rows. The editor migration fills AIProfile from this name.
++	UPROPERTY(BlueprintReadWrite, Category = "AI")
+ 	FName AIProfileID = NAME_None;
+ 
+ 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI")
+@@ -330,6 +334,10 @@ public:
+ 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rewards", meta = (ClampMin = "0"))
+ 	int32 GoldReward = 0;
+ 
++	// Zero uses the normal or boss reward. A positive value sets this enemy's encounter award.
++	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rewards", meta = (ClampMin = "0"))
++	int32 MasteryRewardOverride = 0;
++
+ 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rewards")
+ 	TArray<FReditusEnemyDropEntry> Drops;
+ 

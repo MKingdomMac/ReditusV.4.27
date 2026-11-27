@@ -309,6 +309,10 @@ public:
 	TArray<FReditusEnemySkillEntry> Skills;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI")
+	FDataTableRowHandle AIProfile;
+
+	// Serialized for existing rows. The editor migration fills AIProfile from this name.
+	UPROPERTY(BlueprintReadWrite, Category = "AI")
 	FName AIProfileID = NAME_None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI")
@@ -330,6 +334,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rewards", meta = (ClampMin = "0"))
 	int32 GoldReward = 0;
+
+	// Zero uses the normal or boss reward. A positive value sets this enemy's encounter award.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rewards", meta = (ClampMin = "0"))
+	int32 MasteryRewardOverride = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rewards")
 	TArray<FReditusEnemyDropEntry> Drops;

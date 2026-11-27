@@ -1,0 +1,193 @@
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusTechMasteryInstall.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusTechMasteryInstall.cpp
+index 84eb405..5563de0 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusTechMasteryInstall.cpp
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusTechMasteryInstall.cpp
+@@ -20,6 +20,8 @@
+ #include "Kismet2/KismetEditorUtilities.h"
+ #include "Kismet2/StructureEditorUtils.h"
+ #include "KismetCompiler.h"
++#include "Misc/OutputDeviceRedirector.h"
++#include "Misc/ScopeExit.h"
+ #include "ScopedTransaction.h"
+ #include "UObject/UnrealType.h"
+ #include "UserDefinedStructure/UserDefinedStructEditorData.h"
+@@ -318,8 +320,11 @@ namespace ReditusTechMasteryInstall
+         if (!Widget || !Skill || Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
+             Source(Pin(Add, TEXT("Content"))) != Widget ||
+             OneLink(Pin(Create, UEdGraphSchema_K2::PN_Then)) != Pin(Add, UEdGraphSchema_K2::PN_Execute)) return false;
++        TArray<TPair<FName, UEdGraphPin*>> Inputs;
++        Inputs.Emplace(FName(TEXT("SkillButton")), Widget);
++        Inputs.Emplace(FName(TEXT("SkillID")), Skill);
+         return AddExecSite(Sites, Add, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, ShowMasteryOnSkillButton),
+-            TEXT("Menu"), {{TEXT("SkillButton"), Widget}, {TEXT("SkillID"), Skill}});
++            TEXT("Menu"), MoveTemp(Inputs));
+     }
+ 
+     bool FindRewardSite(UBlueprint* Battle, const TCHAR* SetID, const TCHAR* GetterID,
+@@ -328,8 +333,10 @@ namespace ReditusTechMasteryInstall
+         auto* SetGold = FindAnchor(Battle, SetID);
+         auto* Gold = FindAnchor(Battle, GetterID);
+         if (!IsVariable(SetGold, TEXT("totalGoldReward")) || !IsVariable(Gold, TEXT("goldReward"))) return false;
++        TArray<TPair<FName, UEdGraphPin*>> Inputs;
++        Inputs.Emplace(FName(TEXT("Enemy")), OneLink(Pin(Gold, UEdGraphSchema_K2::PN_Self)));
+         return AddExecSite(Sites, SetGold, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, IncludeEnemyMasteryReward),
+-            TEXT("Battle"), {{TEXT("Enemy"), OneLink(Pin(Gold, UEdGraphSchema_K2::PN_Self))}}, bTableEnemy);
++            TEXT("Battle"), MoveTemp(Inputs), bTableEnemy);
+     }
+ 
+     FBPVariableDescription* FindVariable(UBlueprint* Blueprint, FName Name)
+@@ -440,16 +447,48 @@ namespace ReditusTechMasteryInstall
+         return true;
+     }
+ 
+-    bool Compile(UBlueprint* Blueprint)
++    class FScopedMasteryCompileLog final : public FOutputDevice
+     {
++    public:
++        FScopedMasteryCompileLog()
++        {
++            if (GLog) GLog->AddOutputDevice(this);
++        }
++
++        ~FScopedMasteryCompileLog() override
++        {
++            if (GLog) GLog->RemoveOutputDevice(this);
++        }
++
++        void Serialize(const TCHAR* Message, ELogVerbosity::Type Verbosity, const FName& Category) override
++        {
++            static const FName EnsureCategory(TEXT("LogOutputDevice"));
++            if (IsInGameThread() && Category == EnsureCategory && Verbosity == ELogVerbosity::Error &&
++                FCString::Strstr(Message, TEXT("Ensure condition failed")))
++            {
++                bSawEnsure = true;
++            }
++        }
++
++        bool SawEnsure() const { return bSawEnsure; }
++
++    private:
++        bool bSawEnsure = false;
++    };
++
++    bool Compile(UBlueprint* Blueprint, const FScopedMasteryCompileLog& CompileLog)
++    {
++        if (CompileLog.SawEnsure()) return false;
++        UE_LOG(LogReditusMasteryInstall, Display, TEXT("Compiling %s for Tech Mastery."), *Blueprint->GetName());
+         FCompilerResultsLog Results;
+         FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection, &Results);
+-        if (Blueprint->Status != BS_Error && Results.NumErrors == 0) return true;
++        if (!CompileLog.SawEnsure() && Blueprint->Status != BS_Error && Results.NumErrors == 0 &&
++            IsValid(Blueprint->GeneratedClass)) return true;
+         UE_LOG(LogReditusMasteryInstall, Error, TEXT("Blueprint compile failed for %s."), *Blueprint->GetName());
+         return false;
+     }
+ 
+-    bool InstallMasteryAssets()
++    bool InstallMasteryAssets(const FScopedMasteryCompileLog& CompileLog)
+     {
+         auto* Battle = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_BattleBase.BP_BattleBase"));
+         auto* Controller = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Battle/BP_BattleController.BP_BattleController"));
+@@ -460,7 +499,8 @@ namespace ReditusTechMasteryInstall
+         auto* Gear = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/MainMenu/BP_WearEquipmentUI.BP_WearEquipmentUI"));
+         auto* Victory = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/Dialogues/BP_VictoryDialogue.BP_VictoryDialogue"));
+         auto* Skills = LoadObject<UDataTable>(nullptr, SkillTablePath);
+-        if (!Battle || !Controller || !Enemy || !Player || !Save || !Techs || !Gear || !Victory || !Skills) return false;
++        if (CompileLog.SawEnsure() || !Battle || !Controller || !Enemy || !Player || !Save || !Techs || !Gear ||
++            !Victory || !Skills) return false;
+ 
+         TArray<FExecSite> Sites;
+         auto* ResetGold = FindAnchor(Battle, TEXT("10AD59C84060B26E6F8C7EA984C06FF0"));
+@@ -511,7 +551,7 @@ namespace ReditusTechMasteryInstall
+                 }
+                 Blueprint->Modify();
+                 bool bChanged = false;
+-                bSuccess = WireExec(Site, bChanged);
++                bSuccess = WireExec(Site, bChanged) && !CompileLog.SawEnsure();
+                 if (!bSuccess)
+                 {
+                     UE_LOG(LogReditusMasteryInstall, Error, TEXT("Could not connect %s in %s."),
+@@ -524,7 +564,7 @@ namespace ReditusTechMasteryInstall
+             {
+                 Victory->Modify();
+                 bool bChanged = false;
+-                bSuccess = WireVictoryText(VictoryInput, bChanged);
++                bSuccess = WireVictoryText(VictoryInput, bChanged) && !CompileLog.SawEnsure();
+                 if (bChanged) Changed.Add(Victory);
+             }
+             if (bSuccess)
+@@ -535,8 +575,10 @@ namespace ReditusTechMasteryInstall
+                 FEdGraphPinType RewardType;
+                 RewardType.PinCategory = UEdGraphSchema_K2::PC_Int;
+                 bSuccess = PrepareVariable(Save, SaveVariableName, SaveType, TEXT(""), CPF_SaveGame, FText::FromString(TEXT("Tech Mastery"))) &&
++                    !CompileLog.SawEnsure() &&
+                     PrepareVariable(Enemy, RewardOverrideName, RewardType, TEXT("0"), CPF_Edit, FText::FromString(TEXT("Rewards"))) &&
+-                    PrepareSkillTable(Skills);
++                    !CompileLog.SawEnsure() &&
++                    PrepareSkillTable(Skills) && !CompileLog.SawEnsure();
+             }
+             if (bSuccess)
+             {
+@@ -546,10 +588,16 @@ namespace ReditusTechMasteryInstall
+                 }
+                 for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory})
+                 {
+-                    if (!Compile(Blueprint)) bSuccess = false;
++                    if (!Compile(Blueprint, CompileLog))
++                    {
++                        bSuccess = false;
++                        break;
++                    }
+                 }
+             }
+         }
++        // A failed reinstancing can leave temporary classes in this session. Undo can compile again.
++        if (CompileLog.SawEnsure()) return false;
+         if (!bSuccess)
+         {
+             const bool bUndone = GEditor->UndoTransaction(false);
+@@ -557,7 +605,7 @@ namespace ReditusTechMasteryInstall
+             {
+                 for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory})
+                 {
+-                    Compile(Blueprint);
++                    if (!Compile(Blueprint, CompileLog)) break;
+                 }
+             }
+             UE_LOG(LogReditusMasteryInstall, Error, TEXT("Tech Mastery installation stopped. Undo result: %s. Close without saving the affected assets if any edits remain."),
+@@ -570,7 +618,34 @@ namespace ReditusTechMasteryInstall
+     void InstallMastery()
+     {
+         if (!CheckEditor()) return;
+-        if (InstallMasteryAssets())
++        static bool bNeedsEditorRestart = false;
++        if (bNeedsEditorRestart)
++        {
++            UE_LOG(LogReditusMasteryInstall, Error, TEXT("Restart the editor after the previous Blueprint compiler assertion."));
++            return;
++        }
++
++        // UE 4.27's updated path moves dependent skeleton classes together during recompilation.
++        auto* SkeletonUpdate = IConsoleManager::Get().FindConsoleVariable(TEXT("BP.bEnableSkelReinstUpdate"));
++        const bool bEnableForInstall = SkeletonUpdate && SkeletonUpdate->GetInt() == 0;
++        const auto Priority = SkeletonUpdate
++            ? static_cast<EConsoleVariableFlags>(SkeletonUpdate->GetFlags() & ECVF_SetByMask)
++            : ECVF_SetByConstructor;
++        if (bEnableForInstall) SkeletonUpdate->Set(1, Priority);
++        ON_SCOPE_EXIT
++        {
++            if (bEnableForInstall) SkeletonUpdate->Set(0, Priority);
++        };
++
++        const FScopedMasteryCompileLog CompileLog;
++        const bool bInstalled = InstallMasteryAssets(CompileLog);
++        if (CompileLog.SawEnsure())
++        {
++            bNeedsEditorRestart = true;
++            UE_LOG(LogReditusMasteryInstall, Error,
++                TEXT("Unreal reported an assertion during installation. Leave this run's Mastery changes unsaved and restart the editor."));
++        }
++        else if (bInstalled)
+         {
+             UE_LOG(LogReditusMasteryInstall, Display, TEXT("Tech Mastery installation complete. Save All before starting Play."));
+         }
