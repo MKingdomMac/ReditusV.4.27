@@ -1,0 +1,130 @@
+diff --git a/Source/Chapter1Reditus/UI/ReditusBattleHUDPresenterComponent.cpp b/Source/Chapter1Reditus/UI/ReditusBattleHUDPresenterComponent.cpp
+index 81d35f1..7724c01 100644
+--- a/Source/Chapter1Reditus/UI/ReditusBattleHUDPresenterComponent.cpp
++++ b/Source/Chapter1Reditus/UI/ReditusBattleHUDPresenterComponent.cpp
+@@ -180,4 +180,9 @@ namespace
+     }
+ 
++    FText OverdrivePartnerMessage(AActor* Unit,FName SkillID)
++    {
++        return ReadTechMastery<FTextProperty,FText>(Unit,SkillID,TEXT("GetOverdrivePartnerMessage"));
++    }
++
+     void RevealBattleUnits(AActor* BattleController)
+     {
+@@ -547,5 +552,6 @@ namespace
+         UDataTable* Table;
+         const uint8* Data;
+-        FHUDTableRow(UDataTable* InTable,FName ID) : Table(InTable), Data(nullptr)
++        FName ID;
++        FHUDTableRow(UDataTable* InTable,FName RowID) : Table(InTable), Data(nullptr), ID(RowID)
+         {
+             if (IsValid(Table))
+@@ -586,6 +592,7 @@ namespace
+             const int32* Required=Requirements.Find(MoveID);
+             if (Required && Level>=*Required) return true;
+-            if (EquippedMoves.Contains(MoveID) && (!bOverdrive || !Required)) return true;
+-            return !bOverdrive && ReadTechMastery<FBoolProperty,bool>(Unit,MoveID,TEXT("IsTechMastered"));
++            if (EquippedMoves.Contains(MoveID)) return true;
++            return ReadTechMastery<FBoolProperty,bool>(Unit,MoveID,bOverdrive ?
++                TEXT("IsOverdriveMastered") : TEXT("IsTechMastered"));
+         }
+     };
+@@ -788,5 +795,6 @@ namespace
+     }
+ 
+-    bool CanUseATBListEntry(AActor* Unit,EReditusHUDCommand Command,const FHUDTableRow& Row)
++    bool CanUseATBListEntry(AActor* Unit,EReditusHUDCommand Command,const FHUDTableRow& Row,
++        const FText* PartnerMessage=nullptr)
+     {
+         if (!IsValid(Unit) || Boolean(Unit,TEXT("isStun")) || Boolean(Unit,TEXT("Staggered")) || Boolean(Unit,TEXT("IsSleeping"))) return false;
+@@ -797,6 +805,10 @@ namespace
+             return !ExploreOnly || !ExploreOnly->GetPropertyValue_InContainer(Row.Data);
+         }
+-        if (Command==EReditusHUDCommand::Overdrive &&
+-            (!Boolean(Unit,TEXT("CanEnterOverdrive")) || !Boolean(Unit,TEXT("OverdriveEntered")))) return false;
++        if (Command==EReditusHUDCommand::Overdrive)
++        {
++            if (!Boolean(Unit,TEXT("CanEnterOverdrive")) || !Boolean(Unit,TEXT("OverdriveEntered"))) return false;
++            const auto Requirement=PartnerMessage ? *PartnerMessage : OverdrivePartnerMessage(Unit,Row.ID);
++            if (!Requirement.IsEmpty()) return false;
++        }
+         const int32 Cost=Row.Int(TEXT("MPCost"));
+         return Cost>=0 && Number(Unit,TEXT("currentMP"),-1)>=Cost;
+@@ -1264,7 +1276,8 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
+         if (!Items && HasZeroMPCost(DisplayTable,DataID)) Entry.Detail=FText::GetEmpty();
+         Entry.Description=TableText(DisplayTable,DataID,TEXT("ShortDescription"));
+-        if (!Items && !Overdrive)
++        if (!Items)
+         {
+-            const FText Mastery=ReadTechMastery<FTextProperty,FText>(NativeMenuOwner,DataID,TEXT("DescribeEquippedTech"));
++            const FText Mastery=ReadTechMastery<FTextProperty,FText>(NativeMenuOwner,DataID,Overdrive ?
++                TEXT("DescribeEquippedOverdrive") : TEXT("DescribeEquippedTech"));
+             if (!Mastery.IsEmpty())
+             {
+@@ -1273,4 +1286,11 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
+             }
+         }
++        const FText PartnerMessage=Overdrive ? OverdrivePartnerMessage(NativeMenuOwner,DataID) : FText::GetEmpty();
++        if (!PartnerMessage.IsEmpty())
++        {
++            Entry.Detail=NSLOCTEXT("ReditusHUD","OverdriveWaiting","WAIT");
++            Entry.Description=Entry.Description.IsEmpty() ? PartnerMessage :
++                FText::Format(NSLOCTEXT("ReditusHUD","OverdriveAvailability","{0}\n{1}"),PartnerMessage,Entry.Description);
++        }
+         if (UObject* ConfiguredIcon=Items ? nullptr : TableThumbnail(DisplayTable,DataID)) Entry.Icon=ThumbnailBrush(ConfiguredIcon);
+         else if (UImage* RowIcon=Cast<UImage>(NamedWidget(Row,Items ? TEXT("ItemImage") : TEXT("SkillImage"))))
+@@ -1286,10 +1306,11 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
+             }
+         }
+-        Entry.bEnabled=Row->GetIsEnabled() && (!Items || Quantity>0);
++        Entry.bEnabled=PartnerMessage.IsEmpty() && Row->GetIsEnabled() && (!Items || Quantity>0);
+         if (UWidget* Inner=Cast<UWidget>(ObjectValue(Row,Items ? TEXT("ItemButton") : TEXT("SkillButton"))))
+             Entry.bEnabled=Entry.bEnabled && Inner->GetIsEnabled();
+ #if REDITUS_HUD_HAS_ATB
+         if (bUsingATB)
+-            Entry.bEnabled=Entry.bEnabled && CanUseATBListEntry(NativeMenuOwner,NativeMenuCommand,FHUDTableRow(DisplayTable,DataID));
++            Entry.bEnabled=Entry.bEnabled && CanUseATBListEntry(NativeMenuOwner,NativeMenuCommand,
++                FHUDTableRow(DisplayTable,DataID),&PartnerMessage);
+ #endif
+         Entries.Add(Entry);
+@@ -1593,4 +1614,9 @@ void UReditusBattleHUDPresenterComponent::HandleNativeMenuChosen(AActor* Unit,FN
+     }
+ #endif
++    if (NativeMenuCommand==EReditusHUDCommand::Overdrive && !OverdrivePartnerMessage(Unit,NativeMenuDataIDs[Index]).IsEmpty())
++    {
++        RefreshNativeMenuEntries(false);
++        return;
++    }
+     FIntProperty* Selection=CastField<FIntProperty>(Property(NativeMenuSource,Items ? TEXT("selectedItemIndex") : TEXT("selectedSkillIndex")));
+     if (!Selection) return;
+diff --git a/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.cpp b/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.cpp
+index 799937c..bee5d30 100644
+--- a/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.cpp
++++ b/Source/Chapter1Reditus/UI/ReditusBattleHUDWidget.cpp
+@@ -1472,8 +1472,9 @@ void UReditusBattleHUDWidget::HandleButton(EReditusHUDCommand Command, int32 Ind
+     {
+         const int32 EntryIndex = Index;
+-        if (CanChooseMenuEntry() && MenuEntries.IsValidIndex(EntryIndex) && MenuEntries[EntryIndex].bEnabled)
++        if (CanChooseMenuEntry() && MenuEntries.IsValidIndex(EntryIndex))
+         {
+             SelectedMenuIndex = EntryIndex;
+-            OnMenuEntryChosen.Broadcast(GetSelectedUnit(),MenuEntries[EntryIndex].ID);
++            if (MenuEntries[EntryIndex].bEnabled) OnMenuEntryChosen.Broadcast(GetSelectedUnit(),MenuEntries[EntryIndex].ID);
++            else RefreshMenu();
+         }
+     }
+@@ -1902,9 +1903,11 @@ void UReditusBattleHUDWidget::RefreshMenu()
+             View.Icon->SetVisibility(Data.Icon.GetResourceObject() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
+         }
+-        View.Label->SetColorAndOpacity(FSlateColor(Entry==SelectedMenuIndex ? Gold : FLinearColor::White));
++        const bool bInspectLockedOverdrive=!Data.bEnabled && MenuTitle.EqualTo(Text(TEXT("OVERDRIVE")));
++        View.Label->SetColorAndOpacity(FSlateColor(Entry==SelectedMenuIndex ? Gold :
++            bInspectLockedOverdrive ? FLinearColor(0.62f,0.66f,0.72f,1.f) : FLinearColor::White));
+         FButtonStyle RowStyle=View.Button->WidgetStyle;
+         RowStyle.Normal=Entry==SelectedMenuIndex ? SelectedFrameBrush : SilverFrameBrush;
+         View.Button->SetStyle(RowStyle);
+-        View.Button->SetIsEnabled(Data.bEnabled && CanChooseMenuEntry());
++        View.Button->SetIsEnabled((Data.bEnabled || bInspectLockedOverdrive) && CanChooseMenuEntry());
+     }
+ }

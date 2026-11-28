@@ -6,6 +6,6 @@ public class ReditusTableBuffs : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "ReditusBuffVisuals" });
-        PrivateDependencyModuleNames.Add("Niagara");
+        PrivateDependencyModuleNames.AddRange(new[] { "Niagara", "UMG", "SlateCore" });
     }
 }

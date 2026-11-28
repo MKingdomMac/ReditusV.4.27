@@ -50,12 +50,18 @@ index 33dcbaa..aeb7351 100644
  }
 diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryLibrary.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryLibrary.cpp
 new file mode 100644
-index 0000000..460a1b5
+index 0000000..ba5c4db
 --- /dev/null
 +++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryLibrary.cpp
-@@ -0,0 +1,377 @@
+@@ -0,0 +1,872 @@
 +#include "ReditusTechMasteryLibrary.h"
 +#include "ReditusTechMasteryRules.h"
++#include "ReditusVictoryPresentation.h"
++#include "Blueprint/UserWidget.h"
++#include "Blueprint/WidgetTree.h"
++#include "Components/ActorComponent.h"
++#include "Components/PanelWidget.h"
++#include "Components/TextBlock.h"
 +#include "Engine/DataTable.h"
 +#include "Engine/GameInstance.h"
 +#include "Engine/World.h"
@@ -73,17 +79,20 @@ index 0000000..460a1b5
 +    const TCHAR* SkillTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Skills.DT_Skills");
 +    const TCHAR* EnemyTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Enemies.DT_Enemies");
 +    const TCHAR* PartyTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_PartyMembers.DT_PartyMembers");
-+    const TCHAR* FunctionLibraryPath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Controllers/BP_JRPGFunctionLibrary.BP_JRPGFunctionLibrary_C");
++    const TCHAR* EquipmentTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Equipment.DT_Equipment");
++    const TCHAR* GameFunctionsPath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/Controllers/BP_JRPGFunctionLibrary.BP_JRPGFunctionLibrary_C");
 +
 +    template <typename Field>
-+    const Field* FindField(const UStruct* Type, FName Name)
++    const Field* FindMasteryProperty(const UStruct* Type, FName Name)
 +    {
 +        if (!Type) return nullptr;
 +        if (const auto* Exact = FindFProperty<Field>(Type, Name)) return Exact;
-+        const FString Prefix = Name.ToString() + TEXT("_");
++        const FString AuthoredName = Name.ToString();
++        const FString Prefix = AuthoredName + TEXT("_");
 +        for (TFieldIterator<Field> It(Type); It; ++It)
 +        {
-+            if (It->GetName().StartsWith(Prefix)) return *It;
++            if (It->GetName().StartsWith(Prefix) ||
++                Type->GetAuthoredNameForField(*It).Equals(AuthoredName, ESearchCase::IgnoreCase)) return *It;
 +        }
 +        return nullptr;
 +    }
@@ -98,6 +107,34 @@ index 0000000..460a1b5
 +    {
 +        const auto* Field = IsValid(Owner) ? FindFProperty<FNameProperty>(Owner->GetClass(), Name) : nullptr;
 +        return Field ? Field->GetPropertyValue_InContainer(Owner) : NAME_None;
++    }
++
++    int32 IntField(const UObject* Owner, FName Name)
++    {
++        const auto* Field = IsValid(Owner) ? FindFProperty<FIntProperty>(Owner->GetClass(), Name) : nullptr;
++        return Field ? Field->GetPropertyValue_InContainer(Owner) : 0;
++    }
++
++    bool BoolField(const UObject* Owner, FName Name)
++    {
++        const auto* Field = IsValid(Owner) ? FindFProperty<FBoolProperty>(Owner->GetClass(), Name) : nullptr;
++        return Field && Field->GetPropertyValue_InContainer(Owner);
++    }
++
++    TArray<AActor*> ActorArray(UObject* Owner, FName Name)
++    {
++        TArray<AActor*> Actors;
++        const auto* Array = IsValid(Owner) ? FindFProperty<FArrayProperty>(Owner->GetClass(), Name) : nullptr;
++        const auto* Element = Array ? CastField<FObjectPropertyBase>(Array->Inner) : nullptr;
++        if (!Element) return Actors;
++
++        FScriptArrayHelper Values(Array, Array->ContainerPtrToValuePtr<void>(Owner));
++        for (int32 Index = 0; Index < Values.Num(); ++Index)
++        {
++            auto* Actor = Cast<AActor>(Element->GetObjectPropertyValue(Values.GetRawPtr(Index)));
++            if (IsValid(Actor)) Actors.Add(Actor);
++        }
++        return Actors;
 +    }
 +
 +    struct FRow
@@ -115,7 +152,7 @@ index 0000000..460a1b5
 +
 +    FText DisplayName(const FRow& Row, FName ID)
 +    {
-+        const auto* Field = FindField<FTextProperty>(Row.Type, TEXT("DisplayName"));
++        const auto* Field = FindMasteryProperty<FTextProperty>(Row.Type, TEXT("DisplayName"));
 +        if (!Row.Data || !Field) return FText::FromString(ID.ToString());
 +        const FText Value = Field->GetPropertyValue_InContainer(Row.Data);
 +        return Value.IsEmpty() ? FText::FromString(ID.ToString()) : Value;
@@ -123,7 +160,7 @@ index 0000000..460a1b5
 +
 +    int32 Requirement(const FRow& Row)
 +    {
-+        const auto* Field = FindField<FIntProperty>(Row.Type, TEXT("MasteryPointsRequired"));
++        const auto* Field = FindMasteryProperty<FIntProperty>(Row.Type, TEXT("MasteryPointsRequired"));
 +        return Row.Data && Field ? Field->GetPropertyValue_InContainer(Row.Data) : 0;
 +    }
 +
@@ -137,6 +174,21 @@ index 0000000..460a1b5
 +    {
 +        UGameInstance* Game = Instance(Context);
 +        return Game ? Game->GetSubsystem<UReditusTechMasterySubsystem>() : nullptr;
++    }
++
++    APlayerController* LocalPlayerController(const UObject* Context)
++    {
++        return Context ? UGameplayStatics::GetPlayerController(Context, 0) : nullptr;
++    }
++
++    AActor* BattleControllerFor(const UObject* Context)
++    {
++        if (auto* Controller = Cast<AActor>(ObjectField(Context, TEXT("battleController")))) return Controller;
++        if (UObject* Unit = ObjectField(Context, TEXT("PlayerUnitBase")))
++        {
++            if (auto* Controller = Cast<AActor>(ObjectField(Unit, TEXT("battleController")))) return Controller;
++        }
++        return Cast<AActor>(ObjectField(LocalPlayerController(Context), TEXT("battleController")));
 +    }
 +
 +    FReditusTechMasterySaveData* SaveData(const UObject* Context, bool bCreateSave = false)
@@ -174,6 +226,32 @@ index 0000000..460a1b5
 +        }
 +    }
 +
++    TArray<FName> NamedMoves(const UObject* Owner, FName Name)
++    {
++        TArray<FName> Moves;
++        const auto* Array = IsValid(Owner) ? FindFProperty<FArrayProperty>(Owner->GetClass(), Name) : nullptr;
++        ReadNameArray(Array, Owner, Moves);
++        return Moves;
++    }
++
++    void AddMoves(const FArrayProperty* Array, void* Owner, const TArray<FName>& Moves, bool bReplace = false)
++    {
++        const auto* Element = Array ? CastField<FNameProperty>(Array->Inner) : nullptr;
++        if (!Element || !Owner) return;
++        FScriptArrayHelper Target(Array, Array->ContainerPtrToValuePtr<void>(Owner));
++        TArray<FName> Existing;
++        if (bReplace) Target.EmptyValues();
++        else ReadNameArray(Array, Owner, Existing);
++        for (FName Move : Moves)
++        {
++            if (!Move.IsNone() && !Existing.Contains(Move))
++            {
++                Element->SetPropertyValue(Target.GetRawPtr(Target.AddValue()), Move);
++                Existing.Add(Move);
++            }
++        }
++    }
++
 +    const void* FindUnitData(const UObject* Controller, FName CharacterID, const UScriptStruct*& OutType)
 +    {
 +        if (!IsValid(Controller) || CharacterID.IsNone()) return nullptr;
@@ -193,23 +271,115 @@ index 0000000..460a1b5
 +        return nullptr;
 +    }
 +
-+    void ReadEquippedTechs(UObject* Context, const void* Unit, const UScriptStruct* UnitType, TArray<FName>& Out)
++    void ReadEquipmentTechs(FName EquipmentID, TArray<FName>& Out, bool bOverdrive = false)
++    {
++        const FRow Equipment = FindRow(EquipmentTablePath, EquipmentID);
++        const FName Field(bOverdrive ? TEXT("OverDriveSkillIDs") : TEXT("BattleSkillIDs"));
++        ReadNameArray(FindMasteryProperty<FArrayProperty>(Equipment.Type, Field), Equipment.Data, Out);
++    }
++
++    void ReadEquippedTechs(const void* Unit, const UScriptStruct* UnitType, TArray<FName>& Out, bool bOverdrive = false)
 +    {
 +        if (!Unit || !UnitType) return;
-+        auto* Class = LoadClass<UObject>(nullptr, FunctionLibraryPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
-+        auto* GetSkills = Class ? Class->FindFunctionByName(TEXT("GetEquipmentSkills")) : nullptr;
-+        if (!GetSkills) return;
-+        const auto* Input = FindFProperty<FStructProperty>(GetSkills, TEXT("unitData"));
-+        const auto* Output = FindFProperty<FArrayProperty>(GetSkills, TEXT("equipmentBattleSkills"));
-+        if (!Input || Input->Struct != UnitType || !Output || !CastField<FNameProperty>(Output->Inner)) return;
-+        FStructOnScope Args(GetSkills);
-+        Input->CopyCompleteValue(Input->ContainerPtrToValuePtr<void>(Args.GetStructMemory()), Unit);
-+        if (const auto* World = FindFProperty<FObjectPropertyBase>(GetSkills, TEXT("__WorldContext")))
++        static const FName Slots[] = {
++            TEXT("Weapon"), TEXT("Armor"), TEXT("Helm"), TEXT("Boots"), TEXT("Accessory"), TEXT("Accessory1")
++        };
++        for (FName Slot : Slots)
 +        {
-+            World->SetObjectPropertyValue_InContainer(Args.GetStructMemory(), Context);
++            if (const auto* ItemID = FindMasteryProperty<FNameProperty>(UnitType, Slot))
++            {
++                ReadEquipmentTechs(ItemID->GetPropertyValue_InContainer(Unit), Out, bOverdrive);
++            }
 +        }
-+        Class->GetDefaultObject()->ProcessEvent(GetSkills, Args.GetStructMemory());
-+        ReadNameArray(Output, Args.GetStructMemory(), Out);
++    }
++
++    void ReadCharacterEquipment(UObject* Context, UObject* Controller, FName CharacterID, TArray<FName>& Out,
++        bool bOverdrive = false)
++    {
++        const UScriptStruct* UnitType = nullptr;
++        const void* Data = FindUnitData(Controller, CharacterID, UnitType);
++        if (!Data) Data = FindUnitData(Instance(Context), CharacterID, UnitType);
++        ReadEquippedTechs(Data, UnitType, Out, bOverdrive);
++    }
++
++    void CaptureExperienceBeforeAward(const UObject* Controller, TMap<FName, int32>& Experience)
++    {
++        const auto* Roster = IsValid(Controller) ? FindFProperty<FMapProperty>(Controller->GetClass(), TEXT("PlayerUnitDataID")) : nullptr;
++        const auto* Character = Roster ? CastField<FNameProperty>(Roster->KeyProp) : nullptr;
++        const auto* Data = Roster ? CastField<FStructProperty>(Roster->ValueProp) : nullptr;
++        const auto* Exp = Data ? FindMasteryProperty<FIntProperty>(Data->Struct, TEXT("Exp")) : nullptr;
++        if (!Character || !Exp) return;
++
++        FScriptMapHelper Units(Roster, Roster->ContainerPtrToValuePtr<void>(Controller));
++        for (int32 Index = 0; Index < Units.GetMaxIndex(); ++Index)
++        {
++            if (!Units.IsValidIndex(Index)) continue;
++            const FName ID = Character->GetPropertyValue(Units.GetKeyPtr(Index));
++            if (!ID.IsNone()) Experience.Add(ID, Exp->GetPropertyValue_InContainer(Units.GetValuePtr(Index)));
++        }
++    }
++
++    FReditusLevelUpChanges ReadLevelUpChanges(UUserWidget* Widget, FName ID, int32 OldExperience)
++    {
++        FReditusLevelUpChanges Changes;
++        // This is the same function and roster data used by BP_LevelUpDialogue to print the new stats.
++        auto* Library = FindObject<UClass>(nullptr, GameFunctionsPath);
++        auto* Evaluate = Library ? Library->FindFunctionByName(TEXT("GetPlayerUnitStatsFromID")) : nullptr;
++        if (!Evaluate || !Evaluate->HasAnyFunctionFlags(FUNC_Static)) return Changes;
++
++        const auto* Character = FindFProperty<FNameProperty>(Evaluate, TEXT("CharacterID"));
++        const auto* UnitData = FindFProperty<FStructProperty>(Evaluate, TEXT("playerUnitData"));
++        const auto* Stats = FindFProperty<FStructProperty>(Evaluate, TEXT("playerUnitStats"));
++        const auto* Found = FindFProperty<FBoolProperty>(Evaluate, TEXT("Found"));
++        const auto* Level = FindFProperty<FIntProperty>(Evaluate, TEXT("level"));
++        const auto* WorldContext = FindFProperty<FObjectPropertyBase>(Evaluate, TEXT("__WorldContext"));
++        const auto* Source = FindFProperty<FStructProperty>(Widget->GetClass(), TEXT("playerUnitData"));
++        if (!Character || !UnitData || !Stats || !Found || !Level || !Source || UnitData->Struct != Source->Struct) return Changes;
++
++        const auto* Exp = FindMasteryProperty<FIntProperty>(UnitData->Struct, TEXT("Exp"));
++        const void* Data = Source->ContainerPtrToValuePtr<void>(Widget);
++        if (!Exp || OldExperience >= Exp->GetPropertyValue_InContainer(Data)) return Changes;
++
++        FStructOnScope Before(Evaluate);
++        FStructOnScope After(Evaluate);
++        auto* Default = Library->GetDefaultObject();
++        const auto Calculate = [&](FStructOnScope& Args, int32 Experience)
++        {
++            void* Params = Args.GetStructMemory();
++            void* Unit = UnitData->ContainerPtrToValuePtr<void>(Params);
++            UnitData->CopyCompleteValue(Unit, Data);
++            Exp->SetPropertyValue_InContainer(Unit, Experience);
++            Character->SetPropertyValue_InContainer(Params, ID);
++            if (WorldContext) WorldContext->SetObjectPropertyValue_InContainer(Params, Widget);
++            Default->ProcessEvent(Evaluate, Params);
++            return Found->GetPropertyValue_InContainer(Params);
++        };
++        if (!Calculate(Before, OldExperience) || !Calculate(After, Exp->GetPropertyValue_InContainer(Data)) ||
++            Level->GetPropertyValue_InContainer(Before.GetStructMemory()) >= Level->GetPropertyValue_InContainer(After.GetStructMemory()))
++        {
++            return Changes;
++        }
++
++        const void* OldStats = Stats->ContainerPtrToValuePtr<void>(Before.GetStructMemory());
++        const void* NewStats = Stats->ContainerPtrToValuePtr<void>(After.GetStructMemory());
++        static const FName ShownStats[] = {
++            TEXT("maxHP"), TEXT("maxMP"), TEXT("Attack"), TEXT("defense"),
++            TEXT("MagicalAttack"), TEXT("magicDefense"), TEXT("hit"), TEXT("speed")
++        };
++        for (FName Name : ShownStats)
++        {
++            if (const auto* Stat = FindMasteryProperty<FIntProperty>(Stats->Struct, Name))
++            {
++                const int64 Change = int64(Stat->GetPropertyValue_InContainer(NewStats)) - Stat->GetPropertyValue_InContainer(OldStats);
++                if (Change != 0) Changes.Stats.Add(Name, Change);
++            }
++        }
++        if (const auto* Time = FindMasteryProperty<FFloatProperty>(Stats->Struct, TEXT("actionTime")))
++        {
++            const float Change = Time->GetPropertyValue_InContainer(NewStats) - Time->GetPropertyValue_InContainer(OldStats);
++            if (FMath::IsFinite(Change)) Changes.ActionTime = Change;
++        }
++        return Changes;
 +    }
 +
 +    bool ReadBossFlag(const UStruct* Type, const void* Value, bool& bIsBoss)
@@ -250,7 +420,7 @@ index 0000000..460a1b5
 +        int32 Override = 0;
 +        if (Row.Data)
 +        {
-+            if (const auto* Field = FindField<FIntProperty>(Row.Type, TEXT("MasteryRewardOverride")))
++            if (const auto* Field = FindMasteryProperty<FIntProperty>(Row.Type, TEXT("MasteryRewardOverride")))
 +            {
 +                Override = Field->GetPropertyValue_InContainer(Row.Data);
 +            }
@@ -262,22 +432,89 @@ index 0000000..460a1b5
 +        return ReditusTechMasteryRules::ResolveEnemyReward(Override, Override <= 0 && IsBoss(Enemy, Row));
 +    }
 +
-+    void SetText(UObject* TextWidget, const FText& Text)
++    UTextBlock* TextBlock(UObject* Menu, FName Name)
 +    {
-+        UFunction* Setter = IsValid(TextWidget) ? TextWidget->FindFunction(TEXT("SetText")) : nullptr;
-+        const auto* Input = Setter ? FindFProperty<FTextProperty>(Setter, TEXT("InText")) : nullptr;
-+        if (!Input || Setter->NumParms != 1) return;
-+        FStructOnScope Args(Setter);
-+        Input->SetPropertyValue_InContainer(Args.GetStructMemory(), Text);
-+        TextWidget->ProcessEvent(Setter, Args.GetStructMemory());
++        if (auto* Label = Cast<UTextBlock>(ObjectField(Menu, Name))) return Label;
++        const auto* Widget = Cast<UUserWidget>(Menu);
++        return Widget && Widget->WidgetTree ? Cast<UTextBlock>(Widget->WidgetTree->FindWidget(Name)) : nullptr;
 +    }
 +
-+    FText StageText(const FReditusCharacterMastery* Mastery, FName SkillID, int32 Required)
++    bool IsMastered(const FReditusCharacterMastery* Mastery, FName SkillID, bool bOverdrive)
 +    {
-+        if (Mastery && Mastery->Learned.Contains(SkillID)) return NSLOCTEXT("ReditusMastery", "Learned", "Learned");
-+        const int32 Progress = Mastery ? Mastery->Progress.FindRef(SkillID) : 0;
++        return Mastery && (bOverdrive ? Mastery->LearnedOverdrives : Mastery->Learned).Contains(SkillID);
++    }
++
++    FText StageText(const FReditusCharacterMastery* Mastery, FName SkillID, int32 Required, bool bOverdrive)
++    {
++        if (IsMastered(Mastery, SkillID, bOverdrive)) return NSLOCTEXT("ReditusMastery", "Learned", "Learned");
++        if (Required <= 0) return FText::GetEmpty();
++        const int32 Progress = Mastery ? (bOverdrive ? Mastery->OverdriveProgress : Mastery->Progress).FindRef(SkillID) : 0;
 +        return FText::Format(NSLOCTEXT("ReditusMastery", "Progress", "Mastery {0}/{1}"),
 +            FText::AsNumber(FMath::Clamp(Progress, 0, Required)), FText::AsNumber(Required));
++    }
++
++    FText WithDetail(const FText& Text, const FText& Detail)
++    {
++        if (Detail.IsEmpty()) return Text;
++        if (Text.IsEmpty()) return Detail;
++        return FText::Format(NSLOCTEXT("ReditusMastery", "Line", "{0}\n{1}"), Text, Detail);
++    }
++
++    FText MenuTechStage(UObject* Menu, FName SkillID, bool bOverdrive = false)
++    {
++        const int32 Needed = Requirement(FindRow(SkillTablePath, SkillID));
++        FName CharacterID = NameField(Menu, TEXT("CastingUnit"));
++        if (CharacterID.IsNone()) CharacterID = NameField(Menu, TEXT("CharacterID"));
++        if (CharacterID.IsNone())
++        {
++            if (Needed <= 0) return FText::GetEmpty();
++            return FText::Format(NSLOCTEXT("ReditusMastery", "AmountRequiredTemplate", "Requires {0} Mastery"),
++                FText::AsNumber(Needed));
++        }
++
++        const auto* Mastery = CharacterProgress(Menu, CharacterID);
++        if (NameField(Menu, TEXT("CharacterID")).IsNone() && !BoolField(Menu, TEXT("isEquipmentOnly")) &&
++            !IsMastered(Mastery, SkillID, bOverdrive))
++        {
++            const auto* Unit = FindFProperty<FStructProperty>(Menu->GetClass(), TEXT("playerUnitData"));
++            TArray<FName> Skills;
++            if (Unit) ReadEquippedTechs(Unit->ContainerPtrToValuePtr<void>(Menu), Unit->Struct, Skills, bOverdrive);
++            if (!Skills.Contains(SkillID))
++                ReadCharacterEquipment(Menu, ObjectField(Menu, TEXT("jRPGPlayerController")), CharacterID, Skills, bOverdrive);
++            if (!Skills.Contains(SkillID)) return FText::GetEmpty();
++        }
++        return StageText(Mastery, SkillID, Needed, bOverdrive);
++    }
++
++    FText DescribeMoveMastery(UObject* Unit, FName SkillID, bool bOverdrive)
++    {
++        const int32 Required = Requirement(FindRow(SkillTablePath, SkillID));
++        const FName CharacterID = NameField(Unit, TEXT("CharacterID"));
++        if (CharacterID.IsNone()) return FText::GetEmpty();
++        const auto* Mastery = CharacterProgress(Unit, CharacterID);
++        if (!IsMastered(Mastery, SkillID, bOverdrive))
++        {
++            if (Required <= 0) return FText::GetEmpty();
++            TArray<FName> Skills;
++            ReadCharacterEquipment(Unit, LocalPlayerController(Unit), CharacterID, Skills, bOverdrive);
++            if (!Skills.Contains(SkillID)) return FText::GetEmpty();
++        }
++        return StageText(Mastery, SkillID, Required, bOverdrive);
++    }
++
++    AActor* OverdriveCaster(UObject* Unit)
++    {
++        if (auto* Actor = Cast<AActor>(Unit)) return Actor;
++        return Cast<AActor>(ObjectField(Unit, TEXT("Player Unit Base")));
++    }
++
++    void RevealBattleResults(UUserWidget* Widget, UWidget* Panel, AActor* Controller, AActor* Battle,
++        TSharedPtr<FReditusResultsPresentation>& Active)
++    {
++        auto* Camera = Cast<AActor>(ObjectField(Battle, TEXT("staticCamera")));
++        auto* Player = Cast<APlayerController>(ObjectField(Controller, TEXT("jRPGPlayerController")));
++        if (!Player) Player = LocalPlayerController(Widget);
++        ReditusVictoryPresentation::Reveal(Widget, Panel, Player, Camera, ActorArray(Battle, TEXT("playerUnits")), Active);
 +    }
 +}
 +
@@ -286,6 +523,8 @@ index 0000000..460a1b5
 +    using namespace ReditusTechMasteryRuntime;
 +    if (auto* System = Subsystem(Battle))
 +    {
++        ReditusVictoryPresentation::Finish(System->ResultsPresentation);
++        System->LastVictory.Reset();
 +        for (auto It = System->Encounters.CreateIterator(); It; ++It)
 +        {
 +            if (!It.Key().IsValid()) It.RemoveCurrent();
@@ -308,6 +547,11 @@ index 0000000..460a1b5
 +
 +void UReditusTechMasteryLibrary::AwardVictoryMastery(AActor* BattleController)
 +{
++    ResolveVictoryMastery(BattleController, true);
++}
++
++void UReditusTechMasteryLibrary::ResolveVictoryMastery(AActor* BattleController, bool bBeforeExperienceAward)
++{
 +    using namespace ReditusTechMasteryRuntime;
 +    auto* Battle = Cast<AActor>(ObjectField(BattleController, TEXT("currentBattle")));
 +    auto* System = Subsystem(Battle);
@@ -316,48 +560,61 @@ index 0000000..460a1b5
 +    if (Encounter.bAwarded) return;
 +
 +    auto* Controller = ObjectField(BattleController, TEXT("jRPGPlayerController"));
++    if (!IsValid(Controller)) Controller = LocalPlayerController(BattleController);
++    if (bBeforeExperienceAward && Encounter.PreAwardExperience.Num() == 0)
++    {
++        CaptureExperienceBeforeAward(Controller, Encounter.PreAwardExperience);
++    }
 +    auto* Save = SaveData(Battle, true);
-+    auto* Units = FindFProperty<FArrayProperty>(Battle->GetClass(), TEXT("playerUnits"));
-+    auto* UnitElement = Units ? CastField<FObjectPropertyBase>(Units->Inner) : nullptr;
-+    if (!Save || !IsValid(Controller) || !UnitElement)
++    const TArray<AActor*> Participants = ActorArray(Battle, TEXT("playerUnits"));
++    if (!Save || Participants.Num() == 0)
 +    {
 +        UE_LOG(LogReditusTechMastery, Warning, TEXT("Mastery could not read the battle participants or active save data."));
 +        return;
 +    }
 +
-+    FScriptArrayHelper Participants(Units, Units->ContainerPtrToValuePtr<void>(Battle));
 +    TSet<FName> Counted;
-+    for (int32 Index = 0; Index < Participants.Num(); ++Index)
++    for (AActor* Unit : Participants)
 +    {
-+        UObject* Unit = UnitElement->GetObjectPropertyValue(Participants.GetRawPtr(Index));
 +        const FName CharacterID = NameField(Unit, TEXT("CharacterID"));
 +        if (CharacterID.IsNone() || Counted.Contains(CharacterID)) continue;
 +        Counted.Add(CharacterID);
 +
-+        const UScriptStruct* UnitType = nullptr;
-+        const void* UnitData = FindUnitData(Controller, CharacterID, UnitType);
-+        TArray<FName> Skills;
-+        ReadEquippedTechs(BattleController, UnitData, UnitType, Skills);
-+        for (FName SkillID : Skills)
++        for (bool bOverdrive : {false, true})
 +        {
-+            const FRow Row = FindRow(SkillTablePath, SkillID);
-+            const int32 Required = Requirement(Row);
-+            if (Required <= 0) continue;
-+            auto& Character = Save->Characters.FindOrAdd(CharacterID);
-+            if (Character.Learned.Contains(SkillID)) continue;
-+
-+            int32& Progress = Character.Progress.FindOrAdd(SkillID);
-+            Progress = ReditusTechMasteryRules::Advance(Progress, Encounter.Reward, Required);
-+            Encounter.bAnyProgress = true;
-+            if (Progress >= Required)
++            TArray<FName> Skills;
++            ReadCharacterEquipment(BattleController, Controller, CharacterID, Skills, bOverdrive);
++            for (FName SkillID : Skills)
 +            {
-+                Character.Learned.Add(SkillID);
-+                Encounter.Learned.Add(FText::Format(NSLOCTEXT("ReditusMastery", "MasteredTech", "{0} learned {1}"),
-+                    DisplayName(FindRow(PartyTablePath, CharacterID), CharacterID), DisplayName(Row, SkillID)));
++                const FRow Row = FindRow(SkillTablePath, SkillID);
++                const int32 Required = Requirement(Row);
++                if (Required <= 0) continue;
++                auto& Character = Save->Characters.FindOrAdd(CharacterID);
++                auto& Learned = bOverdrive ? Character.LearnedOverdrives : Character.Learned;
++                if (Learned.Contains(SkillID)) continue;
++
++                int32& Progress = (bOverdrive ? Character.OverdriveProgress : Character.Progress).FindOrAdd(SkillID);
++                Progress = ReditusTechMasteryRules::Advance(Progress, Encounter.Reward, Required);
++                Encounter.bAnyProgress = true;
++                const FText CharacterName = DisplayName(FindRow(PartyTablePath, CharacterID), CharacterID);
++                const FText SkillName = DisplayName(Row, SkillID);
++                if (Progress >= Required)
++                {
++                    Learned.Add(SkillID);
++                    Encounter.Learned.Add(FText::Format(NSLOCTEXT("ReditusMastery", "MasteredTech", "{0} learned {1}"),
++                        CharacterName, SkillName));
++                }
++                else
++                {
++                    Encounter.Progress.Add({CharacterName, SkillName, Progress, Required});
++                }
 +            }
 +        }
 +    }
 +    Encounter.bAwarded = true;
++    System->LastVictory = Battle;
++    UE_LOG(LogReditusTechMastery, Log, TEXT("Victory mastery for %s: +%d, %d progressing, %d learned."),
++        *GetNameSafe(Battle), Encounter.bAnyProgress ? Encounter.Reward : 0, Encounter.Progress.Num(), Encounter.Learned.Num());
 +}
 +
 +void UReditusTechMasteryLibrary::AppendLearnedTechs(UObject* SkillOwner)
@@ -369,19 +626,58 @@ index 0000000..460a1b5
 +    if (!Mastery || Mastery->Learned.Num() == 0) return;
 +
 +    const auto* Skills = FindFProperty<FArrayProperty>(SkillOwner->GetClass(), TEXT("availableBattleSkills"));
-+    const auto* Element = Skills ? CastField<FNameProperty>(Skills->Inner) : nullptr;
-+    if (!Element) return;
-+    TArray<FName> Existing;
-+    ReadNameArray(Skills, SkillOwner, Existing);
-+    FScriptArrayHelper Target(Skills, Skills->ContainerPtrToValuePtr<void>(SkillOwner));
-+    for (FName Skill : Mastery->Learned)
++    AddMoves(Skills, SkillOwner, Mastery->Learned);
++}
++
++void UReditusTechMasteryLibrary::AppendEquipmentAndLearnedOverdrives(UObject* SkillOwner)
++{
++    using namespace ReditusTechMasteryRuntime;
++    if (!IsValid(SkillOwner)) return;
++    const bool bBattleUnit = SkillOwner->IsA<AActor>();
++    const auto* Moves = FindFProperty<FArrayProperty>(SkillOwner->GetClass(),
++        bBattleUnit ? TEXT("availableOverdriveTechs") : TEXT("availableOverDriveSkills"));
++    if (!Moves) return;
++    const FName Character = NameField(SkillOwner, bBattleUnit ? TEXT("CharacterID") : TEXT("CastingUnit"));
++    TArray<FName> Available = NamedMoves(SkillOwner, Moves->GetFName());
++    if (const auto* Unit = FindFProperty<FStructProperty>(SkillOwner->GetClass(), TEXT("playerUnitData")))
 +    {
-+        if (!Skill.IsNone() && !Existing.Contains(Skill))
-+        {
-+            Element->SetPropertyValue(Target.GetRawPtr(Target.AddValue()), Skill);
-+            Existing.Add(Skill);
-+        }
++        ReadEquippedTechs(Unit->ContainerPtrToValuePtr<void>(SkillOwner), Unit->Struct, Available, true);
 +    }
++    else
++    {
++        ReadCharacterEquipment(SkillOwner, LocalPlayerController(SkillOwner), Character, Available, true);
++    }
++    if (const auto* Mastery = CharacterProgress(SkillOwner, Character))
++    {
++        Available.Append(Mastery->LearnedOverdrives);
++    }
++    AddMoves(Moves, SkillOwner, Available, true);
++}
++
++void UReditusTechMasteryLibrary::ShowEquipmentSkillPages(UObject* Menu)
++{
++    using namespace ReditusTechMasteryRuntime;
++    if (!IsValid(Menu)) return;
++    const auto Techs = NamedMoves(Menu, TEXT("availableBattleSkills"));
++    const auto Overdrives = NamedMoves(Menu, TEXT("AvailableOverdrive_Skills"));
++    const auto* Target = FindFProperty<FArrayProperty>(Menu->GetClass(), TEXT("availableOverDriveSkills"));
++    AddMoves(Target, Menu, Overdrives, true);
++    const bool bOverdrive = Techs.Num() == 0 && Overdrives.Num() > 0;
++    if (const auto* Mode = FindFProperty<FBoolProperty>(Menu->GetClass(), TEXT("Was overdrive tech")))
++    {
++        Mode->SetPropertyValue_InContainer(Menu, bOverdrive);
++    }
++    if (auto* Title = TextBlock(Menu, TEXT("SkillsDialogueTitle")))
++    {
++        Title->SetText(bOverdrive ? NSLOCTEXT("ReditusMastery", "PreviewOverdrives", "Overdrives") :
++            NSLOCTEXT("ReditusMastery", "PreviewTechs", "Techs"));
++    }
++    auto* Show = Menu->FindFunction(TEXT("ShowSkills"));
++    const auto* Skills = Show ? FindFProperty<FArrayProperty>(Show, TEXT("skills")) : nullptr;
++    if (!Skills) return;
++    FStructOnScope Args(Show);
++    AddMoves(Skills, Args.GetStructMemory(), bOverdrive ? Overdrives : Techs);
++    Menu->ProcessEvent(Show, Args.GetStructMemory());
 +}
 +
 +FText UReditusTechMasteryLibrary::FormatVictoryMastery(UObject* VictoryWidget, const FText& RewardText)
@@ -389,13 +685,7 @@ index 0000000..460a1b5
 +    using namespace ReditusTechMasteryRuntime;
 +    auto* System = Subsystem(VictoryWidget);
 +    if (!System) return RewardText;
-+    UObject* Unit = ObjectField(VictoryWidget, TEXT("PlayerUnitBase"));
-+    UObject* Controller = ObjectField(Unit, TEXT("battleController"));
-+    if (!IsValid(Controller))
-+    {
-+        Controller = ObjectField(UGameplayStatics::GetPlayerController(VictoryWidget, 0), TEXT("battleController"));
-+    }
-+    auto* Battle = Cast<AActor>(ObjectField(Controller, TEXT("currentBattle")));
++    auto* Battle = System->LastVictory.Get();
 +    const auto* Encounter = System->Encounters.Find(Battle);
 +    if (!Encounter || !Encounter->bAnyProgress) return RewardText;
 +
@@ -411,25 +701,230 @@ index 0000000..460a1b5
 +void UReditusTechMasteryLibrary::ShowMasteryOnSkillButton(UObject* Menu, UObject* SkillButton, FName SkillID)
 +{
 +    using namespace ReditusTechMasteryRuntime;
-+    const FRow Row = FindRow(SkillTablePath, SkillID);
-+    const int32 Needed = Requirement(Row);
-+    if (Needed <= 0) return;
-+    FName CharacterID = NameField(Menu, TEXT("CastingUnit"));
-+    const bool bEquipmentPreview = CharacterID.IsNone();
-+    if (bEquipmentPreview) CharacterID = NameField(Menu, TEXT("CharacterID"));
-+    if (CharacterID.IsNone()) return;
-+
-+    const auto* Mastery = CharacterProgress(Menu, CharacterID);
-+    if (!bEquipmentPreview && !(Mastery && Mastery->Learned.Contains(SkillID)))
++    // Older installs also connected this node in BP_SkillDetails.
++    if (TextBlock(Menu, TEXT("SkillDescription"))) return;
++    const FText Stage = MenuTechStage(Menu, SkillID);
++    if (Stage.IsEmpty()) return;
++    if (auto* Label = TextBlock(SkillButton, TEXT("SkillName")))
 +    {
-+        const auto* Unit = FindFProperty<FStructProperty>(Menu->GetClass(), TEXT("playerUnitData"));
-+        TArray<FName> Skills;
-+        if (Unit) ReadEquippedTechs(Menu, Unit->ContainerPtrToValuePtr<void>(Menu), Unit->Struct, Skills);
-+        if (!Skills.Contains(SkillID)) return;
++        Label->SetText(FText::Format(NSLOCTEXT("ReditusMastery", "TechName", "{0}   {1}"),
++            DisplayName(FindRow(SkillTablePath, SkillID), SkillID), Stage));
 +    }
-+    SetText(ObjectField(SkillButton, TEXT("SkillName")),
-+        FText::Format(NSLOCTEXT("ReditusMastery", "TechName", "{0}   {1}"),
-+            DisplayName(Row, SkillID), StageText(Mastery, SkillID, Needed)));
++}
++
++FText UReditusTechMasteryLibrary::FormatSkillMasteryDescription(UObject*, FName, const FText& Description)
++{
++    // Keep saved Blueprint calls compatible with the dedicated Mastery label.
++    return Description;
++}
++
++void UReditusTechMasteryLibrary::UpdateSelectedTechMastery(UObject* Menu, FName SkillID)
++{
++    using namespace ReditusTechMasteryRuntime;
++    auto* Widget = Cast<UUserWidget>(Menu);
++    auto* Description = TextBlock(Menu, TEXT("SkillDescription"));
++    if (!Widget || !Description) return;
++    const bool bOverdrive = NamedMoves(Menu, TEXT("availableOverDriveSkills")).Contains(SkillID) &&
++        (BoolField(Menu, TEXT("Was overdrive tech")) || !NamedMoves(Menu, TEXT("availableBattleSkills")).Contains(SkillID));
++    const FText Status = MenuTechStage(Menu, SkillID, bOverdrive);
++    if (!ReditusVictoryPresentation::UpdateTechMastery(Widget, Description, Status))
++    {
++        Description->SetText(WithDetail(Description->GetText(), Status));
++    }
++}
++
++void UReditusTechMasteryLibrary::ShowEquipmentMastery(UObject* Menu, UObject* Details, FName EquipmentID)
++{
++    using namespace ReditusTechMasteryRuntime;
++    auto* Description = TextBlock(Details, TEXT("EquipmentDescription"));
++    if (!Description) return;
++    FText Text = Description->GetText();
++    for (bool bOverdrive : {false, true})
++    {
++        TArray<FName> Skills;
++        ReadEquipmentTechs(EquipmentID, Skills, bOverdrive);
++        for (FName SkillID : Skills)
++        {
++            const FText Stage = MenuTechStage(Menu, SkillID, bOverdrive);
++            const FRow Row = FindRow(SkillTablePath, SkillID);
++            if (!Row.Data || (Stage.IsEmpty() && !bOverdrive)) continue;
++            FText Name = DisplayName(Row, SkillID);
++            if (bOverdrive) Name = FText::Format(NSLOCTEXT("ReditusMastery", "EquipmentOverdrive", "Overdrive  {0}"), Name);
++            Text = WithDetail(Text, Stage.IsEmpty() ? Name :
++                FText::Format(NSLOCTEXT("ReditusMastery", "EquipmentProgress", "{0}   {1}"), Name, Stage));
++        }
++    }
++    Description->SetText(Text);
++}
++
++bool UReditusTechMasteryLibrary::IsTechMastered(UObject* Unit, FName SkillID)
++{
++    using namespace ReditusTechMasteryRuntime;
++    return IsMastered(CharacterProgress(Unit, NameField(Unit, TEXT("CharacterID"))), SkillID, false);
++}
++
++FText UReditusTechMasteryLibrary::DescribeEquippedTech(UObject* Unit, FName SkillID)
++{
++    using namespace ReditusTechMasteryRuntime;
++    return DescribeMoveMastery(Unit, SkillID, false);
++}
++
++bool UReditusTechMasteryLibrary::IsOverdriveMastered(UObject* Unit, FName SkillID)
++{
++    using namespace ReditusTechMasteryRuntime;
++    return IsMastered(CharacterProgress(Unit, NameField(Unit, TEXT("CharacterID"))), SkillID, true);
++}
++
++FText UReditusTechMasteryLibrary::DescribeEquippedOverdrive(UObject* Unit, FName SkillID)
++{
++    using namespace ReditusTechMasteryRuntime;
++    return DescribeMoveMastery(Unit, SkillID, true);
++}
++
++FText UReditusTechMasteryLibrary::GetOverdrivePartnerMessage(UObject* Unit, FName SkillID)
++{
++    using namespace ReditusTechMasteryRuntime;
++    const auto Row = FindRow(SkillTablePath, SkillID);
++    TArray<FName> Required;
++    ReadNameArray(FindMasteryProperty<FArrayProperty>(Row.Type, TEXT("RequiredUnits")), Row.Data, Required);
++    if (Required.Num() == 0) return FText::GetEmpty();
++
++    auto* Caster = OverdriveCaster(Unit);
++    const FName CasterID = NameField(Caster, TEXT("CharacterID"));
++    auto* Battle = ObjectField(ObjectField(Caster, TEXT("battleController")), TEXT("currentBattle"));
++    const auto Allies = ActorArray(Battle, TEXT("playerUnits"));
++    FText OutOfParty;
++    FText Waiting;
++    const auto AddName = [](FText& Names, FName ID)
++    {
++        const FText Name = DisplayName(FindRow(PartyTablePath, ID), ID);
++        Names = Names.IsEmpty() ? Name :
++            FText::Format(NSLOCTEXT("ReditusMastery", "PartnerList", "{0}, {1}"), Names, Name);
++    };
++    for (FName ID : Required)
++    {
++        if (ID == CasterID) continue;
++        AActor* Partner = nullptr;
++        for (AActor* Ally : Allies)
++        {
++            if (NameField(Ally, TEXT("CharacterID")) == ID)
++            {
++                Partner = Ally;
++                break;
++            }
++        }
++        if (!Partner || IntField(Partner, TEXT("currentHP")) <= 0)
++            AddName(OutOfParty, ID);
++        else if (!BoolField(Partner, TEXT("OverdriveEntered")))
++            AddName(Waiting, ID);
++    }
++    const FText Party = OutOfParty.IsEmpty() ? FText::GetEmpty() :
++        FText::Format(NSLOCTEXT("ReditusMastery", "RequiredParty", "{0} must be alive and in the active party."),
++            OutOfParty);
++    const FText Overdrive = Waiting.IsEmpty() ? FText::GetEmpty() :
++        FText::Format(NSLOCTEXT("ReditusMastery", "RequiredOverdrive", "{0} must enter Overdrive."),
++            Waiting);
++    return WithDetail(Party, Overdrive);
++}
++
++bool UReditusTechMasteryLibrary::CanConfirmOverdrive(UObject* Menu, FName SkillID)
++{
++    using namespace ReditusTechMasteryRuntime;
++    auto* Caster = OverdriveCaster(Menu);
++    return IntField(Caster, TEXT("currentHP")) > 0 && BoolField(Caster, TEXT("OverdriveEntered")) &&
++        FindRow(SkillTablePath, SkillID).Data &&
++        GetOverdrivePartnerMessage(Caster, SkillID).IsEmpty();
++}
++
++void UReditusTechMasteryLibrary::UpdateOverdriveDescription(UObject* Menu, FName SkillID)
++{
++    using namespace ReditusTechMasteryRuntime;
++    if (auto* Description = TextBlock(Menu, TEXT("SkillDescriptionText")))
++    {
++        const auto Row = FindRow(SkillTablePath, SkillID);
++        const auto* Short = FindMasteryProperty<FTextProperty>(Row.Type, TEXT("ShortDescription"));
++        const FText Summary = Row.Data && Short ? Short->GetPropertyValue_InContainer(Row.Data) : FText::GetEmpty();
++        Description->SetText(WithDetail(GetOverdrivePartnerMessage(Menu, SkillID),
++            WithDetail(Summary, DescribeEquippedOverdrive(OverdriveCaster(Menu), SkillID))));
++    }
++}
++
++void UReditusTechMasteryLibrary::PresentVictory(UObject* VictoryWidget)
++{
++    using namespace ReditusTechMasteryRuntime;
++    auto* Widget = Cast<UUserWidget>(VictoryWidget);
++    if (!Widget) return;
++    auto* Controller = BattleControllerFor(VictoryWidget);
++    if (Controller) ResolveVictoryMastery(Controller, false);
++    auto* System = Subsystem(Widget);
++    if (!System) return;
++    auto* Battle = System->LastVictory.Get();
++    const auto* Result = System->Encounters.Find(Battle);
++    auto* Panel = ReditusVictoryPresentation::Build(Widget, Cast<UPanelWidget>(ObjectField(Widget, TEXT("ItemList"))),
++        IntField(Widget, TEXT("expReward")), IntField(Widget, TEXT("goldReward")),
++        TextBlock(Widget, TEXT("ExpRewardText")), Result);
++    if (!Panel) return;
++
++    if (!Battle) Battle = Cast<AActor>(ObjectField(Controller, TEXT("currentBattle")));
++    RevealBattleResults(Widget, Panel, Controller, Battle, System->ResultsPresentation);
++}
++
++void UReditusTechMasteryLibrary::PresentLevelUp(UObject* LevelUpWidget)
++{
++    using namespace ReditusTechMasteryRuntime;
++    auto* Widget = Cast<UUserWidget>(LevelUpWidget);
++    auto* System = Subsystem(Widget);
++    if (!System) return;
++    auto* Controller = BattleControllerFor(Widget);
++    auto* Battle = Cast<AActor>(ObjectField(Controller, TEXT("currentBattle")));
++    const FName Character = NameField(Widget, TEXT("playerUnit"));
++    const auto* Encounter = Battle ? System->Encounters.Find(Battle) : nullptr;
++    const int32* Experience = Encounter ? Encounter->PreAwardExperience.Find(Character) : nullptr;
++    const auto Changes = Experience ? ReadLevelUpChanges(Widget, Character, *Experience) : FReditusLevelUpChanges{};
++    auto* Panel = ReditusVictoryPresentation::BuildLevelUp(Widget, Changes);
++    RevealBattleResults(Widget, Panel, Controller, Battle, System->ResultsPresentation);
++}
++
++void UReditusTechMasteryLibrary::HoldBattleUnitsForHUD(AActor* Battle)
++{
++    using namespace ReditusTechMasteryRuntime;
++    auto* System = Subsystem(Battle);
++    auto* Controller = Cast<AActor>(ObjectField(Battle, TEXT("battleController")));
++    auto* PresenterClass = FindObject<UClass>(nullptr, TEXT("/Script/Chapter1Reditus.ReditusBattleHUDPresenterComponent"));
++    if (!System || !Controller || !PresenterClass) return;
++    UActorComponent* Presenter = Controller->GetComponentByClass(PresenterClass);
++    auto* HUD = Cast<UUserWidget>(ObjectField(Presenter, TEXT("HUD")));
++    if (!IsValid(Presenter) || (IsValid(HUD) && HUD->IsInViewport())) return;
++
++    for (auto It = System->HiddenIntroUnits.CreateIterator(); It; ++It)
++    {
++        if (!It.Key().IsValid()) It.RemoveCurrent();
++    }
++
++    auto& Hidden = System->HiddenIntroUnits.FindOrAdd(Battle);
++    for (FName Roster : { FName(TEXT("playerUnits")), FName(TEXT("enemyUnits")) })
++    {
++        for (auto* Unit : ActorArray(Battle, Roster))
++        {
++            if (Unit->IsHidden()) continue;
++            Hidden.AddUnique(Unit);
++            Unit->SetActorHiddenInGame(true);
++        }
++    }
++}
++
++void UReditusTechMasteryLibrary::ReleaseBattleIntro(AActor* BattleController)
++{
++    using namespace ReditusTechMasteryRuntime;
++    auto* System = Subsystem(BattleController);
++    if (!System) return;
++    auto* Battle = Cast<AActor>(ObjectField(BattleController, TEXT("currentBattle")));
++    TArray<TWeakObjectPtr<AActor>> Hidden;
++    if (!Battle || !System->HiddenIntroUnits.RemoveAndCopyValue(Battle, Hidden)) return;
++    for (const auto& Unit : Hidden)
++    {
++        if (auto* Actor = Unit.Get()) Actor->SetActorHiddenInGame(false);
++    }
 +}
 diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryRules.h b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusTechMasteryRules.h
 new file mode 100644
@@ -459,12 +954,620 @@ index 0000000..4868c6d
 +        return Award >= Required - Progress ? Required : Progress + Award;
 +    }
 +}
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusVictoryPresentation.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusVictoryPresentation.cpp
+new file mode 100644
+index 0000000..d4b7bd3
+--- /dev/null
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusVictoryPresentation.cpp
+@@ -0,0 +1,567 @@
++#include "ReditusVictoryPresentation.h"
++#include "ReditusTechMasteryLibrary.h"
++#include "Blueprint/UserWidget.h"
++#include "Blueprint/WidgetTree.h"
++#include "Brushes/SlateColorBrush.h"
++#include "Camera/CameraComponent.h"
++#include "Components/Border.h"
++#include "Components/CanvasPanel.h"
++#include "Components/CanvasPanelSlot.h"
++#include "Components/HorizontalBox.h"
++#include "Components/HorizontalBoxSlot.h"
++#include "Components/Overlay.h"
++#include "Components/OverlaySlot.h"
++#include "Components/ProgressBar.h"
++#include "Components/ScaleBox.h"
++#include "Components/ScaleBoxSlot.h"
++#include "Components/ScrollBox.h"
++#include "Components/SizeBox.h"
++#include "Components/TextBlock.h"
++#include "Components/VerticalBox.h"
++#include "Components/VerticalBoxSlot.h"
++#include "Engine/World.h"
++#include "GameFramework/Actor.h"
++#include "GameFramework/PlayerController.h"
++#include "Styling/CoreStyle.h"
++#include "TimerManager.h"
++
++struct FReditusResultsPresentation
++{
++    FTimerHandle Timer;
++    TWeakObjectPtr<UWorld> World;
++    TWeakObjectPtr<AActor> StaticCamera;
++    TWeakObjectPtr<UCameraComponent> Camera;
++    TWeakObjectPtr<UUserWidget> Screen;
++    TWeakObjectPtr<UWidget> Panel;
++    FTransform OriginalRelative;
++    FTransform Start;
++    FVector Location;
++    FQuat Rotation;
++    float OriginalLens = 0.f;
++    float Lens = 0.f;
++    float CameraStartTime = 0.f;
++    float PanelStartTime = 0.f;
++    bool bOrthographic = false;
++    bool bCameraSettled = false;
++    bool bPanelSettled = false;
++    bool bRunning = true;
++};
++
++namespace ReditusVictoryPresentation
++{
++    namespace
++    {
++        const FName PanelName(TEXT("ReditusVictoryResults"));
++        const FName MasteryName(TEXT("ReditusSelectedTechMastery"));
++        const FLinearColor PanelColor(0.009f, 0.016f, 0.031f, 0.82f);
++        const FLinearColor MasteryBadgeColor(0.009f, 0.016f, 0.031f, 0.94f);
++        const FLinearColor Brass(0.64f, 0.40f, 0.14f, 1.f);
++        const FLinearColor PaleGold(1.f, 0.78f, 0.43f, 1.f);
++        const FLinearColor Ivory(0.97f, 0.92f, 0.83f, 1.f);
++        const FLinearColor Slate(0.48f, 0.61f, 0.72f, 1.f);
++        const FLinearColor StatGain(0.47f, 0.84f, 0.64f, 1.f);
++        const FLinearColor StatLoss(0.94f, 0.51f, 0.44f, 1.f);
++        constexpr float PartyScreenOffset = 0.44f; // 72% of the screen width.
++        constexpr float ZoomFactor = 0.84f;
++        constexpr float BlendDuration = 0.45f;
++
++        UTextBlock* Label(UWidgetTree* Tree, const FSlateFontInfo& Font, const FText& Value, int32 Size, FLinearColor Color)
++        {
++            auto* Text = Tree->ConstructWidget<UTextBlock>();
++            FSlateFontInfo Sized = Font;
++            Sized.Size = Size;
++            Sized.OutlineSettings.OutlineSize = 0;
++            Text->SetFont(Sized);
++            Text->SetText(Value);
++            Text->SetColorAndOpacity(FSlateColor(Color));
++            return Text;
++        }
++
++        void Rule(UWidgetTree* Tree, UVerticalBox* Box, FLinearColor Color, float Height, FMargin Padding)
++        {
++            auto* Stroke = Tree->ConstructWidget<UBorder>();
++            Stroke->SetBrushColor(Color);
++            auto* Size = Tree->ConstructWidget<USizeBox>();
++            Size->SetHeightOverride(Height);
++            Size->AddChild(Stroke);
++            Box->AddChildToVerticalBox(Size)->SetPadding(Padding);
++        }
++
++        UVerticalBox* MakeValueCard(UWidgetTree* Tree, UHorizontalBox* Row, const FSlateFontInfo& Font, const FText& Name,
++            FMargin Padding)
++        {
++            auto* Card = Tree->ConstructWidget<UBorder>();
++            Card->SetBrushColor(FLinearColor(0.038f, 0.065f, 0.093f, 0.32f));
++            Card->SetPadding(Padding);
++            auto* Column = Tree->ConstructWidget<UVerticalBox>();
++            Card->SetContent(Column);
++            Column->AddChildToVerticalBox(Label(Tree, Font, Name, 16, Slate));
++            auto* Slot = Row->AddChildToHorizontalBox(Card);
++            Slot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
++            if (Row->GetChildrenCount() > 1) Slot->SetPadding(FMargin(8.f, 0.f, 0.f, 0.f));
++            return Column;
++        }
++
++        FText SignedValue(const FText& Number, bool bPositive)
++        {
++            return bPositive ? FText::Format(NSLOCTEXT("ReditusVictory", "Amount", "+{0}"), Number) : Number;
++        }
++
++        void Reward(UWidgetTree* Tree, UHorizontalBox* Row, const FSlateFontInfo& Font, const FText& Name, int32 Amount)
++        {
++            auto* Column = MakeValueCard(Tree, Row, Font, Name, FMargin(12.f, 9.f));
++            const FText Value = SignedValue(FText::AsNumber(Amount), Amount > 0);
++            Column->AddChildToVerticalBox(Label(Tree, Font, Value, 27, Ivory))->SetPadding(FMargin(0.f, 3.f, 0.f, 0.f));
++        }
++
++        void LevelStat(UWidgetTree* Tree, UHorizontalBox* Row, const FSlateFontInfo& Font, const FText& Name,
++            const FText& Value, int64 Change)
++        {
++            auto* Column = MakeValueCard(Tree, Row, Font, Name, FMargin(10.f, 5.f));
++            auto* Numbers = Tree->ConstructWidget<UHorizontalBox>();
++            Column->AddChildToVerticalBox(Numbers)->SetPadding(FMargin(0.f, 1.f, 0.f, 0.f));
++            Numbers->AddChildToHorizontalBox(Label(Tree, Font, Value, 22, Ivory))->SetVerticalAlignment(VAlign_Center);
++            if (Change != 0)
++            {
++                const FText Delta = SignedValue(FText::AsNumber(Change), Change > 0);
++                auto* Slot = Numbers->AddChildToHorizontalBox(Label(Tree, Font, Delta, 17, Change > 0 ? StatGain : StatLoss));
++                Slot->SetPadding(FMargin(10.f, 0.f, 0.f, 0.f));
++                Slot->SetVerticalAlignment(VAlign_Center);
++            }
++        }
++
++        void TechProgress(UWidgetTree* Tree, UVerticalBox* List, const FSlateFontInfo& Font, const FReditusVictoryTechProgress& Tech)
++        {
++            auto* Lines = Tree->ConstructWidget<UVerticalBox>();
++            auto* Header = Tree->ConstructWidget<UHorizontalBox>();
++            Lines->AddChildToVerticalBox(Header);
++            auto* Name = Label(Tree, Font, FText::Format(NSLOCTEXT("ReditusVictory", "Tech", "{0}  /  {1}"),
++                Tech.Character, Tech.Tech), 15, Ivory);
++            Name->SetAutoWrapText(true);
++            auto* NameSlot = Header->AddChildToHorizontalBox(Name);
++            NameSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
++            NameSlot->SetPadding(FMargin(0.f, 0.f, 8.f, 0.f));
++            Header->AddChildToHorizontalBox(Label(Tree, Font, FText::Format(NSLOCTEXT("ReditusVictory", "Progress", "{0}/{1}"),
++                FText::AsNumber(Tech.Current), FText::AsNumber(Tech.Required)), 15, PaleGold));
++
++            FProgressBarStyle Style;
++            Style.SetBackgroundImage(FSlateColorBrush(FLinearColor(0.045f, 0.068f, 0.096f, 1.f)));
++            Style.SetFillImage(FSlateColorBrush(Brass));
++            auto* Bar = Tree->ConstructWidget<UProgressBar>();
++            Bar->WidgetStyle = Style;
++            Bar->SetPercent(FMath::Clamp(float(Tech.Current) / FMath::Max(1, Tech.Required), 0.f, 1.f));
++            auto* Size = Tree->ConstructWidget<USizeBox>();
++            Size->SetHeightOverride(4.f);
++            Size->AddChild(Bar);
++            Lines->AddChildToVerticalBox(Size)->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
++            List->AddChildToVerticalBox(Lines)->SetPadding(FMargin(0.f, 2.f, 0.f, 7.f));
++        }
++
++        UCanvasPanel* MountCanvas(UWidgetTree* Tree)
++        {
++            if (auto* Canvas = Cast<UCanvasPanel>(Tree->RootWidget)) return Canvas;
++            auto* Overlay = Cast<UOverlay>(Tree->RootWidget);
++            if (!Overlay) return nullptr;
++            auto* Canvas = Tree->ConstructWidget<UCanvasPanel>();
++            Canvas->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
++            auto* Slot = Overlay->AddChildToOverlay(Canvas);
++            Slot->SetHorizontalAlignment(HAlign_Fill);
++            Slot->SetVerticalAlignment(VAlign_Fill);
++            return Canvas;
++        }
++
++        struct FResultsPanel
++        {
++            UBorder* Sheet = nullptr;
++            UVerticalBox* Column = nullptr;
++            TArray<UWidget*> Previous;
++        };
++
++        FResultsPanel MakeResultsPanel(UWidgetTree* Tree, const FSlateFontInfo& Font, const FText& Title)
++        {
++            if (!Tree || Tree->FindWidget(PanelName)) return {};
++            auto* Root = Cast<UPanelWidget>(Tree->RootWidget);
++            if (!Root) return {};
++            FResultsPanel Panel;
++            Panel.Previous = Root->GetAllChildren();
++            auto* Canvas = MountCanvas(Tree);
++            if (!Canvas) return {};
++
++            Panel.Sheet = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), PanelName);
++            Panel.Sheet->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
++            Panel.Sheet->SetBrushColor(PanelColor);
++            Panel.Sheet->SetPadding(FMargin(24.f, 18.f));
++            auto* Placement = Canvas->AddChildToCanvas(Panel.Sheet);
++            Placement->SetAnchors(FAnchors(0.055f, 0.19f, 0.45f, 0.77f));
++            Placement->SetOffsets(FMargin(0.f));
++            Placement->SetZOrder(20);
++
++            Panel.Column = Tree->ConstructWidget<UVerticalBox>();
++            Panel.Sheet->SetContent(Panel.Column);
++            Rule(Tree, Panel.Column, Brass, 2.f, FMargin(0.f, 0.f, 0.f, 9.f));
++            Panel.Column->AddChildToVerticalBox(Label(Tree, Font, Title, 42, PaleGold));
++            return Panel;
++        }
++
++        UVerticalBox* ScrollableResults(UWidgetTree* Tree, UVerticalBox* Column)
++        {
++            auto* Scroll = Tree->ConstructWidget<UScrollBox>();
++            Column->AddChildToVerticalBox(Scroll)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
++            auto* Results = Tree->ConstructWidget<UVerticalBox>();
++            Scroll->AddChild(Results);
++            return Results;
++        }
++
++        void AddFooter(UWidgetTree* Tree, UVerticalBox* Column, const FSlateFontInfo& Font, UWidget* ContinueButton = nullptr)
++        {
++            Rule(Tree, Column, Brass, 1.f, FMargin(0.f, 10.f, 0.f, 7.f));
++            if (ContinueButton)
++            {
++                ContinueButton->RemoveFromParent();
++                Column->AddChildToVerticalBox(ContinueButton)->SetHorizontalAlignment(HAlign_Right);
++                if (ContinueButton->GetVisibility() != ESlateVisibility::Collapsed &&
++                    ContinueButton->GetVisibility() != ESlateVisibility::Hidden) return;
++            }
++            Column->AddChildToVerticalBox(Label(Tree, Font, NSLOCTEXT("ReditusVictory", "Continue", "Confirm to continue"),
++                14, Slate))->SetHorizontalAlignment(HAlign_Right);
++        }
++
++        void HideOldLayout(const FResultsPanel& Panel, const UWidget* MovedList, const UWidget* MovedButton = nullptr)
++        {
++            for (auto* OldWidget : Panel.Previous)
++            {
++                if (OldWidget != MovedList && OldWidget != MovedButton) OldWidget->SetVisibility(ESlateVisibility::Collapsed);
++            }
++        }
++
++        bool SetPartyFraming(UCameraComponent* Camera, const TArray<AActor*>& Party, FReditusResultsPresentation& Blend)
++        {
++            FVector Center = FVector::ZeroVector;
++            float Left = MAX_flt;
++            float Right = -MAX_flt;
++            int32 Count = 0;
++            for (const AActor* Unit : Party)
++            {
++                if (!IsValid(Unit) || Unit->IsHidden()) continue;
++                const FVector Local = Blend.Start.InverseTransformPositionNoScale(Unit->GetActorLocation());
++                if (Local.X <= KINDA_SMALL_NUMBER) continue;
++                const float Horizontal = Blend.bOrthographic ? Local.Y : FMath::Atan2(Local.Y, Local.X);
++                Left = FMath::Min(Left, Horizontal);
++                Right = FMath::Max(Right, Horizontal);
++                Center += Local;
++                ++Count;
++            }
++            if (Count == 0) return false;
++            Center /= Count;
++
++            if (Blend.bOrthographic)
++            {
++                Blend.OriginalLens = Camera->OrthoWidth;
++                Blend.Lens = FMath::Clamp((Right - Left) / 0.60f, Blend.OriginalLens * ZoomFactor, Blend.OriginalLens);
++                const float CenterRight = (Left + Right) * 0.5f;
++                const float Offset = FMath::Min(CenterRight - Blend.Lens * PartyScreenOffset * 0.5f, Left + Blend.Lens * 0.40f);
++                Blend.Location += Blend.Start.TransformVectorNoScale(FVector(0.f, Offset, 0.f));
++                return true;
++            }
++
++            Blend.OriginalLens = Camera->FieldOfView;
++            const float MinimumFOV = FMath::RadiansToDegrees(Right - Left) / 0.60f;
++            Blend.Lens = FMath::Clamp(MinimumFOV, Blend.OriginalLens * ZoomFactor, Blend.OriginalLens);
++            const float HalfWidth = FMath::Tan(FMath::DegreesToRadians(Blend.Lens * 0.5f));
++            const float Aim = (Left + Right) * 0.5f - FMath::Atan(PartyScreenOffset * HalfWidth);
++            const float MinAim = Right - FMath::Atan(0.86f * HalfWidth);
++            const float RightSideAim = Left + FMath::Atan(0.07f * HalfWidth);
++            const float MaxAim = MinAim <= RightSideAim ? RightSideAim : Left + FMath::Atan(0.73f * HalfWidth);
++            const float Yaw = MinAim <= MaxAim ? FMath::Clamp(Aim, MinAim, MaxAim) : (Left + Right) * 0.5f;
++            const float ViewHeight = HalfWidth / FMath::Max(1.f, Camera->AspectRatio);
++            const float CenterPitch = FMath::Atan2(Center.Z, FVector2D(Center.X, Center.Y).Size());
++            const float Pitch = FMath::Clamp(CenterPitch + FMath::Atan(0.24f * ViewHeight),
++                FMath::DegreesToRadians(-8.f), FMath::DegreesToRadians(8.f));
++            Blend.Rotation *= FRotator(FMath::RadiansToDegrees(Pitch), FMath::RadiansToDegrees(Yaw), 0.f).Quaternion();
++            return true;
++        }
++
++        void SetLens(UCameraComponent* Camera, bool bOrthographic, float Value)
++        {
++            if (bOrthographic) Camera->SetOrthoWidth(Value);
++            else Camera->SetFieldOfView(Value);
++        }
++
++        void Stop(FReditusResultsPresentation& Presentation)
++        {
++            if (!Presentation.bRunning) return;
++            Presentation.bRunning = false;
++            if (auto* Camera = Presentation.Camera.Get())
++            {
++                Camera->SetRelativeTransform(Presentation.OriginalRelative);
++                SetLens(Camera, Presentation.bOrthographic, Presentation.OriginalLens);
++            }
++            if (auto* World = Presentation.World.Get()) World->GetTimerManager().ClearTimer(Presentation.Timer);
++        }
++
++        float EaseInOut(float Alpha)
++        {
++            return Alpha * Alpha * (3.f - 2.f * Alpha);
++        }
++
++        void TickPresentation(FReditusResultsPresentation& Presentation)
++        {
++            auto* World = Presentation.World.Get();
++            auto* Screen = Presentation.Screen.Get();
++            if (!World || !Screen || !Screen->IsInViewport())
++            {
++                Stop(Presentation);
++                return;
++            }
++
++            const float Now = World->GetTimeSeconds();
++            if (auto* Panel = Presentation.Panel.Get())
++            {
++                if (!Presentation.bPanelSettled)
++                {
++                    const float Alpha = FMath::Clamp((Now - Presentation.PanelStartTime) / BlendDuration, 0.f, 1.f);
++                    const float Ease = EaseInOut(Alpha);
++                    Panel->SetRenderOpacity(Ease);
++                    Panel->SetRenderTranslation(FVector2D(-16.f * (1.f - Ease), 0.f));
++                    Presentation.bPanelSettled = Alpha >= 1.f;
++                }
++            }
++            if (auto* Camera = Presentation.Camera.Get())
++            {
++                if (!Presentation.bCameraSettled)
++                {
++                    const float Alpha = FMath::Clamp((Now - Presentation.CameraStartTime) / BlendDuration, 0.f, 1.f);
++                    const float Ease = EaseInOut(Alpha);
++                    Camera->SetWorldLocationAndRotation(
++                        FMath::Lerp(Presentation.Start.GetLocation(), Presentation.Location, Ease),
++                        FQuat::Slerp(Presentation.Start.GetRotation(), Presentation.Rotation, Ease));
++                    SetLens(Camera, Presentation.bOrthographic, FMath::Lerp(Presentation.OriginalLens, Presentation.Lens, Ease));
++                    Presentation.bCameraSettled = Alpha >= 1.f;
++                }
++            }
++        }
++    }
++
++    UWidget* Build(UUserWidget* Widget, UPanelWidget* Drops, int32 EXP, int32 Gold, const UTextBlock* FontSource,
++        const FReditusEncounterMastery* Mastery)
++    {
++        auto* Tree = Widget->WidgetTree;
++        const FSlateFontInfo Font = FontSource
++            ? FontSource->Font : FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 20);
++        const auto Panel = MakeResultsPanel(Tree, Font, NSLOCTEXT("ReditusVictory", "Title", "Victory"));
++        if (!Panel.Sheet) return nullptr;
++        auto* Column = Panel.Column;
++        auto* Rewards = Tree->ConstructWidget<UHorizontalBox>();
++        Column->AddChildToVerticalBox(Rewards)->SetPadding(FMargin(0.f, 14.f, 0.f, 12.f));
++        Reward(Tree, Rewards, Font, NSLOCTEXT("ReditusVictory", "EXP", "EXP"), EXP);
++        Reward(Tree, Rewards, Font, NSLOCTEXT("ReditusVictory", "Gold", "Gold"), Gold);
++        Reward(Tree, Rewards, Font, NSLOCTEXT("ReditusVictory", "Mastery", "Mastery"),
++            Mastery && Mastery->bAnyProgress ? Mastery->Reward : 0);
++
++        auto* Results = ScrollableResults(Tree, Column);
++        if (Mastery && Mastery->bAnyProgress)
++        {
++            Results->AddChildToVerticalBox(Label(Tree, Font, NSLOCTEXT("ReditusVictory", "EquipmentMastery", "Equipment Mastery"),
++                17, Slate))->SetPadding(FMargin(0.f, 0.f, 0.f, 7.f));
++            for (const FText& Learned : Mastery->Learned)
++            {
++                auto* Text = Label(Tree, Font, Learned, 17, PaleGold);
++                Text->SetAutoWrapText(true);
++                Results->AddChildToVerticalBox(Text)->SetPadding(FMargin(0.f, 0.f, 0.f, 7.f));
++            }
++            for (const auto& Tech : Mastery->Progress) TechProgress(Tree, Results, Font, Tech);
++        }
++        const bool bHasDrops = IsValid(Drops) && Drops->GetChildrenCount() > 0;
++        if (bHasDrops)
++        {
++            Rule(Tree, Results, Brass, 1.f, FMargin(0.f, 6.f, 0.f, 8.f));
++            Results->AddChildToVerticalBox(Label(Tree, Font, NSLOCTEXT("ReditusVictory", "Drops", "Items obtained"),
++                17, Slate))->SetPadding(FMargin(0.f, 0.f, 0.f, 5.f));
++            Drops->RemoveFromParent();
++            Results->AddChildToVerticalBox(Drops);
++        }
++        AddFooter(Tree, Column, Font);
++        HideOldLayout(Panel, bHasDrops ? Drops : nullptr);
++        return Panel.Sheet;
++    }
++
++    UWidget* BuildLevelUp(UUserWidget* Widget, const FReditusLevelUpChanges& Changes)
++    {
++        auto* Tree = Widget->WidgetTree;
++        if (!Tree) return nullptr;
++        if (auto* Existing = Tree->FindWidget(PanelName)) return Existing;
++        const auto ReadText = [Tree](FName Name)
++        {
++            auto* Field = Cast<UTextBlock>(Tree->FindWidget(Name));
++            return Field ? Field->GetText() : FText::GetEmpty();
++        };
++        auto* UnitName = Cast<UTextBlock>(Tree->FindWidget(TEXT("UnitNameText")));
++        const FText Level = ReadText(TEXT("UnitLevelText"));
++        if (!UnitName || UnitName->GetText().IsEmpty() || Level.IsEmpty()) return nullptr;
++
++        const FSlateFontInfo Font = UnitName->Font;
++        const auto Panel = MakeResultsPanel(Tree, Font, NSLOCTEXT("ReditusVictory", "LevelUpTitle", "Level Up"));
++        if (!Panel.Sheet) return nullptr;
++        auto* Header = Tree->ConstructWidget<UHorizontalBox>();
++        Panel.Column->AddChildToVerticalBox(Header)->SetPadding(FMargin(0.f, 6.f, 0.f, 8.f));
++        auto* Name = Label(Tree, Font, UnitName->GetText(), 25, Ivory);
++        Name->SetAutoWrapText(true);
++        auto* NameSlot = Header->AddChildToHorizontalBox(Name);
++        NameSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
++        NameSlot->SetPadding(FMargin(0.f, 0.f, 10.f, 0.f));
++        Header->AddChildToHorizontalBox(Label(Tree, Font, Level, 20, PaleGold))->SetVerticalAlignment(VAlign_Center);
++
++        struct FStatField { FName WidgetName; FName StatName; FText Title; };
++        const FStatField Stats[] = {
++            {TEXT("HpText"), TEXT("maxHP"), NSLOCTEXT("ReditusVictory", "StatHP", "HP")},
++            {TEXT("MPText"), TEXT("maxMP"), NSLOCTEXT("ReditusVictory", "StatMP", "MP")},
++            {TEXT("PhysicalAttackText"), TEXT("Attack"), NSLOCTEXT("ReditusVictory", "StatPAtk", "P.ATK")},
++            {TEXT("DefenseText"), TEXT("defense"), NSLOCTEXT("ReditusVictory", "StatPDef", "P.DEF")},
++            {TEXT("MagicalAttackText"), TEXT("MagicalAttack"), NSLOCTEXT("ReditusVictory", "StatMAtk", "M.ATK")},
++            {TEXT("MagicalDefenseText"), TEXT("magicDefense"), NSLOCTEXT("ReditusVictory", "StatMDef", "M.DEF")},
++            {TEXT("HitText"), TEXT("hit"), NSLOCTEXT("ReditusVictory", "StatHit", "HIT")},
++            {TEXT("SpeedText"), TEXT("speed"), NSLOCTEXT("ReditusVictory", "StatSpd", "SPD")}
++        };
++
++        auto* Fit = Tree->ConstructWidget<UScaleBox>();
++        Fit->SetStretch(EStretch::ScaleToFit);
++        Fit->SetStretchDirection(EStretchDirection::DownOnly);
++        auto* Results = Tree->ConstructWidget<UVerticalBox>();
++        auto* FitSlot = CastChecked<UScaleBoxSlot>(Fit->AddChild(Results));
++        FitSlot->SetHorizontalAlignment(HAlign_Fill);
++        FitSlot->SetVerticalAlignment(VAlign_Top);
++        Panel.Column->AddChildToVerticalBox(Fit)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
++
++        UHorizontalBox* Row = nullptr;
++        for (const FStatField& Stat : Stats)
++        {
++            if (!Row || Row->GetChildrenCount() == 2)
++            {
++                Row = Tree->ConstructWidget<UHorizontalBox>();
++                Results->AddChildToVerticalBox(Row)->SetPadding(FMargin(0.f, 0.f, 0.f, 4.f));
++            }
++            LevelStat(Tree, Row, Font, Stat.Title, ReadText(Stat.WidgetName), Changes.Stats.FindRef(Stat.StatName));
++        }
++        auto* ActionTime = Tree->FindWidget(TEXT("ActionTimeOverlay"));
++        const FText TimeValue = ReadText(TEXT("ActionTimeText"));
++        if (ActionTime && ActionTime->GetVisibility() != ESlateVisibility::Collapsed &&
++            ActionTime->GetVisibility() != ESlateVisibility::Hidden && !TimeValue.IsEmpty())
++        {
++            auto* Time = Tree->ConstructWidget<UHorizontalBox>();
++            Results->AddChildToVerticalBox(Time)->SetPadding(FMargin(0.f, 5.f, 0.f, 0.f));
++            Time->AddChildToHorizontalBox(Label(Tree, Font, TimeValue, 16, Slate));
++            if (!FMath::IsNearlyZero(Changes.ActionTime, 0.0005f))
++            {
++                const FText Delta = SignedValue(FText::AsNumber(Changes.ActionTime), Changes.ActionTime > 0.f);
++                Time->AddChildToHorizontalBox(Label(Tree, Font, Delta, 16, PaleGold))->SetPadding(FMargin(10.f, 0.f, 0.f, 0.f));
++            }
++        }
++
++        auto* Skills = Cast<UPanelWidget>(Tree->FindWidget(TEXT("skillsList")));
++        const bool bHasSkills = Skills && Skills->GetChildrenCount() > 0;
++        if (bHasSkills)
++        {
++            Rule(Tree, Results, Brass, 1.f, FMargin(0.f, 6.f, 0.f, 8.f));
++            Results->AddChildToVerticalBox(Label(Tree, Font, NSLOCTEXT("ReditusVictory", "NewTechs", "New Techs"),
++                17, Slate))->SetPadding(FMargin(0.f, 0.f, 0.f, 5.f));
++            Skills->RemoveFromParent();
++            Results->AddChildToVerticalBox(Skills);
++        }
++        auto* ContinueButton = Tree->FindWidget(TEXT("BP_ContinueButton"));
++        AddFooter(Tree, Panel.Column, Font, ContinueButton);
++        HideOldLayout(Panel, bHasSkills ? Skills : nullptr, ContinueButton);
++        return Panel.Sheet;
++    }
++
++    bool UpdateTechMastery(UUserWidget* Widget, const UTextBlock* FontSource, const FText& Status)
++    {
++        auto* Tree = Widget->WidgetTree;
++        if (!Tree) return false;
++        auto* Badge = Cast<UBorder>(Tree->FindWidget(MasteryName));
++        if (Status.IsEmpty())
++        {
++            if (Badge) Badge->SetVisibility(ESlateVisibility::Collapsed);
++            return true;
++        }
++        if (!Badge)
++        {
++            auto* Canvas = MountCanvas(Tree);
++            if (!Canvas) return false;
++            Badge = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), MasteryName);
++            Badge->SetBrushColor(MasteryBadgeColor);
++            Badge->SetPadding(FMargin(16.f, 8.f));
++            Badge->SetContent(Label(Tree, FontSource->Font, Status, 19, PaleGold));
++            auto* Place = Canvas->AddChildToCanvas(Badge);
++            // Centered in the lower half of the existing right-hand Tech details pane.
++            Place->SetAnchors(FAnchors(0.735f, 0.62f, 0.735f, 0.62f));
++            Place->SetAlignment(FVector2D(0.5f, 0.5f));
++            Place->SetAutoSize(true);
++            Place->SetOffsets(FMargin(0.f));
++            Place->SetZOrder(20);
++        }
++        auto* Text = Cast<UTextBlock>(Badge->GetChildAt(0));
++        if (!Text) return false;
++        Text->SetText(Status);
++        Badge->SetVisibility(ESlateVisibility::HitTestInvisible);
++        return true;
++    }
++
++    void Reveal(UUserWidget* Widget, UWidget* Panel, APlayerController* Player, AActor* StaticCamera,
++        const TArray<AActor*>& Party, TSharedPtr<FReditusResultsPresentation>& Active)
++    {
++        auto* World = Widget->GetWorld();
++        if (!World) return;
++        const bool bStart = !Active || !Active->bRunning || Active->World.Get() != World ||
++            Active->StaticCamera.Get() != StaticCamera;
++        const float Now = World->GetTimeSeconds();
++        if (bStart)
++        {
++            Finish(Active);
++            Active = MakeShared<FReditusResultsPresentation>();
++            Active->World = World;
++            Active->StaticCamera = StaticCamera;
++            Active->CameraStartTime = Now;
++            auto* Camera = IsValid(Player) && IsValid(StaticCamera) ? StaticCamera->FindComponentByClass<UCameraComponent>() : nullptr;
++            if (Camera && Camera->IsActive())
++            {
++                Active->OriginalRelative = Camera->GetRelativeTransform();
++                Active->Start = Camera->GetComponentTransform();
++                Active->Location = Active->Start.GetLocation();
++                Active->Rotation = Active->Start.GetRotation();
++                Active->bOrthographic = Camera->ProjectionMode == ECameraProjectionMode::Orthographic;
++                if (SetPartyFraming(Camera, Party, *Active)) Active->Camera = Camera;
++            }
++        }
++
++        if (Active->Screen.Get() == Widget) return;
++        if (auto* Previous = Active->Panel.Get()) Previous->SetVisibility(ESlateVisibility::Collapsed);
++        Active->Screen = Widget;
++        Active->Panel = Panel;
++        Active->PanelStartTime = Now;
++        Active->bPanelSettled = false;
++        if (Panel)
++        {
++            Panel->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
++            Panel->SetRenderOpacity(0.f);
++            Panel->SetRenderTranslation(FVector2D(-16.f, 0.f));
++        }
++        if (IsValid(Player) && Active->Camera.IsValid())
++        {
++            if (!bStart || Player->GetViewTarget() != StaticCamera)
++            {
++                Player->SetViewTargetWithBlend(StaticCamera, bStart ? BlendDuration : 0.f);
++            }
++        }
++        if (bStart)
++        {
++            auto Tick = FTimerDelegate::CreateLambda([Presentation = Active]() { TickPresentation(*Presentation); });
++            World->GetTimerManager().SetTimer(Active->Timer, Tick, 1.f / 60.f, true);
++        }
++    }
++
++    void Finish(TSharedPtr<FReditusResultsPresentation>& Active)
++    {
++        if (Active) Stop(*Active);
++        Active.Reset();
++    }
++}
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusVictoryPresentation.h b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusVictoryPresentation.h
+new file mode 100644
+index 0000000..570b323
+--- /dev/null
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Private/ReditusVictoryPresentation.h
+@@ -0,0 +1,29 @@
++#pragma once
++
++#include "CoreMinimal.h"
++
++class AActor;
++class APlayerController;
++class UPanelWidget;
++class UTextBlock;
++class UUserWidget;
++class UWidget;
++struct FReditusEncounterMastery;
++struct FReditusResultsPresentation;
++
++struct FReditusLevelUpChanges
++{
++    TMap<FName, int64> Stats;
++    float ActionTime = 0.f;
++};
++
++namespace ReditusVictoryPresentation
++{
++    UWidget* Build(UUserWidget* Widget, UPanelWidget* Drops, int32 EXP, int32 Gold, const UTextBlock* FontSource,
++        const FReditusEncounterMastery* Mastery);
++    UWidget* BuildLevelUp(UUserWidget* Widget, const FReditusLevelUpChanges& Changes);
++    bool UpdateTechMastery(UUserWidget* Widget, const UTextBlock* FontSource, const FText& Status);
++    void Reveal(UUserWidget* Widget, UWidget* Panel, APlayerController* Player, AActor* StaticCamera,
++        const TArray<AActor*>& Party, TSharedPtr<FReditusResultsPresentation>& Active);
++    void Finish(TSharedPtr<FReditusResultsPresentation>& Active);
++}
 diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusTechMasteryLibrary.h b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusTechMasteryLibrary.h
 new file mode 100644
-index 0000000..901bdd8
+index 0000000..a8427aa
 --- /dev/null
 +++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/Public/ReditusTechMasteryLibrary.h
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,141 @@
 +#pragma once
 +
 +#include "CoreMinimal.h"
@@ -473,6 +1576,7 @@ index 0000000..901bdd8
 +#include "ReditusTechMasteryLibrary.generated.h"
 +
 +class AActor;
++struct FReditusResultsPresentation;
 +
 +USTRUCT()
 +struct FReditusCharacterMastery
@@ -484,6 +1588,12 @@ index 0000000..901bdd8
 +
 +    UPROPERTY(SaveGame)
 +    TArray<FName> Learned;
++
++    UPROPERTY(SaveGame)
++    TMap<FName, int32> OverdriveProgress;
++
++    UPROPERTY(SaveGame)
++    TArray<FName> LearnedOverdrives;
 +};
 +
 +USTRUCT(BlueprintType)
@@ -495,12 +1605,22 @@ index 0000000..901bdd8
 +    TMap<FName, FReditusCharacterMastery> Characters;
 +};
 +
++struct FReditusVictoryTechProgress
++{
++    FText Character;
++    FText Tech;
++    int32 Current;
++    int32 Required;
++};
++
 +struct FReditusEncounterMastery
 +{
 +    int32 Reward = 1;
 +    bool bAwarded = false;
 +    bool bAnyProgress = false;
 +    TArray<FText> Learned;
++    TArray<FReditusVictoryTechProgress> Progress;
++    TMap<FName, int32> PreAwardExperience;
 +};
 +
 +UCLASS()
@@ -510,6 +1630,9 @@ index 0000000..901bdd8
 +
 +    friend class UReditusTechMasteryLibrary;
 +    TMap<TWeakObjectPtr<AActor>, FReditusEncounterMastery> Encounters;
++    TWeakObjectPtr<AActor> LastVictory;
++    TMap<TWeakObjectPtr<AActor>, TArray<TWeakObjectPtr<AActor>>> HiddenIntroUnits;
++    TSharedPtr<FReditusResultsPresentation> ResultsPresentation;
 +};
 +
 +UCLASS()
@@ -529,18 +1652,81 @@ index 0000000..901bdd8
 +    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
 +    static void AppendLearnedTechs(UObject* SkillOwner);
 +
++    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
++    static void AppendEquipmentAndLearnedOverdrives(UObject* SkillOwner);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
++    static void ShowEquipmentSkillPages(UObject* Menu);
++
 +    UFUNCTION(BlueprintPure, Category="Reditus|Tech Mastery")
 +    static FText FormatVictoryMastery(UObject* VictoryWidget, const FText& RewardText);
 +
 +    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
 +    static void ShowMasteryOnSkillButton(UObject* Menu, UObject* SkillButton, FName SkillID);
++
++    UFUNCTION(BlueprintPure, Category="Reditus|Tech Mastery")
++    static FText FormatSkillMasteryDescription(UObject* Menu, FName SkillID, const FText& Description);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
++    static void UpdateSelectedTechMastery(UObject* Menu, FName SkillID);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Tech Mastery")
++    static void ShowEquipmentMastery(UObject* Menu, UObject* Details, FName EquipmentID);
++
++    UFUNCTION(BlueprintPure, Category="Reditus|Tech Mastery")
++    static bool IsTechMastered(UObject* Unit, FName SkillID);
++
++    UFUNCTION(BlueprintPure, Category="Reditus|Tech Mastery")
++    static FText DescribeEquippedTech(UObject* Unit, FName SkillID);
++
++    UFUNCTION(BlueprintPure, Category="Reditus|Tech Mastery")
++    static bool IsOverdriveMastered(UObject* Unit, FName SkillID);
++
++    UFUNCTION(BlueprintPure, Category="Reditus|Tech Mastery")
++    static FText DescribeEquippedOverdrive(UObject* Unit, FName SkillID);
++
++    UFUNCTION(BlueprintPure, Category="Reditus|Overdrive")
++    static FText GetOverdrivePartnerMessage(UObject* Unit, FName SkillID);
++
++    UFUNCTION(BlueprintPure, Category="Reditus|Overdrive")
++    static bool CanConfirmOverdrive(UObject* Menu, FName SkillID);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Overdrive")
++    static void UpdateOverdriveDescription(UObject* Menu, FName SkillID);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Battle Presentation")
++    static void PresentVictory(UObject* VictoryWidget);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Battle Presentation")
++    static void PresentLevelUp(UObject* LevelUpWidget);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Battle Presentation")
++    static void HoldBattleUnitsForHUD(AActor* Battle);
++
++    UFUNCTION(BlueprintCallable, Category="Reditus|Battle Presentation")
++    static void ReleaseBattleIntro(AActor* BattleController);
++
++private:
++    static void ResolveVictoryMastery(AActor* BattleController, bool bBeforeExperienceAward);
 +};
+diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/ReditusTableBuffs.Build.cs b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/ReditusTableBuffs.Build.cs
+index 2fa9614..24c3c45 100644
+--- a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/ReditusTableBuffs.Build.cs
++++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffs/ReditusTableBuffs.Build.cs
+@@ -6,6 +6,6 @@ public class ReditusTableBuffs : ModuleRules
+     {
+         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "ReditusBuffVisuals" });
+-        PrivateDependencyModuleNames.Add("Niagara");
++        PrivateDependencyModuleNames.AddRange(new[] { "Niagara", "UMG", "SlateCore" });
+     }
+ }
 diff --git a/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusTechMasteryInstall.cpp b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusTechMasteryInstall.cpp
 new file mode 100644
-index 0000000..5563de0
+index 0000000..6fea161
 --- /dev/null
 +++ b/Plugins/ReditusTableBuffs/Source/ReditusTableBuffsEditor/Private/ReditusTechMasteryInstall.cpp
-@@ -0,0 +1,667 @@
+@@ -0,0 +1,926 @@
 +#include "ReditusEnemyCombatAIComponent.h"
 +#include "ReditusTechMasteryLibrary.h"
 +
@@ -556,6 +1742,7 @@ index 0000000..5563de0
 +#include "HAL/IConsoleManager.h"
 +#include "K2Node_CallFunction.h"
 +#include "K2Node_CustomEvent.h"
++#include "K2Node_IfThenElse.h"
 +#include "K2Node_Knot.h"
 +#include "K2Node_Self.h"
 +#include "K2Node_Variable.h"
@@ -577,6 +1764,7 @@ index 0000000..5563de0
 +    const TCHAR* EnemyTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Enemies.DT_Enemies");
 +    const TCHAR* ProfileTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_EnemyAIProfiles.DT_EnemyAIProfiles");
 +    const TCHAR* SkillTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Skills.DT_Skills");
++    const TCHAR* EquipmentTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Equipment.DT_Equipment");
 +    const FName MasteryCostName(TEXT("MasteryPointsRequired"));
 +    const FName RewardOverrideName(TEXT("MasteryRewardOverride"));
 +    const FName SaveVariableName(TEXT("TechMastery"));
@@ -824,19 +2012,19 @@ index 0000000..5563de0
 +        return Link(Site.Then, Pin(Call, UEdGraphSchema_K2::PN_Execute));
 +    }
 +
-+    bool WireVictoryText(UEdGraphPin* Input, bool& bChanged)
++    bool WireFormattedText(UEdGraphPin* Input, FName Function, FName SelfParameter, FName TextParameter,
++        bool& bChanged)
 +    {
-+        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, FormatVictoryMastery);
 +        auto* Original = OneLink(Input);
 +        if (!Original) return false;
 +        if (IsCall(Original->GetOwningNode(), Function))
 +        {
-+            return IsSelfInput(Original->GetOwningNode(), TEXT("VictoryWidget")) &&
-+                OneLink(Pin(Original->GetOwningNode(), TEXT("RewardText"))) != nullptr;
++            auto* Call = Original->GetOwningNode();
++            return IsSelfInput(Call, SelfParameter) && OneLink(Pin(Call, TextParameter));
 +        }
 +
-+        auto* Call = AddCall(Input->GetOwningNode(), Function, TEXT("VictoryWidget"));
-+        if (!Call || !Link(Original, Pin(Call, TEXT("RewardText")))) return false;
++        auto* Call = AddCall(Input->GetOwningNode(), Function, SelfParameter);
++        if (!Call || !Link(Original, Pin(Call, TextParameter))) return false;
 +        Original->GetOwningNode()->Modify();
 +        Input->GetOwningNode()->Modify();
 +        Original->BreakLinkTo(Input);
@@ -854,6 +2042,119 @@ index 0000000..5563de0
 +            TEXT("SkillOwner"));
 +    }
 +
++    bool FindOverdriveAppendSite(UBlueprint* Blueprint, const TCHAR* ID, FName Target, TArray<FExecSite>& Sites)
++    {
++        auto* Append = FindAnchor(Blueprint, ID);
++        return IsCall(Append, TEXT("Array_Append")) &&
++            IsOutputOf(Pin(Append, TEXT("TargetArray")), Target) &&
++            IsOutputOf(Pin(Append, TEXT("SourceArray")), TEXT("equipmentoverdriveskills")) &&
++            AddExecSite(Sites, Append,
++                GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, AppendEquipmentAndLearnedOverdrives), TEXT("SkillOwner"));
++    }
++
++    bool WireEquipmentPreview(UBlueprint* Techs, bool& bChanged)
++    {
++        auto* Set = FindAnchor(Techs, TEXT("2399DCF04344820FB156F6AD1250607E"));
++        auto* Regular = FindAnchor(Techs, TEXT("9650F72149D94DF40DB040B26BDAD540"));
++        auto* Overdrive = FindAnchor(Techs, TEXT("BAB94E8A4D78BAD64D9C9C8068D0BE0B"));
++        auto* Then = Pin(Set, UEdGraphSchema_K2::PN_Then);
++        auto* Next = OneLink(Then);
++        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, ShowEquipmentSkillPages);
++        if (!IsVariable(Set, TEXT("AvailableOverdrive_Skills")) || !Next) return false;
++        if (IsCall(Next->GetOwningNode(), Function)) return IsSelfInput(Next->GetOwningNode(), TEXT("Menu"));
++        if (!IsCall(Regular, TEXT("ShowSkills")) || !IsCall(Overdrive, TEXT("ShowSkills")) ||
++            Next != Pin(Regular, UEdGraphSchema_K2::PN_Execute) ||
++            OneLink(Pin(Regular, UEdGraphSchema_K2::PN_Then)) != Pin(Overdrive, UEdGraphSchema_K2::PN_Execute) ||
++            OneLink(Pin(Overdrive, UEdGraphSchema_K2::PN_Then))) return false;
++
++        auto* Call = AddCall(Set, Function, TEXT("Menu"));
++        if (!Call) return false;
++        Set->Modify();
++        Regular->Modify();
++        Then->BreakLinkTo(Next);
++        bChanged = true;
++        return Link(Then, Pin(Call, UEdGraphSchema_K2::PN_Execute));
++    }
++
++    bool FindOverdriveDescriptionSite(UBlueprint* Dialogue, TArray<FExecSite>& Sites)
++    {
++        auto* Text = FindAnchor(Dialogue, TEXT("20391DAE44E2C112504DC0BAB273DE1C"));
++        auto* Definition = FindAnchor(Dialogue, TEXT("94568E9748B79489F93A60B71F9635F5"));
++        auto* Skill = Source(Pin(Definition, TEXT("Skill ID")));
++        if (!IsCall(Text, TEXT("SetText")) || !Skill || Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
++            !IsOutputOf(Pin(Text, UEdGraphSchema_K2::PN_Self), TEXT("SkillDescriptionText"))) return false;
++        TArray<TPair<FName, UEdGraphPin*>> Inputs;
++        Inputs.Emplace(FName(TEXT("SkillID")), Skill);
++        return AddExecSite(Sites, Text,
++            GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, UpdateOverdriveDescription), TEXT("Menu"), MoveTemp(Inputs));
++    }
++
++    bool WireOverdriveRows(UBlueprint* Dialogue, bool& bChanged)
++    {
++        auto* Found = Cast<UK2Node_IfThenElse>(FindAnchor(Dialogue, TEXT("86C4F04F4FDA4BE0B16C20BBCBBB57E2")));
++        auto* OldGate = Cast<UK2Node_IfThenElse>(FindAnchor(Dialogue, TEXT("E11FF09F4C4D019A7FDBA894C65BA9F9")));
++        auto* Definition = FindAnchor(Dialogue, TEXT("39BB483C437F3ACBE8B85D9C63F851A3"));
++        auto* Create = FindAnchor(Dialogue, TEXT("91D6A49E4583B2A9FF9C42A1A2AE0495"));
++        auto* Skill = Source(Pin(Definition, TEXT("Skill ID")));
++        auto* UseSkill = Pin(Create, TEXT("skill"));
++        auto* Then = Pin(Found, UEdGraphSchema_K2::PN_Then);
++        auto* Build = Pin(Create, UEdGraphSchema_K2::PN_Execute);
++        if (!Then || !Build || !UseSkill || !Skill || Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
++            !IsOutputOf(Pin(Found, TEXT("Condition")), TEXT("Found"))) return false;
++        if (OneLink(Then) == Build) return OneLink(UseSkill) == Skill;
++        auto* Clear = FindAnchor(Dialogue, TEXT("20A874F346B3900045448CA902316E34"));
++        auto* Check = Pin(OldGate, UEdGraphSchema_K2::PN_Then);
++        auto* Before = OneLink(Then);
++        if (!Check || !Before || Before != Pin(Clear, UEdGraphSchema_K2::PN_Execute) || OneLink(Build) != Check ||
++            (Source(UseSkill) && Source(UseSkill) != Skill)) return false;
++
++        Found->Modify();
++        Clear->Modify();
++        Create->Modify();
++        OldGate->Modify();
++        Then->BreakLinkTo(Before);
++        Check->BreakLinkTo(Build);
++        UseSkill->BreakAllPinLinks();
++        bChanged = true;
++        return Link(Skill, UseSkill) && Link(Then, Build);
++    }
++
++    bool WireOverdriveConfirmation(UBlueprint* Dialogue, bool& bChanged)
++    {
++        auto* Acquire = FindAnchor(Dialogue, TEXT("574059B2447F2F4BA01B4FA9D33345FA"));
++        auto* SetInput = FindAnchor(Dialogue, TEXT("38C4DDFE411540FE441F8D9BA0C3A970"));
++        auto* Broadcast = FindAnchor(Dialogue, TEXT("0A2CFA87430C1CC490A954AF08C65CC7"));
++        auto* Valid = Pin(Acquire, TEXT("Is Valid"));
++        auto* Continue = Pin(SetInput, UEdGraphSchema_K2::PN_Execute);
++        auto* Skill = Source(Pin(Broadcast, TEXT("selectedOverdrive")));
++        auto* Next = OneLink(Valid);
++        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, CanConfirmOverdrive);
++        if (!Next || !Continue || !Skill || Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
++            !IsCall(SetInput, TEXT("SetUIInput"))) return false;
++        if (Next != Continue)
++        {
++            auto* Gate = Cast<UK2Node_IfThenElse>(Next->GetOwningNode());
++            auto* Condition = OneLink(Pin(Gate, TEXT("Condition")));
++            auto* Call = Condition ? Condition->GetOwningNode() : nullptr;
++            return IsCall(Call, Function) && IsSelfInput(Call, TEXT("Menu")) &&
++                OneLink(Pin(Call, TEXT("SkillID"))) == Skill && OneLink(Pin(Gate, UEdGraphSchema_K2::PN_Then)) == Continue;
++        }
++
++        SetInput->GetGraph()->Modify();
++        auto* Gate = AddNode<UK2Node_IfThenElse>(SetInput->GetGraph(), SetInput, -120);
++        Gate->AllocateDefaultPins();
++        auto* Check = AddCall(Gate, Function, TEXT("Menu"));
++        auto* Status = AddCall(Gate, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, UpdateOverdriveDescription), TEXT("Menu"));
++        if (!Check || !Status || !Link(Skill, Pin(Check, TEXT("SkillID"))) || !Link(Skill, Pin(Status, TEXT("SkillID"))) ||
++            !Link(Pin(Check, UEdGraphSchema_K2::PN_ReturnValue), Pin(Gate, TEXT("Condition"))) ||
++            !Link(Pin(Gate, TEXT("else")), Pin(Status, UEdGraphSchema_K2::PN_Execute))) return false;
++        Acquire->Modify();
++        SetInput->Modify();
++        Valid->BreakLinkTo(Continue);
++        bChanged = true;
++        return Link(Valid, Pin(Gate, UEdGraphSchema_K2::PN_Execute)) && Link(Pin(Gate, UEdGraphSchema_K2::PN_Then), Continue);
++    }
++
 +    bool FindSkillButtonSite(UBlueprint* Blueprint, const TCHAR* CreateID, const TCHAR* AddID, TArray<FExecSite>& Sites)
 +    {
 +        auto* Create = FindAnchor(Blueprint, CreateID);
@@ -867,6 +2168,58 @@ index 0000000..5563de0
 +        Inputs.Emplace(FName(TEXT("SkillButton")), Widget);
 +        Inputs.Emplace(FName(TEXT("SkillID")), Skill);
 +        return AddExecSite(Sites, Add, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, ShowMasteryOnSkillButton),
++            TEXT("Menu"), MoveTemp(Inputs));
++    }
++
++    bool FindSelectedTechSites(UBlueprint* Techs, TArray<FExecSite>& Sites)
++    {
++        auto* Description = FindAnchor(Techs, TEXT("B361C07D4A03764CC110C48A4F4E378B"));
++        auto* Clear = FindAnchor(Techs, TEXT("90CE1C8F46FB3167D60A5981D419071F"));
++        auto* Definition = FindAnchor(Techs, TEXT("284304204DB8EBAC733EDBA544B86F77"));
++        auto* Skill = Source(Pin(Definition, TEXT("Skill ID")));
++        for (auto* Text : {Description, Clear})
++        {
++            if (!IsCall(Text, TEXT("SetText")) ||
++                !IsOutputOf(Pin(Text, UEdGraphSchema_K2::PN_Self), TEXT("SkillDescription"))) return false;
++        }
++        if (!Skill || Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
++            !OneLink(Pin(Description, TEXT("InText"))) || OneLink(Pin(Clear, TEXT("InText")))) return false;
++
++        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, UpdateSelectedTechMastery);
++        TArray<TPair<FName, UEdGraphPin*>> Inputs;
++        Inputs.Emplace(FName(TEXT("SkillID")), Skill);
++        return AddExecSite(Sites, Description, Function, TEXT("Menu"), MoveTemp(Inputs)) &&
++            AddExecSite(Sites, Clear, Function, TEXT("Menu"));
++    }
++
++    bool FindLevelUpSites(UBlueprint* LevelUp, TArray<FExecSite>& Sites)
++    {
++        auto* ActionTimeText = FindAnchor(LevelUp, TEXT("8EB0AF1745489463D8CBAB82FFD6BCA2"));
++        auto* ActionTimeHidden = FindAnchor(LevelUp, TEXT("3A5ABF574DBECC28F4FD4EAF318474D0"));
++        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, PresentLevelUp);
++        return IsCall(ActionTimeText, TEXT("SetText")) &&
++            IsOutputOf(Pin(ActionTimeText, UEdGraphSchema_K2::PN_Self), TEXT("ActionTimeText")) &&
++            IsCall(ActionTimeHidden, TEXT("SetVisibility")) &&
++            IsOutputOf(Pin(ActionTimeHidden, UEdGraphSchema_K2::PN_Self), TEXT("ActionTimeOverlay")) &&
++            AddExecSite(Sites, ActionTimeText, Function, TEXT("LevelUpWidget")) &&
++            AddExecSite(Sites, ActionTimeHidden, Function, TEXT("LevelUpWidget"));
++    }
++
++    bool FindEquipmentDetailsSite(UBlueprint* Gear, TArray<FExecSite>& Sites)
++    {
++        auto* Create = FindAnchor(Gear, TEXT("A0E9A8EC4263127E92A3A1ADE590A21C"));
++        auto* Add = FindAnchor(Gear, TEXT("794D84284A8902B522B475886ED452A3"));
++        auto* Details = Pin(Create, UEdGraphSchema_K2::PN_ReturnValue);
++        auto* EquipmentID = Source(Pin(Create, TEXT("equipment")));
++        if (!IsCall(Add, TEXT("AddToViewport")) || !Details || !EquipmentID ||
++            EquipmentID->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
++            Source(Pin(Add, UEdGraphSchema_K2::PN_Self)) != Details ||
++            OneLink(Pin(Create, UEdGraphSchema_K2::PN_Then)) != Pin(Add, UEdGraphSchema_K2::PN_Execute)) return false;
++
++        TArray<TPair<FName, UEdGraphPin*>> Inputs;
++        Inputs.Emplace(FName(TEXT("Details")), Details);
++        Inputs.Emplace(FName(TEXT("EquipmentID")), EquipmentID);
++        return AddExecSite(Sites, Add, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, ShowEquipmentMastery),
 +            TEXT("Menu"), MoveTemp(Inputs));
 +    }
 +
@@ -990,6 +2343,56 @@ index 0000000..5563de0
 +        return true;
 +    }
 +
++    bool SeedEquipmentOverdriveCosts(UDataTable* Skills)
++    {
++        auto* Equipment = LoadObject<UDataTable>(nullptr, EquipmentTablePath);
++        const UScriptStruct* Type = Equipment ? Equipment->GetRowStruct() : nullptr;
++        if (!Type || !Skills->GetRowStruct()) return false;
++        const FArrayProperty* Overdrives = nullptr;
++        for (TFieldIterator<FArrayProperty> It(Type); It; ++It)
++        {
++            if (It->GetName().StartsWith(TEXT("OverDriveSkillIDs_")) ||
++                Type->GetAuthoredNameForField(*It).Equals(TEXT("OverDriveSkillIDs"), ESearchCase::IgnoreCase))
++            {
++                Overdrives = *It;
++                break;
++            }
++        }
++        const auto* ID = Overdrives ? CastField<FNameProperty>(Overdrives->Inner) : nullptr;
++        const FIntProperty* Cost = nullptr;
++        for (TFieldIterator<FIntProperty> It(Skills->GetRowStruct()); It; ++It)
++        {
++            if (It->GetName().StartsWith(TEXT("MasteryPointsRequired_")) ||
++                Skills->GetRowStruct()->GetAuthoredNameForField(*It).Equals(MasteryCostName.ToString(), ESearchCase::IgnoreCase))
++            {
++                Cost = *It;
++                break;
++            }
++        }
++        if (!ID || !Cost) return false;
++
++        bool bSaved = false;
++        for (const auto& Entry : Equipment->GetRowMap())
++        {
++            if (!Entry.Value) continue;
++            FScriptArrayHelper Values(Overdrives, Overdrives->ContainerPtrToValuePtr<void>(Entry.Value));
++            for (int32 Index = 0; Index < Values.Num(); ++Index)
++            {
++                auto* Skill = Skills->GetRowMap().FindRef(ID->GetPropertyValue(Values.GetRawPtr(Index)));
++                if (!Skill || Cost->GetPropertyValue_InContainer(Skill) != 0) continue;
++                if (!bSaved)
++                {
++                    Skills->SetFlags(RF_Transactional);
++                    Skills->Modify();
++                    bSaved = true;
++                }
++                Cost->SetPropertyValue_InContainer(Skill, 4);
++            }
++        }
++        if (bSaved) Skills->MarkPackageDirty();
++        return true;
++    }
++
 +    class FScopedMasteryCompileLog final : public FOutputDevice
 +    {
 +    public:
@@ -1041,19 +2444,26 @@ index 0000000..5563de0
 +        auto* Techs = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/MainMenu/BP_SkillDetails.BP_SkillDetails"));
 +        auto* Gear = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/MainMenu/BP_WearEquipmentUI.BP_WearEquipmentUI"));
 +        auto* Victory = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/Dialogues/BP_VictoryDialogue.BP_VictoryDialogue"));
++        auto* LevelUp = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/Dialogues/BP_LevelUpDialogue.BP_LevelUpDialogue"));
++        auto* Overdrive = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/Dialogues/BP_OverdriveDialogue.BP_OverdriveDialogue"));
 +        auto* Skills = LoadObject<UDataTable>(nullptr, SkillTablePath);
 +        if (CompileLog.SawEnsure() || !Battle || !Controller || !Enemy || !Player || !Save || !Techs || !Gear ||
-+            !Victory || !Skills) return false;
++            !Victory || !LevelUp || !Overdrive || !Skills) return false;
 +
 +        TArray<FExecSite> Sites;
 +        auto* ResetGold = FindAnchor(Battle, TEXT("10AD59C84060B26E6F8C7EA984C06FF0"));
++        auto* Spawn = FindAnchor(Battle, TEXT("E1DF3A73471C66A9E6E7F3AE236495C8"));
 +        auto* Win = Cast<UK2Node_CustomEvent>(FindAnchor(Controller, TEXT("C39DA34845132315640F28A93D2F594D")));
-+        auto* Text = FindAnchor(Victory, TEXT("4D5B57DD467530E748DCB5B7A6836A7F"));
-+        auto* VictoryInput = Pin(Text, TEXT("InText"));
++        auto* VictoryText = FindAnchor(Victory, TEXT("4D5B57DD467530E748DCB5B7A6836A7F"));
++        auto* VictoryInput = Pin(VictoryText, TEXT("InText"));
++        auto* VictoryItems = FindAnchor(Victory, TEXT("74ED7FF8461A7987A98258A5A37619AF"));
 +        const TCHAR* MissingSite = nullptr;
 +        if (!IsVariable(ResetGold, TEXT("totalGoldReward")) ||
 +            !AddExecSite(Sites, ResetGold, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, BeginMasteryEncounter), TEXT("Battle")))
 +            MissingSite = TEXT("BP_BattleBase SpawnEnemyUnits reward reset");
++        else if (!IsCall(Spawn, TEXT("SpawnEnemyUnits")) ||
++            !AddExecSite(Sites, Spawn, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, HoldBattleUnitsForHUD), TEXT("Battle")))
++            MissingSite = TEXT("BP_BattleBase battle intro");
 +        else if (!FindRewardSite(Battle, TEXT("08F7C92D445FB01B1CC19BA9DC4BF7FF"), TEXT("D1F2378E4AB0CDE53A043D8D5024DCAC"), false, Sites))
 +            MissingSite = TEXT("BP_BattleBase class enemy reward");
 +        else if (!FindRewardSite(Battle, TEXT("ED77EEB74AB4A4DD6555DBAFC4178CB6"), TEXT("CE46EB2D4DC1133803D62C973C018EC1"), true, Sites))
@@ -1063,14 +2473,27 @@ index 0000000..5563de0
 +            MissingSite = TEXT("BP_BattleController PlayerWon");
 +        else if (!FindAppendSite(Player, TEXT("66D5FF074EBAEED9BE1BE9AB930CCDAA"), Sites))
 +            MissingSite = TEXT("BP_PlayerUnitBase battle skill list");
-+        else if (!FindAppendSite(Techs, TEXT("2AA7894643B79D38E785CD856C4E5A28"), Sites) ||
-+            !FindSkillButtonSite(Techs, TEXT("3069397149BA7916814F9EA62D76ADCE"), TEXT("6AC32975428E4DA5DDF8A29D6108C19A"), Sites))
++        else if (!FindAppendSite(Techs, TEXT("2AA7894643B79D38E785CD856C4E5A28"), Sites))
 +            MissingSite = TEXT("BP_SkillDetails Tech list");
++        else if (!FindOverdriveAppendSite(Player, TEXT("66EA5570483B373C2A92BDA3502098AA"), TEXT("availableOverdriveTechs"), Sites) ||
++            !FindOverdriveAppendSite(Techs, TEXT("9F1A75ED4A3A59CBA014438C48B972D3"), TEXT("availableOverDriveSkills"), Sites))
++            MissingSite = TEXT("equipment Overdrive lists");
 +        else if (!FindSkillButtonSite(Gear, TEXT("B78885A940BA80540BB02FAD9C38F0F8"), TEXT("40BDEFA045A2D2E9125CE482DE09C5F4"), Sites))
 +            MissingSite = TEXT("BP_WearEquipmentUI skill button");
-+        else if (!IsCall(Text, TEXT("SetText")) ||
-+            !IsOutputOf(Pin(Text, UEdGraphSchema_K2::PN_Self), TEXT("ExpRewardText")) || !OneLink(VictoryInput))
++        else if (!FindEquipmentDetailsSite(Gear, Sites))
++            MissingSite = TEXT("BP_WearEquipmentUI equipment details");
++        else if (!FindSelectedTechSites(Techs, Sites))
++            MissingSite = TEXT("BP_SkillDetails selected Tech details");
++        else if (!IsCall(VictoryText, TEXT("SetText")) ||
++            !IsOutputOf(Pin(VictoryText, UEdGraphSchema_K2::PN_Self), TEXT("ExpRewardText")) || !OneLink(VictoryInput))
 +            MissingSite = TEXT("BP_VictoryDialogue EXP text");
++        else if (!IsCall(VictoryItems, TEXT("ShowItemsObtained")) ||
++            !AddExecSite(Sites, VictoryItems, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, PresentVictory), TEXT("VictoryWidget")))
++            MissingSite = TEXT("BP_VictoryDialogue results");
++        else if (!FindLevelUpSites(LevelUp, Sites))
++            MissingSite = TEXT("BP_LevelUpDialogue results");
++        else if (!FindOverdriveDescriptionSite(Overdrive, Sites))
++            MissingSite = TEXT("BP_OverdriveDialogue description");
 +
 +        if (MissingSite)
 +        {
@@ -1083,6 +2506,7 @@ index 0000000..5563de0
 +            const FScopedTransaction Transaction(NSLOCTEXT("ReditusMastery", "Install", "Install Reditus Tech Mastery"));
 +            if (!Transaction.IsOutstanding()) return false;
 +            TSet<UBlueprint*> Changed;
++            bool bNewOverdriveMastery = false;
 +            bSuccess = true;
 +            for (const auto& Site : Sites)
 +            {
@@ -1101,13 +2525,33 @@ index 0000000..5563de0
 +                        *Site.Function.ToString(), *Blueprint->GetName());
 +                    break;
 +                }
-+                if (bChanged) Changed.Add(Blueprint);
++                if (bChanged)
++                {
++                    Changed.Add(Blueprint);
++                    bNewOverdriveMastery |= Blueprint == Player &&
++                        Site.Function == GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, AppendEquipmentAndLearnedOverdrives);
++                }
++            }
++            if (bSuccess)
++            {
++                Techs->Modify();
++                Overdrive->Modify();
++                bool bPreviewChanged = false;
++                bool bDialogueChanged = false;
++                bSuccess = WireEquipmentPreview(Techs, bPreviewChanged) &&
++                    WireOverdriveRows(Overdrive, bDialogueChanged) && WireOverdriveConfirmation(Overdrive, bDialogueChanged) &&
++                    !CompileLog.SawEnsure();
++                if (bPreviewChanged) Changed.Add(Techs);
++                if (bDialogueChanged) Changed.Add(Overdrive);
++                if (!bSuccess)
++                    UE_LOG(LogReditusMasteryInstall, Error, TEXT("Could not connect equipment preview or Overdrive dialogue."));
 +            }
 +            if (bSuccess)
 +            {
 +                Victory->Modify();
 +                bool bChanged = false;
-+                bSuccess = WireVictoryText(VictoryInput, bChanged) && !CompileLog.SawEnsure();
++                bSuccess = WireFormattedText(VictoryInput, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, FormatVictoryMastery),
++                    TEXT("VictoryWidget"), TEXT("RewardText"), bChanged) && !CompileLog.SawEnsure();
 +                if (bChanged) Changed.Add(Victory);
 +            }
 +            if (bSuccess)
@@ -1121,7 +2565,8 @@ index 0000000..5563de0
 +                    !CompileLog.SawEnsure() &&
 +                    PrepareVariable(Enemy, RewardOverrideName, RewardType, TEXT("0"), CPF_Edit, FText::FromString(TEXT("Rewards"))) &&
 +                    !CompileLog.SawEnsure() &&
-+                    PrepareSkillTable(Skills) && !CompileLog.SawEnsure();
++                    PrepareSkillTable(Skills) && !CompileLog.SawEnsure() &&
++                    (!bNewOverdriveMastery || SeedEquipmentOverdriveCosts(Skills)) && !CompileLog.SawEnsure();
 +            }
 +            if (bSuccess)
 +            {
@@ -1129,7 +2574,7 @@ index 0000000..5563de0
 +                {
 +                    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 +                }
-+                for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory})
++                for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory, LevelUp, Overdrive})
 +                {
 +                    if (!Compile(Blueprint, CompileLog))
 +                    {
@@ -1146,7 +2591,7 @@ index 0000000..5563de0
 +            const bool bUndone = GEditor->UndoTransaction(false);
 +            if (bUndone)
 +            {
-+                for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory})
++                for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory, LevelUp, Overdrive})
 +                {
 +                    if (!Compile(Blueprint, CompileLog)) break;
 +                }
@@ -1209,7 +2654,7 @@ index 0000000..5563de0
 +        FConsoleCommandDelegate::CreateStatic(&InstallMastery));
 +}
 diff --git a/Source/Chapter1Reditus/Data/ReditusEnemyDefinition.h b/Source/Chapter1Reditus/Data/ReditusEnemyDefinition.h
-index 784eaac..934b783 100644
+index 4bb7277..f32c5c2 100644
 --- a/Source/Chapter1Reditus/Data/ReditusEnemyDefinition.h
 +++ b/Source/Chapter1Reditus/Data/ReditusEnemyDefinition.h
 @@ -308,6 +308,10 @@ public:

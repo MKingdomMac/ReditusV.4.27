@@ -13,6 +13,7 @@
 #include "HAL/IConsoleManager.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_CustomEvent.h"
+#include "K2Node_IfThenElse.h"
 #include "K2Node_Knot.h"
 #include "K2Node_Self.h"
 #include "K2Node_Variable.h"
@@ -34,6 +35,7 @@ namespace ReditusTechMasteryInstall
     const TCHAR* EnemyTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Enemies.DT_Enemies");
     const TCHAR* ProfileTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_EnemyAIProfiles.DT_EnemyAIProfiles");
     const TCHAR* SkillTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Skills.DT_Skills");
+    const TCHAR* EquipmentTablePath = TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/DataTable/DT_Equipment.DT_Equipment");
     const FName MasteryCostName(TEXT("MasteryPointsRequired"));
     const FName RewardOverrideName(TEXT("MasteryRewardOverride"));
     const FName SaveVariableName(TEXT("TechMastery"));
@@ -281,19 +283,19 @@ namespace ReditusTechMasteryInstall
         return Link(Site.Then, Pin(Call, UEdGraphSchema_K2::PN_Execute));
     }
 
-    bool WireVictoryText(UEdGraphPin* Input, bool& bChanged)
+    bool WireFormattedText(UEdGraphPin* Input, FName Function, FName SelfParameter, FName TextParameter,
+        bool& bChanged)
     {
-        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, FormatVictoryMastery);
         auto* Original = OneLink(Input);
         if (!Original) return false;
         if (IsCall(Original->GetOwningNode(), Function))
         {
-            return IsSelfInput(Original->GetOwningNode(), TEXT("VictoryWidget")) &&
-                OneLink(Pin(Original->GetOwningNode(), TEXT("RewardText"))) != nullptr;
+            auto* Call = Original->GetOwningNode();
+            return IsSelfInput(Call, SelfParameter) && OneLink(Pin(Call, TextParameter));
         }
 
-        auto* Call = AddCall(Input->GetOwningNode(), Function, TEXT("VictoryWidget"));
-        if (!Call || !Link(Original, Pin(Call, TEXT("RewardText")))) return false;
+        auto* Call = AddCall(Input->GetOwningNode(), Function, SelfParameter);
+        if (!Call || !Link(Original, Pin(Call, TextParameter))) return false;
         Original->GetOwningNode()->Modify();
         Input->GetOwningNode()->Modify();
         Original->BreakLinkTo(Input);
@@ -311,6 +313,119 @@ namespace ReditusTechMasteryInstall
             TEXT("SkillOwner"));
     }
 
+    bool FindOverdriveAppendSite(UBlueprint* Blueprint, const TCHAR* ID, FName Target, TArray<FExecSite>& Sites)
+    {
+        auto* Append = FindAnchor(Blueprint, ID);
+        return IsCall(Append, TEXT("Array_Append")) &&
+            IsOutputOf(Pin(Append, TEXT("TargetArray")), Target) &&
+            IsOutputOf(Pin(Append, TEXT("SourceArray")), TEXT("equipmentoverdriveskills")) &&
+            AddExecSite(Sites, Append,
+                GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, AppendEquipmentAndLearnedOverdrives), TEXT("SkillOwner"));
+    }
+
+    bool WireEquipmentPreview(UBlueprint* Techs, bool& bChanged)
+    {
+        auto* Set = FindAnchor(Techs, TEXT("2399DCF04344820FB156F6AD1250607E"));
+        auto* Regular = FindAnchor(Techs, TEXT("9650F72149D94DF40DB040B26BDAD540"));
+        auto* Overdrive = FindAnchor(Techs, TEXT("BAB94E8A4D78BAD64D9C9C8068D0BE0B"));
+        auto* Then = Pin(Set, UEdGraphSchema_K2::PN_Then);
+        auto* Next = OneLink(Then);
+        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, ShowEquipmentSkillPages);
+        if (!IsVariable(Set, TEXT("AvailableOverdrive_Skills")) || !Next) return false;
+        if (IsCall(Next->GetOwningNode(), Function)) return IsSelfInput(Next->GetOwningNode(), TEXT("Menu"));
+        if (!IsCall(Regular, TEXT("ShowSkills")) || !IsCall(Overdrive, TEXT("ShowSkills")) ||
+            Next != Pin(Regular, UEdGraphSchema_K2::PN_Execute) ||
+            OneLink(Pin(Regular, UEdGraphSchema_K2::PN_Then)) != Pin(Overdrive, UEdGraphSchema_K2::PN_Execute) ||
+            OneLink(Pin(Overdrive, UEdGraphSchema_K2::PN_Then))) return false;
+
+        auto* Call = AddCall(Set, Function, TEXT("Menu"));
+        if (!Call) return false;
+        Set->Modify();
+        Regular->Modify();
+        Then->BreakLinkTo(Next);
+        bChanged = true;
+        return Link(Then, Pin(Call, UEdGraphSchema_K2::PN_Execute));
+    }
+
+    bool FindOverdriveDescriptionSite(UBlueprint* Dialogue, TArray<FExecSite>& Sites)
+    {
+        auto* Text = FindAnchor(Dialogue, TEXT("20391DAE44E2C112504DC0BAB273DE1C"));
+        auto* Definition = FindAnchor(Dialogue, TEXT("94568E9748B79489F93A60B71F9635F5"));
+        auto* Skill = Source(Pin(Definition, TEXT("Skill ID")));
+        if (!IsCall(Text, TEXT("SetText")) || !Skill || Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
+            !IsOutputOf(Pin(Text, UEdGraphSchema_K2::PN_Self), TEXT("SkillDescriptionText"))) return false;
+        TArray<TPair<FName, UEdGraphPin*>> Inputs;
+        Inputs.Emplace(FName(TEXT("SkillID")), Skill);
+        return AddExecSite(Sites, Text,
+            GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, UpdateOverdriveDescription), TEXT("Menu"), MoveTemp(Inputs));
+    }
+
+    bool WireOverdriveRows(UBlueprint* Dialogue, bool& bChanged)
+    {
+        auto* Found = Cast<UK2Node_IfThenElse>(FindAnchor(Dialogue, TEXT("86C4F04F4FDA4BE0B16C20BBCBBB57E2")));
+        auto* OldGate = Cast<UK2Node_IfThenElse>(FindAnchor(Dialogue, TEXT("E11FF09F4C4D019A7FDBA894C65BA9F9")));
+        auto* Definition = FindAnchor(Dialogue, TEXT("39BB483C437F3ACBE8B85D9C63F851A3"));
+        auto* Create = FindAnchor(Dialogue, TEXT("91D6A49E4583B2A9FF9C42A1A2AE0495"));
+        auto* Skill = Source(Pin(Definition, TEXT("Skill ID")));
+        auto* UseSkill = Pin(Create, TEXT("skill"));
+        auto* Then = Pin(Found, UEdGraphSchema_K2::PN_Then);
+        auto* Build = Pin(Create, UEdGraphSchema_K2::PN_Execute);
+        if (!Then || !Build || !UseSkill || !Skill || Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
+            !IsOutputOf(Pin(Found, TEXT("Condition")), TEXT("Found"))) return false;
+        if (OneLink(Then) == Build) return OneLink(UseSkill) == Skill;
+        auto* Clear = FindAnchor(Dialogue, TEXT("20A874F346B3900045448CA902316E34"));
+        auto* Check = Pin(OldGate, UEdGraphSchema_K2::PN_Then);
+        auto* Before = OneLink(Then);
+        if (!Check || !Before || Before != Pin(Clear, UEdGraphSchema_K2::PN_Execute) || OneLink(Build) != Check ||
+            (Source(UseSkill) && Source(UseSkill) != Skill)) return false;
+
+        Found->Modify();
+        Clear->Modify();
+        Create->Modify();
+        OldGate->Modify();
+        Then->BreakLinkTo(Before);
+        Check->BreakLinkTo(Build);
+        UseSkill->BreakAllPinLinks();
+        bChanged = true;
+        return Link(Skill, UseSkill) && Link(Then, Build);
+    }
+
+    bool WireOverdriveConfirmation(UBlueprint* Dialogue, bool& bChanged)
+    {
+        auto* Acquire = FindAnchor(Dialogue, TEXT("574059B2447F2F4BA01B4FA9D33345FA"));
+        auto* SetInput = FindAnchor(Dialogue, TEXT("38C4DDFE411540FE441F8D9BA0C3A970"));
+        auto* Broadcast = FindAnchor(Dialogue, TEXT("0A2CFA87430C1CC490A954AF08C65CC7"));
+        auto* Valid = Pin(Acquire, TEXT("Is Valid"));
+        auto* Continue = Pin(SetInput, UEdGraphSchema_K2::PN_Execute);
+        auto* Skill = Source(Pin(Broadcast, TEXT("selectedOverdrive")));
+        auto* Next = OneLink(Valid);
+        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, CanConfirmOverdrive);
+        if (!Next || !Continue || !Skill || Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
+            !IsCall(SetInput, TEXT("SetUIInput"))) return false;
+        if (Next != Continue)
+        {
+            auto* Gate = Cast<UK2Node_IfThenElse>(Next->GetOwningNode());
+            auto* Condition = OneLink(Pin(Gate, TEXT("Condition")));
+            auto* Call = Condition ? Condition->GetOwningNode() : nullptr;
+            return IsCall(Call, Function) && IsSelfInput(Call, TEXT("Menu")) &&
+                OneLink(Pin(Call, TEXT("SkillID"))) == Skill && OneLink(Pin(Gate, UEdGraphSchema_K2::PN_Then)) == Continue;
+        }
+
+        SetInput->GetGraph()->Modify();
+        auto* Gate = AddNode<UK2Node_IfThenElse>(SetInput->GetGraph(), SetInput, -120);
+        Gate->AllocateDefaultPins();
+        auto* Check = AddCall(Gate, Function, TEXT("Menu"));
+        auto* Status = AddCall(Gate, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, UpdateOverdriveDescription), TEXT("Menu"));
+        if (!Check || !Status || !Link(Skill, Pin(Check, TEXT("SkillID"))) || !Link(Skill, Pin(Status, TEXT("SkillID"))) ||
+            !Link(Pin(Check, UEdGraphSchema_K2::PN_ReturnValue), Pin(Gate, TEXT("Condition"))) ||
+            !Link(Pin(Gate, TEXT("else")), Pin(Status, UEdGraphSchema_K2::PN_Execute))) return false;
+        Acquire->Modify();
+        SetInput->Modify();
+        Valid->BreakLinkTo(Continue);
+        bChanged = true;
+        return Link(Valid, Pin(Gate, UEdGraphSchema_K2::PN_Execute)) && Link(Pin(Gate, UEdGraphSchema_K2::PN_Then), Continue);
+    }
+
     bool FindSkillButtonSite(UBlueprint* Blueprint, const TCHAR* CreateID, const TCHAR* AddID, TArray<FExecSite>& Sites)
     {
         auto* Create = FindAnchor(Blueprint, CreateID);
@@ -324,6 +439,58 @@ namespace ReditusTechMasteryInstall
         Inputs.Emplace(FName(TEXT("SkillButton")), Widget);
         Inputs.Emplace(FName(TEXT("SkillID")), Skill);
         return AddExecSite(Sites, Add, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, ShowMasteryOnSkillButton),
+            TEXT("Menu"), MoveTemp(Inputs));
+    }
+
+    bool FindSelectedTechSites(UBlueprint* Techs, TArray<FExecSite>& Sites)
+    {
+        auto* Description = FindAnchor(Techs, TEXT("B361C07D4A03764CC110C48A4F4E378B"));
+        auto* Clear = FindAnchor(Techs, TEXT("90CE1C8F46FB3167D60A5981D419071F"));
+        auto* Definition = FindAnchor(Techs, TEXT("284304204DB8EBAC733EDBA544B86F77"));
+        auto* Skill = Source(Pin(Definition, TEXT("Skill ID")));
+        for (auto* Text : {Description, Clear})
+        {
+            if (!IsCall(Text, TEXT("SetText")) ||
+                !IsOutputOf(Pin(Text, UEdGraphSchema_K2::PN_Self), TEXT("SkillDescription"))) return false;
+        }
+        if (!Skill || Skill->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
+            !OneLink(Pin(Description, TEXT("InText"))) || OneLink(Pin(Clear, TEXT("InText")))) return false;
+
+        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, UpdateSelectedTechMastery);
+        TArray<TPair<FName, UEdGraphPin*>> Inputs;
+        Inputs.Emplace(FName(TEXT("SkillID")), Skill);
+        return AddExecSite(Sites, Description, Function, TEXT("Menu"), MoveTemp(Inputs)) &&
+            AddExecSite(Sites, Clear, Function, TEXT("Menu"));
+    }
+
+    bool FindLevelUpSites(UBlueprint* LevelUp, TArray<FExecSite>& Sites)
+    {
+        auto* ActionTimeText = FindAnchor(LevelUp, TEXT("8EB0AF1745489463D8CBAB82FFD6BCA2"));
+        auto* ActionTimeHidden = FindAnchor(LevelUp, TEXT("3A5ABF574DBECC28F4FD4EAF318474D0"));
+        const FName Function = GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, PresentLevelUp);
+        return IsCall(ActionTimeText, TEXT("SetText")) &&
+            IsOutputOf(Pin(ActionTimeText, UEdGraphSchema_K2::PN_Self), TEXT("ActionTimeText")) &&
+            IsCall(ActionTimeHidden, TEXT("SetVisibility")) &&
+            IsOutputOf(Pin(ActionTimeHidden, UEdGraphSchema_K2::PN_Self), TEXT("ActionTimeOverlay")) &&
+            AddExecSite(Sites, ActionTimeText, Function, TEXT("LevelUpWidget")) &&
+            AddExecSite(Sites, ActionTimeHidden, Function, TEXT("LevelUpWidget"));
+    }
+
+    bool FindEquipmentDetailsSite(UBlueprint* Gear, TArray<FExecSite>& Sites)
+    {
+        auto* Create = FindAnchor(Gear, TEXT("A0E9A8EC4263127E92A3A1ADE590A21C"));
+        auto* Add = FindAnchor(Gear, TEXT("794D84284A8902B522B475886ED452A3"));
+        auto* Details = Pin(Create, UEdGraphSchema_K2::PN_ReturnValue);
+        auto* EquipmentID = Source(Pin(Create, TEXT("equipment")));
+        if (!IsCall(Add, TEXT("AddToViewport")) || !Details || !EquipmentID ||
+            EquipmentID->PinType.PinCategory != UEdGraphSchema_K2::PC_Name ||
+            Source(Pin(Add, UEdGraphSchema_K2::PN_Self)) != Details ||
+            OneLink(Pin(Create, UEdGraphSchema_K2::PN_Then)) != Pin(Add, UEdGraphSchema_K2::PN_Execute)) return false;
+
+        TArray<TPair<FName, UEdGraphPin*>> Inputs;
+        Inputs.Emplace(FName(TEXT("Details")), Details);
+        Inputs.Emplace(FName(TEXT("EquipmentID")), EquipmentID);
+        return AddExecSite(Sites, Add, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, ShowEquipmentMastery),
             TEXT("Menu"), MoveTemp(Inputs));
     }
 
@@ -447,6 +614,56 @@ namespace ReditusTechMasteryInstall
         return true;
     }
 
+    bool SeedEquipmentOverdriveCosts(UDataTable* Skills)
+    {
+        auto* Equipment = LoadObject<UDataTable>(nullptr, EquipmentTablePath);
+        const UScriptStruct* Type = Equipment ? Equipment->GetRowStruct() : nullptr;
+        if (!Type || !Skills->GetRowStruct()) return false;
+        const FArrayProperty* Overdrives = nullptr;
+        for (TFieldIterator<FArrayProperty> It(Type); It; ++It)
+        {
+            if (It->GetName().StartsWith(TEXT("OverDriveSkillIDs_")) ||
+                Type->GetAuthoredNameForField(*It).Equals(TEXT("OverDriveSkillIDs"), ESearchCase::IgnoreCase))
+            {
+                Overdrives = *It;
+                break;
+            }
+        }
+        const auto* ID = Overdrives ? CastField<FNameProperty>(Overdrives->Inner) : nullptr;
+        const FIntProperty* Cost = nullptr;
+        for (TFieldIterator<FIntProperty> It(Skills->GetRowStruct()); It; ++It)
+        {
+            if (It->GetName().StartsWith(TEXT("MasteryPointsRequired_")) ||
+                Skills->GetRowStruct()->GetAuthoredNameForField(*It).Equals(MasteryCostName.ToString(), ESearchCase::IgnoreCase))
+            {
+                Cost = *It;
+                break;
+            }
+        }
+        if (!ID || !Cost) return false;
+
+        bool bSaved = false;
+        for (const auto& Entry : Equipment->GetRowMap())
+        {
+            if (!Entry.Value) continue;
+            FScriptArrayHelper Values(Overdrives, Overdrives->ContainerPtrToValuePtr<void>(Entry.Value));
+            for (int32 Index = 0; Index < Values.Num(); ++Index)
+            {
+                auto* Skill = Skills->GetRowMap().FindRef(ID->GetPropertyValue(Values.GetRawPtr(Index)));
+                if (!Skill || Cost->GetPropertyValue_InContainer(Skill) != 0) continue;
+                if (!bSaved)
+                {
+                    Skills->SetFlags(RF_Transactional);
+                    Skills->Modify();
+                    bSaved = true;
+                }
+                Cost->SetPropertyValue_InContainer(Skill, 4);
+            }
+        }
+        if (bSaved) Skills->MarkPackageDirty();
+        return true;
+    }
+
     class FScopedMasteryCompileLog final : public FOutputDevice
     {
     public:
@@ -498,19 +715,26 @@ namespace ReditusTechMasteryInstall
         auto* Techs = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/MainMenu/BP_SkillDetails.BP_SkillDetails"));
         auto* Gear = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/MainMenu/BP_WearEquipmentUI.BP_WearEquipmentUI"));
         auto* Victory = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/Dialogues/BP_VictoryDialogue.BP_VictoryDialogue"));
+        auto* LevelUp = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/Dialogues/BP_LevelUpDialogue.BP_LevelUpDialogue"));
+        auto* Overdrive = LoadObject<UBlueprint>(nullptr, TEXT("/Game/TurnBasedJRPGTemplate/Blueprints/UI/Dialogues/BP_OverdriveDialogue.BP_OverdriveDialogue"));
         auto* Skills = LoadObject<UDataTable>(nullptr, SkillTablePath);
         if (CompileLog.SawEnsure() || !Battle || !Controller || !Enemy || !Player || !Save || !Techs || !Gear ||
-            !Victory || !Skills) return false;
+            !Victory || !LevelUp || !Overdrive || !Skills) return false;
 
         TArray<FExecSite> Sites;
         auto* ResetGold = FindAnchor(Battle, TEXT("10AD59C84060B26E6F8C7EA984C06FF0"));
+        auto* Spawn = FindAnchor(Battle, TEXT("E1DF3A73471C66A9E6E7F3AE236495C8"));
         auto* Win = Cast<UK2Node_CustomEvent>(FindAnchor(Controller, TEXT("C39DA34845132315640F28A93D2F594D")));
-        auto* Text = FindAnchor(Victory, TEXT("4D5B57DD467530E748DCB5B7A6836A7F"));
-        auto* VictoryInput = Pin(Text, TEXT("InText"));
+        auto* VictoryText = FindAnchor(Victory, TEXT("4D5B57DD467530E748DCB5B7A6836A7F"));
+        auto* VictoryInput = Pin(VictoryText, TEXT("InText"));
+        auto* VictoryItems = FindAnchor(Victory, TEXT("74ED7FF8461A7987A98258A5A37619AF"));
         const TCHAR* MissingSite = nullptr;
         if (!IsVariable(ResetGold, TEXT("totalGoldReward")) ||
             !AddExecSite(Sites, ResetGold, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, BeginMasteryEncounter), TEXT("Battle")))
             MissingSite = TEXT("BP_BattleBase SpawnEnemyUnits reward reset");
+        else if (!IsCall(Spawn, TEXT("SpawnEnemyUnits")) ||
+            !AddExecSite(Sites, Spawn, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, HoldBattleUnitsForHUD), TEXT("Battle")))
+            MissingSite = TEXT("BP_BattleBase battle intro");
         else if (!FindRewardSite(Battle, TEXT("08F7C92D445FB01B1CC19BA9DC4BF7FF"), TEXT("D1F2378E4AB0CDE53A043D8D5024DCAC"), false, Sites))
             MissingSite = TEXT("BP_BattleBase class enemy reward");
         else if (!FindRewardSite(Battle, TEXT("ED77EEB74AB4A4DD6555DBAFC4178CB6"), TEXT("CE46EB2D4DC1133803D62C973C018EC1"), true, Sites))
@@ -520,14 +744,27 @@ namespace ReditusTechMasteryInstall
             MissingSite = TEXT("BP_BattleController PlayerWon");
         else if (!FindAppendSite(Player, TEXT("66D5FF074EBAEED9BE1BE9AB930CCDAA"), Sites))
             MissingSite = TEXT("BP_PlayerUnitBase battle skill list");
-        else if (!FindAppendSite(Techs, TEXT("2AA7894643B79D38E785CD856C4E5A28"), Sites) ||
-            !FindSkillButtonSite(Techs, TEXT("3069397149BA7916814F9EA62D76ADCE"), TEXT("6AC32975428E4DA5DDF8A29D6108C19A"), Sites))
+        else if (!FindAppendSite(Techs, TEXT("2AA7894643B79D38E785CD856C4E5A28"), Sites))
             MissingSite = TEXT("BP_SkillDetails Tech list");
+        else if (!FindOverdriveAppendSite(Player, TEXT("66EA5570483B373C2A92BDA3502098AA"), TEXT("availableOverdriveTechs"), Sites) ||
+            !FindOverdriveAppendSite(Techs, TEXT("9F1A75ED4A3A59CBA014438C48B972D3"), TEXT("availableOverDriveSkills"), Sites))
+            MissingSite = TEXT("equipment Overdrive lists");
         else if (!FindSkillButtonSite(Gear, TEXT("B78885A940BA80540BB02FAD9C38F0F8"), TEXT("40BDEFA045A2D2E9125CE482DE09C5F4"), Sites))
             MissingSite = TEXT("BP_WearEquipmentUI skill button");
-        else if (!IsCall(Text, TEXT("SetText")) ||
-            !IsOutputOf(Pin(Text, UEdGraphSchema_K2::PN_Self), TEXT("ExpRewardText")) || !OneLink(VictoryInput))
+        else if (!FindEquipmentDetailsSite(Gear, Sites))
+            MissingSite = TEXT("BP_WearEquipmentUI equipment details");
+        else if (!FindSelectedTechSites(Techs, Sites))
+            MissingSite = TEXT("BP_SkillDetails selected Tech details");
+        else if (!IsCall(VictoryText, TEXT("SetText")) ||
+            !IsOutputOf(Pin(VictoryText, UEdGraphSchema_K2::PN_Self), TEXT("ExpRewardText")) || !OneLink(VictoryInput))
             MissingSite = TEXT("BP_VictoryDialogue EXP text");
+        else if (!IsCall(VictoryItems, TEXT("ShowItemsObtained")) ||
+            !AddExecSite(Sites, VictoryItems, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, PresentVictory), TEXT("VictoryWidget")))
+            MissingSite = TEXT("BP_VictoryDialogue results");
+        else if (!FindLevelUpSites(LevelUp, Sites))
+            MissingSite = TEXT("BP_LevelUpDialogue results");
+        else if (!FindOverdriveDescriptionSite(Overdrive, Sites))
+            MissingSite = TEXT("BP_OverdriveDialogue description");
 
         if (MissingSite)
         {
@@ -540,6 +777,7 @@ namespace ReditusTechMasteryInstall
             const FScopedTransaction Transaction(NSLOCTEXT("ReditusMastery", "Install", "Install Reditus Tech Mastery"));
             if (!Transaction.IsOutstanding()) return false;
             TSet<UBlueprint*> Changed;
+            bool bNewOverdriveMastery = false;
             bSuccess = true;
             for (const auto& Site : Sites)
             {
@@ -558,13 +796,33 @@ namespace ReditusTechMasteryInstall
                         *Site.Function.ToString(), *Blueprint->GetName());
                     break;
                 }
-                if (bChanged) Changed.Add(Blueprint);
+                if (bChanged)
+                {
+                    Changed.Add(Blueprint);
+                    bNewOverdriveMastery |= Blueprint == Player &&
+                        Site.Function == GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, AppendEquipmentAndLearnedOverdrives);
+                }
+            }
+            if (bSuccess)
+            {
+                Techs->Modify();
+                Overdrive->Modify();
+                bool bPreviewChanged = false;
+                bool bDialogueChanged = false;
+                bSuccess = WireEquipmentPreview(Techs, bPreviewChanged) &&
+                    WireOverdriveRows(Overdrive, bDialogueChanged) && WireOverdriveConfirmation(Overdrive, bDialogueChanged) &&
+                    !CompileLog.SawEnsure();
+                if (bPreviewChanged) Changed.Add(Techs);
+                if (bDialogueChanged) Changed.Add(Overdrive);
+                if (!bSuccess)
+                    UE_LOG(LogReditusMasteryInstall, Error, TEXT("Could not connect equipment preview or Overdrive dialogue."));
             }
             if (bSuccess)
             {
                 Victory->Modify();
                 bool bChanged = false;
-                bSuccess = WireVictoryText(VictoryInput, bChanged) && !CompileLog.SawEnsure();
+                bSuccess = WireFormattedText(VictoryInput, GET_FUNCTION_NAME_CHECKED(UReditusTechMasteryLibrary, FormatVictoryMastery),
+                    TEXT("VictoryWidget"), TEXT("RewardText"), bChanged) && !CompileLog.SawEnsure();
                 if (bChanged) Changed.Add(Victory);
             }
             if (bSuccess)
@@ -578,7 +836,8 @@ namespace ReditusTechMasteryInstall
                     !CompileLog.SawEnsure() &&
                     PrepareVariable(Enemy, RewardOverrideName, RewardType, TEXT("0"), CPF_Edit, FText::FromString(TEXT("Rewards"))) &&
                     !CompileLog.SawEnsure() &&
-                    PrepareSkillTable(Skills) && !CompileLog.SawEnsure();
+                    PrepareSkillTable(Skills) && !CompileLog.SawEnsure() &&
+                    (!bNewOverdriveMastery || SeedEquipmentOverdriveCosts(Skills)) && !CompileLog.SawEnsure();
             }
             if (bSuccess)
             {
@@ -586,7 +845,7 @@ namespace ReditusTechMasteryInstall
                 {
                     FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
                 }
-                for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory})
+                for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory, LevelUp, Overdrive})
                 {
                     if (!Compile(Blueprint, CompileLog))
                     {
@@ -603,7 +862,7 @@ namespace ReditusTechMasteryInstall
             const bool bUndone = GEditor->UndoTransaction(false);
             if (bUndone)
             {
-                for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory})
+                for (auto* Blueprint : {Save, Enemy, Battle, Controller, Player, Techs, Gear, Victory, LevelUp, Overdrive})
                 {
                     if (!Compile(Blueprint, CompileLog)) break;
                 }

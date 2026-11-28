@@ -156,6 +156,47 @@ namespace
         return Cast<AActor>(Result->GetObjectPropertyValue_InContainer(Memory));
     }
 
+    UClass* MasteryLibrary()
+    {
+        return FindObject<UClass>(nullptr,TEXT("/Script/ReditusTableBuffs.ReditusTechMasteryLibrary"));
+    }
+
+    template <typename ReturnProperty,typename Value>
+    Value ReadTechMastery(AActor* Unit,FName SkillID,FName FunctionName)
+    {
+        UClass* Library=MasteryLibrary();
+        UFunction* Function=Library ? Library->FindFunctionByName(FunctionName) : nullptr;
+        if (!IsValid(Unit) || !Function || Function->NumParms!=3 || !Function->HasAnyFunctionFlags(FUNC_Static)) return Value{};
+        const auto* UnitParameter=FindFProperty<FObjectPropertyBase>(Function,TEXT("Unit"));
+        const auto* SkillParameter=FindFProperty<FNameProperty>(Function,TEXT("SkillID"));
+        const auto* Return=CastField<ReturnProperty>(Function->GetReturnProperty());
+        if (!UnitParameter || !SkillParameter || !Return) return Value{};
+        FStructOnScope Args(Function);
+        void* Memory=Args.GetStructMemory();
+        UnitParameter->SetObjectPropertyValue_InContainer(Memory,Unit);
+        SkillParameter->SetPropertyValue_InContainer(Memory,SkillID);
+        Library->GetDefaultObject()->ProcessEvent(Function,Memory);
+        return Return->GetPropertyValue_InContainer(Memory);
+    }
+
+    FText OverdrivePartnerMessage(AActor* Unit,FName SkillID)
+    {
+        return ReadTechMastery<FTextProperty,FText>(Unit,SkillID,TEXT("GetOverdrivePartnerMessage"));
+    }
+
+    void RevealBattleUnits(AActor* BattleController)
+    {
+        UClass* Library=MasteryLibrary();
+        UFunction* Function=Library ? Library->FindFunctionByName(TEXT("ReleaseBattleIntro")) : nullptr;
+        if (!IsValid(BattleController) || !Function || Function->NumParms!=1 || !Function->HasAnyFunctionFlags(FUNC_Static)) return;
+        const auto* Input=FindFProperty<FObjectPropertyBase>(Function,TEXT("BattleController"));
+        if (!Input) return;
+        FStructOnScope Args(Function);
+        void* Memory=Args.GetStructMemory();
+        Input->SetObjectPropertyValue_InContainer(Memory,BattleController);
+        Library->GetDefaultObject()->ProcessEvent(Function,Memory);
+    }
+
     void ReadEnemyEffects(AActor* Unit,TArray<FReditusEnemyHUDEffect>& Effects)
     {
         using E=EReditusEnemyEffect;
@@ -510,7 +551,8 @@ namespace
     {
         UDataTable* Table;
         const uint8* Data;
-        FHUDTableRow(UDataTable* InTable,FName ID) : Table(InTable), Data(nullptr)
+        FName ID;
+        FHUDTableRow(UDataTable* InTable,FName RowID) : Table(InTable), Data(nullptr), ID(RowID)
         {
             if (IsValid(Table))
                 if (uint8* const* Row=Table->GetRowMap().Find(ID)) Data=*Row;
@@ -541,18 +583,25 @@ namespace
         TMap<FName,int32> Requirements;
         TSet<FName> EquippedMoves;
         int32 Level=INDEX_NONE;
+        AActor* Unit=nullptr;
+        bool bOverdrive=false;
 
         bool Allows(FName MoveID) const
         {
             if (MoveID.IsNone() || Level<0) return false;
-            if (const int32* Required=Requirements.Find(MoveID)) return Level>=*Required;
-            return EquippedMoves.Contains(MoveID);
+            const int32* Required=Requirements.Find(MoveID);
+            if (Required && Level>=*Required) return true;
+            if (EquippedMoves.Contains(MoveID)) return true;
+            return ReadTechMastery<FBoolProperty,bool>(Unit,MoveID,bOverdrive ?
+                TEXT("IsOverdriveMastered") : TEXT("IsTechMastered"));
         }
     };
 
     FHUDSkillAccess ReadSkillAccess(AActor* Unit,UObject* RosterOwner,UDataTable* PartyTable,UDataTable* EquipmentTable,bool bOverdrive)
     {
         FHUDSkillAccess Access;
+        Access.Unit=Unit;
+        Access.bOverdrive=bOverdrive;
         const FName CharacterID=NameValue(Unit,TEXT("CharacterID"));
         const auto* Level=CastField<FIntProperty>(Property(Unit,TEXT("level")));
         if (!Level || CharacterID.IsNone()) return Access;
@@ -569,7 +618,7 @@ namespace
                 Access.Requirements.Add(SkillKey->GetPropertyValue(Learnset.GetKeyPtr(Index)),
                     RequiredLevel->GetPropertyValue(Learnset.GetValuePtr(Index)));
 
-        // Only current equipment can grant a move absent from this character's learnset.
+        // Battle skills can also be used while the granting gear is equipped.
         auto* Roster=CastField<FMapProperty>(Property(RosterOwner,TEXT("PlayerUnitDataID")));
         const auto* CharacterKey=Roster ? CastField<FNameProperty>(Roster->KeyProp) : nullptr;
         auto* UnitData=Roster ? CastField<FStructProperty>(Roster->ValueProp) : nullptr;
@@ -745,7 +794,8 @@ namespace
         return Result;
     }
 
-    bool CanUseATBListEntry(AActor* Unit,EReditusHUDCommand Command,const FHUDTableRow& Row)
+    bool CanUseATBListEntry(AActor* Unit,EReditusHUDCommand Command,const FHUDTableRow& Row,
+        const FText* PartnerMessage=nullptr)
     {
         if (!IsValid(Unit) || Boolean(Unit,TEXT("isStun")) || Boolean(Unit,TEXT("Staggered")) || Boolean(Unit,TEXT("IsSleeping"))) return false;
         if (!Row.Data) return false;
@@ -754,8 +804,12 @@ namespace
             const FBoolProperty* ExploreOnly=CastField<FBoolProperty>(Row.Find(TEXT("ExploreOnly")));
             return !ExploreOnly || !ExploreOnly->GetPropertyValue_InContainer(Row.Data);
         }
-        if (Command==EReditusHUDCommand::Overdrive &&
-            (!Boolean(Unit,TEXT("CanEnterOverdrive")) || !Boolean(Unit,TEXT("OverdriveEntered")))) return false;
+        if (Command==EReditusHUDCommand::Overdrive)
+        {
+            if (!Boolean(Unit,TEXT("CanEnterOverdrive")) || !Boolean(Unit,TEXT("OverdriveEntered"))) return false;
+            const auto Requirement=PartnerMessage ? *PartnerMessage : OverdrivePartnerMessage(Unit,Row.ID);
+            if (!Requirement.IsEmpty()) return false;
+        }
         const int32 Cost=Row.Int(TEXT("MPCost"));
         return Cost>=0 && Number(Unit,TEXT("currentMP"),-1)>=Cost;
     }
@@ -861,11 +915,23 @@ UReditusBattleHUDPresenterComponent::UReditusBattleHUDPresenterComponent()
 
 UReditusBattleHUDWidget* UReditusBattleHUDPresenterComponent::CreateBattleHUD(APlayerController* PlayerController,int32 ZOrder)
 {
-    if (IsValid(HUD)) return HUD;
-    if (!IsValid(PlayerController) || !PlayerController->IsLocalController() || !WidgetClass) return nullptr;
+    if (IsValid(HUD))
+    {
+        RevealBattleUnits(GetOwner());
+        return HUD;
+    }
+    if (!IsValid(PlayerController) || !PlayerController->IsLocalController() || !WidgetClass)
+    {
+        RevealBattleUnits(GetOwner());
+        return nullptr;
+    }
     Player=PlayerController;
     HUD=CreateWidget<UReditusBattleHUDWidget>(Player,WidgetClass);
-    if (!HUD) return nullptr;
+    if (!HUD)
+    {
+        RevealBattleUnits(GetOwner());
+        return nullptr;
+    }
     HUD->CommandRouter.BindUObject(this,&UReditusBattleHUDPresenterComponent::HandleCommand);
     HUD->GameplayInputRouter.BindUObject(this,&UReditusBattleHUDPresenterComponent::ForwardGameplayInput);
     HUD->SelectionRouter.BindUObject(this,&UReditusBattleHUDPresenterComponent::SelectCommandUnit);
@@ -877,8 +943,10 @@ UReditusBattleHUDWidget* UReditusBattleHUDPresenterComponent::CreateBattleHUD(AP
     if (!HUD->AddToPlayerScreen(ZOrder))
     {
         HUD=nullptr;
+        RevealBattleUnits(GetOwner());
         return nullptr;
     }
+    RevealBattleUnits(GetOwner());
     if (bSetGameAndUIInputMode)
     {
         FInputModeGameAndUI Mode;
@@ -893,6 +961,7 @@ UReditusBattleHUDWidget* UReditusBattleHUDPresenterComponent::CreateBattleHUD(AP
 
 void UReditusBattleHUDPresenterComponent::DestroyBattleHUD()
 {
+    RevealBattleUnits(GetOwner());
     SynchronizeCommandSelectionEffects(nullptr);
     RestoreCombatInputProfile();
     ClearATBListTargeting();
@@ -1184,14 +1253,6 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
     {
         UUserWidget* Row=NativeMenuRows[I];
         if (!IsValid(Row)) continue;
-        if (!HUD->ListSelectionBrush.GetResourceObject())
-            if (UImage* SelectedImage=Cast<UImage>(NamedWidget(Row,TEXT("SelectedImage"))))
-                if (SelectedImage->Brush.GetResourceObject())
-                {
-                    HUD->ListSelectionBrush=SelectedImage->Brush;
-                    HUD->ListSelectionBrush.DrawAs=ESlateBrushDrawType::Image;
-                    HUD->ListSelectionBrush.TintColor=FSlateColor(FLinearColor::White);
-                }
         const FName DataID=NameValue(Row,Items ? TEXT("item") : TEXT("skill"));
         if (DataID.IsNone() || (!Items && !SkillAccess.Allows(DataID))) continue;
         FReditusBattleHUDMenuEntry Entry;
@@ -1200,8 +1261,9 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
         Used.Add(Entry.ID);
         NativeMenuIDs[I]=Entry.ID;
         NativeMenuDataIDs[I]=DataID;
-        Entry.Label=WidgetText(Row,Items ? TEXT("ItemName") : TEXT("SkillName"));
         UDataTable* DisplayTable=Items ? ItemDescriptions : SkillDescriptions;
+        if (!Items && !Overdrive) Entry.Label=TableText(DisplayTable,DataID,TEXT("DisplayName"));
+        if (Entry.Label.IsEmpty()) Entry.Label=WidgetText(Row,Items ? TEXT("ItemName") : TEXT("SkillName"));
         if (Entry.Label.IsEmpty()) Entry.Label=TableText(DisplayTable,DataID,TEXT("DisplayName"));
         if (Entry.Label.IsEmpty()) Entry.Label=FText::FromName(DataID);
         // Item quantity belongs to this row's item ID, never the inventory's entry count.
@@ -1213,6 +1275,23 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
             FText::AsNumber(Quantity)) : WidgetText(Row,TEXT("MPAmount"));
         if (!Items && HasZeroMPCost(DisplayTable,DataID)) Entry.Detail=FText::GetEmpty();
         Entry.Description=TableText(DisplayTable,DataID,TEXT("ShortDescription"));
+        if (!Items)
+        {
+            const FText Mastery=ReadTechMastery<FTextProperty,FText>(NativeMenuOwner,DataID,Overdrive ?
+                TEXT("DescribeEquippedOverdrive") : TEXT("DescribeEquippedTech"));
+            if (!Mastery.IsEmpty())
+            {
+                Entry.Description=Entry.Description.IsEmpty() ? Mastery :
+                    FText::Format(NSLOCTEXT("ReditusHUD","TechDescription","{0}\n{1}"),Entry.Description,Mastery);
+            }
+        }
+        const FText PartnerMessage=Overdrive ? OverdrivePartnerMessage(NativeMenuOwner,DataID) : FText::GetEmpty();
+        if (!PartnerMessage.IsEmpty())
+        {
+            Entry.Detail=NSLOCTEXT("ReditusHUD","OverdriveWaiting","WAIT");
+            Entry.Description=Entry.Description.IsEmpty() ? PartnerMessage :
+                FText::Format(NSLOCTEXT("ReditusHUD","OverdriveAvailability","{0}\n{1}"),PartnerMessage,Entry.Description);
+        }
         if (UObject* ConfiguredIcon=Items ? nullptr : TableThumbnail(DisplayTable,DataID)) Entry.Icon=ThumbnailBrush(ConfiguredIcon);
         else if (UImage* RowIcon=Cast<UImage>(NamedWidget(Row,Items ? TEXT("ItemImage") : TEXT("SkillImage"))))
             Entry.Icon=RowIcon->Brush;
@@ -1226,12 +1305,13 @@ void UReditusBattleHUDPresenterComponent::RefreshNativeMenuEntries(bool bOpen)
                 CopiedFonts=true;
             }
         }
-        Entry.bEnabled=Row->GetIsEnabled() && (!Items || Quantity>0);
+        Entry.bEnabled=PartnerMessage.IsEmpty() && Row->GetIsEnabled() && (!Items || Quantity>0);
         if (UWidget* Inner=Cast<UWidget>(ObjectValue(Row,Items ? TEXT("ItemButton") : TEXT("SkillButton"))))
             Entry.bEnabled=Entry.bEnabled && Inner->GetIsEnabled();
 #if REDITUS_HUD_HAS_ATB
         if (bUsingATB)
-            Entry.bEnabled=Entry.bEnabled && CanUseATBListEntry(NativeMenuOwner,NativeMenuCommand,FHUDTableRow(DisplayTable,DataID));
+            Entry.bEnabled=Entry.bEnabled && CanUseATBListEntry(NativeMenuOwner,NativeMenuCommand,
+                FHUDTableRow(DisplayTable,DataID),&PartnerMessage);
 #endif
         Entries.Add(Entry);
     }
@@ -1533,6 +1613,11 @@ void UReditusBattleHUDPresenterComponent::HandleNativeMenuChosen(AActor* Unit,FN
         return;
     }
 #endif
+    if (NativeMenuCommand==EReditusHUDCommand::Overdrive && !OverdrivePartnerMessage(Unit,NativeMenuDataIDs[Index]).IsEmpty())
+    {
+        RefreshNativeMenuEntries(false);
+        return;
+    }
     FIntProperty* Selection=CastField<FIntProperty>(Property(NativeMenuSource,Items ? TEXT("selectedItemIndex") : TEXT("selectedSkillIndex")));
     if (!Selection) return;
     Selection->SetPropertyValue_InContainer(NativeMenuSource,CurrentIndex);

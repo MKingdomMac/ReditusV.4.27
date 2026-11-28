@@ -533,6 +533,8 @@ UReditusBattleHUDWidget::FButtonView UReditusBattleHUDWidget::MakeButton(EReditu
     Contents->AddChildToHorizontalBox(View.Key)->SetVerticalAlignment(VAlign_Center);
     if (MenuEntry)
     {
+        View.GlyphBox->SetVisibility(ESlateVisibility::Collapsed);
+        View.Key->SetVisibility(ESlateVisibility::Collapsed);
         View.Icon=WidgetTree->ConstructWidget<UImage>();
         View.Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
         USizeBox* IconSize=WidgetTree->ConstructWidget<USizeBox>();
@@ -544,14 +546,23 @@ UReditusBattleHUDWidget::FButtonView UReditusBattleHUDWidget::MakeButton(EReditu
         IconPlacement->SetPadding(FMargin(2.f,0.f));
     }
     View.Label = MakeText(Label, Compact ? 17 : Command == EReditusHUDCommand::SelectMenuEntry ? 18 : 20);
-    UHorizontalBoxSlot* LabelSlot = Contents->AddChildToHorizontalBox(View.Label);
+    UWidget* LabelContent=View.Label;
+    if (MenuEntry)
+    {
+        UScaleBox* NameScale=WidgetTree->ConstructWidget<UScaleBox>();
+        NameScale->SetStretch(EStretch::ScaleToFit);
+        NameScale->SetStretchDirection(EStretchDirection::DownOnly);
+        auto* NamePlacement=CastChecked<UScaleBoxSlot>(NameScale->AddChild(View.Label));
+        NamePlacement->SetHorizontalAlignment(HAlign_Left);
+        NamePlacement->SetVerticalAlignment(VAlign_Center);
+        LabelContent=NameScale;
+    }
+    UHorizontalBoxSlot* LabelSlot = Contents->AddChildToHorizontalBox(LabelContent);
     LabelSlot->SetPadding(FMargin(MenuEntry ? 3.f : 8.f,0.f));
     LabelSlot->SetVerticalAlignment(VAlign_Center);
     if (MenuEntry)
     {
         LabelSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-        View.Label->SetAutoWrapText(true);
-        View.Label->SetClipping(EWidgetClipping::ClipToBounds);
         View.Detail = MakeText(FText::GetEmpty(),16);
         View.Detail->SetJustification(ETextJustify::Right);
         USizeBox* DetailSize = WidgetTree->ConstructWidget<USizeBox>();
@@ -1466,10 +1477,11 @@ void UReditusBattleHUDWidget::HandleButton(EReditusHUDCommand Command, int32 Ind
     else if (Command == EReditusHUDCommand::SelectMenuEntry)
     {
         const int32 EntryIndex = Index;
-        if (CanChooseMenuEntry() && MenuEntries.IsValidIndex(EntryIndex) && MenuEntries[EntryIndex].bEnabled)
+        if (CanChooseMenuEntry() && MenuEntries.IsValidIndex(EntryIndex))
         {
             SelectedMenuIndex = EntryIndex;
-            OnMenuEntryChosen.Broadcast(GetSelectedUnit(),MenuEntries[EntryIndex].ID);
+            if (MenuEntries[EntryIndex].bEnabled) OnMenuEntryChosen.Broadcast(GetSelectedUnit(),MenuEntries[EntryIndex].ID);
+            else RefreshMenu();
         }
     }
     else RequestCommand(Command);
@@ -1877,11 +1889,15 @@ void UReditusBattleHUDWidget::RefreshMenu()
         if (!MenuEntries.IsValidIndex(Entry)) continue;
         const FReditusBattleHUDMenuEntry& Data=MenuEntries[Entry];
         View.Label->SetText(Data.Label);
-        View.Label->SetFont(bMatchLegacyListFonts && bHasLegacyListFonts ? LegacyListNameFont : Font(ListTextSize));
+        FSlateFontInfo NameFont=bMatchLegacyListFonts && bHasLegacyListFonts ? LegacyListNameFont : Font(ListTextSize);
+        NameFont.Size=FMath::Min(NameFont.Size,18);
+        View.Label->SetFont(NameFont);
         if (View.Detail)
         {
             View.Detail->SetText(Data.Detail);
-            View.Detail->SetFont(bMatchLegacyListFonts && bHasLegacyListFonts ? LegacyListDetailFont : Font(ListTextSize));
+            FSlateFontInfo DetailFont=bMatchLegacyListFonts && bHasLegacyListFonts ? LegacyListDetailFont : Font(ListTextSize);
+            DetailFont.Size=FMath::Min(DetailFont.Size,16);
+            View.Detail->SetFont(DetailFont);
         }
         if (View.DetailBox) View.DetailBox->SetVisibility(Data.Detail.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
         if (View.Icon)
@@ -1889,11 +1905,13 @@ void UReditusBattleHUDWidget::RefreshMenu()
             View.Icon->SetBrush(Data.Icon);
             View.Icon->SetVisibility(Data.Icon.GetResourceObject() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
         }
-        View.Label->SetColorAndOpacity(FSlateColor(Entry==SelectedMenuIndex ? Gold : FLinearColor::White));
+        const bool bInspectLockedOverdrive=!Data.bEnabled && MenuTitle.EqualTo(Text(TEXT("OVERDRIVE")));
+        View.Label->SetColorAndOpacity(FSlateColor(Entry==SelectedMenuIndex ? Gold :
+            bInspectLockedOverdrive ? FLinearColor(0.62f,0.66f,0.72f,1.f) : FLinearColor::White));
         FButtonStyle RowStyle=View.Button->WidgetStyle;
         RowStyle.Normal=Entry==SelectedMenuIndex ? SelectedFrameBrush : SilverFrameBrush;
         View.Button->SetStyle(RowStyle);
-        View.Button->SetIsEnabled(Data.bEnabled && CanChooseMenuEntry());
+        View.Button->SetIsEnabled((Data.bEnabled || bInspectLockedOverdrive) && CanChooseMenuEntry());
     }
 }
 
@@ -1960,17 +1978,6 @@ void UReditusBattleHUDWidget::RefreshGlyphs()
     for (FButtonView& View : Buttons) Apply(View,true);
     for (FButtonView& View : UtilityButtons) Apply(View,true);
     if (TargetConfirm.Button) Apply(TargetConfirm,true);
-    for (int32 I=0; I<ListButtons.Num(); ++I)
-    {
-        FButtonView& View=ListButtons[I];
-        const bool SelectedEntry=SelectedMenuIndex>=0 && I==SelectedMenuIndex;
-        const bool HasBrush=ListSelectionBrush.GetResourceObject()!=nullptr;
-        View.Glyph->SetBrush(ListSelectionBrush);
-        View.GlyphBox->SetVisibility(HasBrush ? (SelectedEntry ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden) : ESlateVisibility::Collapsed);
-        View.Glyph->SetVisibility(ESlateVisibility::HitTestInvisible);
-        View.Key->SetText(Text(TEXT(">")));
-        View.Key->SetVisibility(!HasBrush && SelectedEntry ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-    }
 }
 
 
